@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="600" viewBox="0 0 1800 600" role="img" aria-labelledby="title desc">
+  <title id="title">DeskUnlock</title>
+  <desc id="desc">DeskUnlock smartphone authentication and proximity unlock for Linux</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#071521"/>
+      <stop offset="0.55" stop-color="#0a1d2e"/>
+      <stop offset="1" stop-color="#07111c"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#0b62b9"/>
+      <stop offset="1" stop-color="#102c68"/>
+    </linearGradient>
+    <linearGradient id="phone" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#18d2c4"/>
+      <stop offset="1" stop-color="#087dc4"/>
+    </linearGradient>
+    <linearGradient id="word" x1="0" x2="1">
+      <stop offset="0" stop-color="#36c9ff"/>
+      <stop offset="1" stop-color="#1787ff"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="10" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1800" height="600" rx="34" fill="url(#bg)"/>
+  <path d="M0 420 C260 330 420 500 690 430 C980 355 1210 500 1800 370 L1800 600 L0 600 Z" fill="#0b2841" opacity=".7"/>
+  <path d="M0 470 C320 390 500 560 790 500 C1130 430 1390 560 1800 455 L1800 600 L0 600 Z" fill="#0a2034" opacity=".9"/>
+
+  <g transform="translate(95 96)">
+    <ellipse cx="320" cy="400" rx="280" ry="38" fill="#0ba9ff" opacity=".16" filter="url(#glow)"/>
+    <rect x="25" y="15" width="470" height="314" rx="28" fill="#0c1f30" stroke="#7cb8df" stroke-width="3"/>
+    <rect x="48" y="38" width="424" height="268" rx="13" fill="url(#screen)"/>
+    <path d="M48 250 C125 190 200 290 280 240 C350 198 405 236 472 185 L472 306 L48 306 Z" fill="#102d66" opacity=".9"/>
+    <path d="M48 270 C135 230 210 317 315 265 C370 238 425 260 472 225 L472 306 L48 306 Z" fill="#0a2452" opacity=".9"/>
+    <rect x="215" y="329" width="90" height="54" rx="8" fill="#16354a"/>
+    <rect x="145" y="378" width="230" height="20" rx="10" fill="#1a415c"/>
+
+    <g transform="translate(205 95)">
+      <rect x="0" y="55" width="115" height="88" rx="16" fill="#e8f7ff"/>
+      <path d="M24 58 V35 C24 0 91 0 91 35 V58" fill="none" stroke="#e8f7ff" stroke-width="18" stroke-linecap="round"/>
+      <circle cx="58" cy="95" r="10" fill="#164f99"/>
+      <rect x="54" y="95" width="8" height="23" rx="4" fill="#164f99"/>
+    </g>
+
+    <g transform="translate(410 120)">
+      <path d="M-70 82 Q-30 40 10 82" fill="none" stroke="#25ddcf" stroke-width="10" stroke-linecap="round"/>
+      <path d="M-86 100 Q-30 28 26 100" fill="none" stroke="#25ddcf" stroke-width="10" stroke-linecap="round" opacity=".82"/>
+      <path d="M-102 118 Q-30 16 42 118" fill="none" stroke="#25ddcf" stroke-width="10" stroke-linecap="round" opacity=".64"/>
+    </g>
+
+    <g transform="translate(430 105)">
+      <rect x="0" y="0" width="165" height="295" rx="34" fill="#071722" stroke="#92d9f5" stroke-width="4"/>
+      <rect x="13" y="18" width="139" height="260" rx="24" fill="url(#phone)"/>
+      <rect x="57" y="9" width="50" height="7" rx="4" fill="#1f4159"/>
+      <circle cx="83" cy="148" r="46" fill="none" stroke="#eafcff" stroke-width="8"/>
+      <path d="M58 148 l17 18 34-38" fill="none" stroke="#eafcff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+  </g>
+
+  <g transform="translate(735 0)">
+    <text x="0" y="220" fill="#f4f8fb" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="118" font-weight="800" letter-spacing="-5">Desk<tspan fill="url(#word)">Unlock</tspan></text>
+    <text x="4" y="285" fill="#a9bbca" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="32" font-weight="400">Smartphone authentication and proximity unlock for Linux</text>
+
+    <g transform="translate(5 350)" font-family="Inter,Segoe UI,Arial,sans-serif">
+      <g>
+        <path d="M22 0 L43 8 V28 C43 45 32 57 22 63 C12 57 1 45 1 28 V8 Z" fill="none" stroke="#2faeff" stroke-width="4"/>
+        <text x="62" y="39" fill="#c7d5df" font-size="24">Secure BLE challenge-response</text>
+      </g>
+      <line x1="420" y1="-5" x2="420" y2="70" stroke="#27465d" stroke-width="2"/>
+      <g transform="translate(458 0)">
+        <path d="M22 4 C5 4 1 18 1 31 M38 11 C30 2 13 2 5 12 M43 25 C43 12 34 5 22 5 M8 49 C13 42 15 36 15 27 C15 20 29 19 29 29 C29 43 24 52 19 60 M36 58 C42 48 45 39 45 28" fill="none" stroke="#20d8ca" stroke-width="4" stroke-linecap="round"/>
+        <text x="63" y="39" fill="#c7d5df" font-size="24">Biometric confirmation</text>
+      </g>
+      <line x1="805" y1="-5" x2="805" y2="70" stroke="#27465d" stroke-width="2"/>
+      <g transform="translate(845 3)">
+        <rect x="0" y="0" width="55" height="45" rx="7" fill="none" stroke="#2faeff" stroke-width="4"/>
+        <path d="M12 14 l10 9 -10 9 M29 33 h14" fill="none" stroke="#2faeff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="72" y="36" fill="#c7d5df" font-size="24">PAM fallback</text>
+      </g>
+    </g>
+
+    <g transform="translate(5 485)">
+      <rect width="575" height="54" rx="27" fill="#0e2a40" stroke="#1a4b6c"/>
+      <circle cx="30" cy="27" r="8" fill="#2bd2c2"/>
+      <text x="52" y="35" fill="#9fb2c0" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="21">Open source · Linux desktop focused · Android companion</text>
+    </g>
+  </g>
+</svg>
