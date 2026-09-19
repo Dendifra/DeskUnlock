@@ -1,0 +1,37 @@
+[Unit]
+Description=Syauth phone-as-key presence daemon
+ConditionPathIsDirectory=%t
+ConditionPathExists=!%h/.config/syauth/disabled
+
+[Service]
+Type=simple
+
+ExecStartPre=/usr/bin/rm -f /run/syauth/gatt.ready
+ExecStartPre=/usr/bin/syauth-wait-bluez
+
+ExecStart=/usr/lib/syauth/syauth-presenced
+
+ExecStartPost=/usr/bin/syauth-check-orchestrator
+ExecStopPost=/usr/bin/rm -f /run/syauth/gatt.ready
+
+KillSignal=SIGTERM
+TimeoutStartSec=45
+TimeoutStopSec=5
+
+Restart=on-failure
+RestartSec=3
+
+RuntimeDirectory=syauth
+RuntimeDirectoryMode=0700
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+
+ReadWritePaths=/var/lib/syauth
+ReadWritePaths=/var/log/syauth
+ReadWritePaths=/run/syauth
+ReadWritePaths=%t/syauth
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,797 @@
+#!/usr/bin/env python3
+
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QTimer, QProcess
+from PySide6.QtGui import QFont, QIcon
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+
+HOME = Path.home()
+CONTROL = Path("/usr/bin/syauth-control")
+DEVICE_CONTROL = Path("/usr/bin/syauth-device")
+PRESENCE_MARKER = Path("/run/syauth/presence.last")
+
+
+def run_command(command, timeout=2):
+    try:
+        result = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+        return result.stdout.strip()
+    except Exception:
+        return ""
+
+
+def get_master_state():
+    output = run_command([str(CONTROL), "status"])
+
+    if "Syauth: ON" in output:
+        return "on"
+
+    if "Syauth: OFF" in output:
+        return "off"
+
+    return "degraded"
+
+
+def get_syauth_state():
+    status = run_command(["syauth", "status"])
+    bonds = run_command(["syauth", "list"])
+
+    daemon_up = "daemon=up" in status
+    bluetooth_ready = (
+        "adapter-state:" in status
+        and "Powered" in status
+    )
+
+    bonded = 0
+    revoked = 0
+
+    for line in bonds.splitlines():
+        if re.search(r"\bbonded\b", line):
+            bonded += 1
+
+        if re.search(r"\brevoked", line):
+            revoked += 1
+
+    last_unlock = "Mai"
+
+    match = re.search(r"last-unlock:\s+(.+)", status)
+
+    if match:
+        raw = match.group(1).strip()
+
+        if raw and raw != "never":
+            last_unlock = raw.split("  ")[0]
+
+            try:
+                value = last_unlock.rstrip("Z")
+                date_part, time_part = value.split("T", 1)
+
+                year, month, day = date_part.split("-")
+                hour, minute = time_part.split(":")[:2]
+
+                last_unlock = (
+                    f"{day}/{month}/{year} "
+                    f"{hour}:{minute}"
+                )
+            except Exception:
+                pass
+
+    return {
+        "daemon": daemon_up,
+        "bluetooth": bluetooth_ready,
+        "bonded": bonded,
+        "revoked": revoked,
+        "last_unlock": last_unlock,
+    }
+
+
+def get_phone_info():
+    output = run_command(
+        ["bluetoothctl", "devices", "Bonded"]
+    )
+
+    for line in output.splitlines():
+        parts = line.split(maxsplit=2)
+
+        if len(parts) != 3:
+            continue
+
+        address = parts[1]
+        name = parts[2].strip()
+
+        if "pixel" not in name.lower():
+            continue
+
+        info = run_command(
+            ["bluetoothctl", "info", address]
+        )
+
+        connected = "Connected: yes" in info
+        paired = (
+            "Paired: yes" in info
+            and "Bonded: yes" in info
+        )
+
+        return {
+            "name": name,
+            "connected": connected,
+            "paired": paired,
+        }
+
+    return {
+        "name": "Telefono associato",
+        "connected": False,
+        "paired": False,
+    }
+
+
+class StatusDot(QLabel):
+    def __init__(self):
+        super().__init__("●")
+        self.setFixedWidth(18)
+
+    def set_state(self, good):
+        if good:
+            self.setStyleSheet(
+                "color: #63c174;"
+                "font-size: 16px;"
+            )
+        else:
+            self.setStyleSheet(
+                "color: #8b929a;"
+                "font-size: 16px;"
+            )
+
+
+class StatusRow(QWidget):
+    def __init__(self, title):
+        super().__init__()
+
+        self.dot = StatusDot()
+
+        self.title = QLabel(title)
+
+        self.value = QLabel("")
+        self.value.setAlignment(
+            Qt.AlignmentFlag.AlignRight
+            | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.value.setStyleSheet(
+            "color: #aeb4bc;"
+        )
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setSpacing(7)
+
+        layout.addWidget(self.dot)
+        layout.addWidget(self.title)
+        layout.addStretch()
+        layout.addWidget(self.value)
+
+    def set_status(self, good, text):
+        self.dot.set_state(good)
+        self.value.setText(text)
+
+
+class SettingsWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+
+        self.setWindowTitle("Syauth")
+        self.setMinimumWidth(520)
+        self.setMaximumWidth(620)
+
+        icon = QIcon.fromTheme("security-high")
+
+        if not icon.isNull():
+            self.setWindowIcon(icon)
+
+        self.busy = False
+        self.process = None
+
+        root = QWidget()
+        self.setCentralWidget(root)
+
+        main = QVBoxLayout(root)
+        main.setContentsMargins(28, 24, 28, 24)
+        main.setSpacing(16)
+
+        self.build_header(main)
+        self.build_master(main)
+        self.build_device(main)
+        self.build_features(main)
+        self.build_system_status(main)
+
+        main.addStretch()
+
+        footer = QHBoxLayout()
+        footer.addStretch()
+
+        close_button = QPushButton("Chiudi")
+        close_button.setMinimumWidth(95)
+        close_button.clicked.connect(self.close)
+
+        footer.addWidget(close_button)
+
+        main.addLayout(footer)
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.refresh)
+        self.timer.start(2000)
+
+        self.refresh()
+
+        self.adjustSize()
+        self.resize(
+            max(self.width(), 540),
+            min(self.height(), 760),
+        )
+
+    def section_title(self, text):
+        label = QLabel(text)
+        label.setStyleSheet(
+            "font-size: 11px;"
+            "font-weight: 600;"
+            "color: #aeb4bc;"
+        )
+        return label
+
+    def card(self):
+        frame = QFrame()
+        frame.setFrameShape(QFrame.Shape.StyledPanel)
+        return frame
+
+    def build_header(self, main):
+        header = QHBoxLayout()
+
+        icon_label = QLabel()
+
+        icon = QIcon.fromTheme("security-high")
+
+        if not icon.isNull():
+            icon_label.setPixmap(
+                icon.pixmap(46, 46)
+            )
+
+        titles = QVBoxLayout()
+        titles.setSpacing(1)
+
+        title = QLabel("Syauth")
+
+        font = QFont()
+        font.setPointSize(19)
+        font.setBold(True)
+
+        title.setFont(font)
+
+        subtitle = QLabel(
+            "Autenticazione sicura con il telefono"
+        )
+        subtitle.setStyleSheet(
+            "color: #aeb4bc;"
+        )
+
+        titles.addWidget(title)
+        titles.addWidget(subtitle)
+
+        header.addWidget(icon_label)
+        header.addSpacing(10)
+        header.addLayout(titles)
+        header.addStretch()
+
+        main.addLayout(header)
+
+    def build_master(self, main):
+        card = self.card()
+
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(18, 16, 18, 16)
+
+        text = QVBoxLayout()
+        text.setSpacing(3)
+
+        self.master_state = QLabel(
+            "Caricamento…"
+        )
+
+        font = self.master_state.font()
+        font.setBold(True)
+        font.setPointSize(11)
+
+        self.master_state.setFont(font)
+
+        description = QLabel(
+            "Autenticazione e controllo di prossimità"
+        )
+        description.setStyleSheet(
+            "color: #aeb4bc;"
+        )
+
+        text.addWidget(self.master_state)
+        text.addWidget(description)
+
+        self.toggle_button = QPushButton()
+        self.toggle_button.setMinimumWidth(110)
+        self.toggle_button.clicked.connect(
+            self.toggle_master
+        )
+
+        layout.addLayout(text)
+        layout.addStretch()
+        layout.addWidget(self.toggle_button)
+
+        main.addWidget(card)
+
+    def build_device(self, main):
+        main.addWidget(
+            self.section_title(
+                "DISPOSITIVO ASSOCIATO"
+            )
+        )
+
+        card = self.card()
+
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(18, 15, 18, 15)
+
+        icon_label = QLabel()
+
+        phone_icon = QIcon.fromTheme(
+            "smartphone"
+        )
+
+        if phone_icon.isNull():
+            phone_icon = QIcon.fromTheme(
+                "phone"
+            )
+
+        if not phone_icon.isNull():
+            icon_label.setPixmap(
+                phone_icon.pixmap(34, 34)
+            )
+
+        text = QVBoxLayout()
+        text.setSpacing(3)
+
+        self.phone_name = QLabel(
+            "Telefono associato"
+        )
+
+        font = self.phone_name.font()
+        font.setBold(True)
+        font.setPointSize(11)
+
+        self.phone_name.setFont(font)
+
+        self.phone_state = QLabel()
+        self.phone_state.setStyleSheet(
+            "color: #aeb4bc;"
+        )
+
+        text.addWidget(self.phone_name)
+        text.addWidget(self.phone_state)
+
+        layout.addWidget(icon_label)
+        layout.addSpacing(10)
+        layout.addLayout(text)
+        layout.addStretch()
+
+        device_buttons = QVBoxLayout()
+        device_buttons.setSpacing(6)
+
+        self.device_action = QPushButton()
+        self.device_action.setMinimumWidth(120)
+        self.device_action.hide()
+        self.device_action.clicked.connect(
+            self.device_action_clicked
+        )
+
+        self.device_revoke = QPushButton("Dissocia")
+        self.device_revoke.setMinimumWidth(120)
+        self.device_revoke.hide()
+        self.device_revoke.clicked.connect(
+            self.revoke_device_clicked
+        )
+
+        device_buttons.addWidget(self.device_action)
+        device_buttons.addWidget(self.device_revoke)
+        layout.addLayout(device_buttons)
+
+        main.addWidget(card)
+
+    def build_features(self, main):
+        main.addWidget(
+            self.section_title(
+                "UTILIZZATO PER"
+            )
+        )
+
+        card = self.card()
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 12, 18, 12)
+        layout.setSpacing(8)
+
+        features = (
+            "✓  Login e sblocco della sessione",
+            "✓  Conferma biometrica sul telefono",
+            "✓  Blocco automatico per allontanamento",
+            "✓  Password Linux disponibile come fallback",
+        )
+
+        for feature in features:
+            layout.addWidget(QLabel(feature))
+
+        main.addWidget(card)
+
+    def build_system_status(self, main):
+        main.addWidget(
+            self.section_title(
+                "STATO SISTEMA"
+            )
+        )
+
+        card = self.card()
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 10, 18, 10)
+        layout.setSpacing(1)
+
+        self.daemon_row = StatusRow(
+            "Servizio Syauth"
+        )
+
+        self.bluetooth_row = StatusRow(
+            "Bluetooth"
+        )
+
+        self.bond_row = StatusRow(
+            "Associazione"
+        )
+
+        self.presence_row = StatusRow(
+            "Telefono"
+        )
+
+        self.unlock_row = StatusRow(
+            "Ultimo sblocco"
+        )
+
+        for row in (
+            self.daemon_row,
+            self.bluetooth_row,
+            self.bond_row,
+            self.presence_row,
+            self.unlock_row,
+        ):
+            layout.addWidget(row)
+
+        main.addWidget(card)
+
+    def refresh(self):
+        master = get_master_state()
+        data = get_syauth_state()
+
+        if master == "on":
+            self.master_state.setText(
+                "●  Syauth attivo"
+            )
+
+            self.master_state.setStyleSheet(
+                "color: #63c174;"
+            )
+
+            self.toggle_button.setText(
+                "Disattiva"
+            )
+
+        elif master == "off":
+            self.master_state.setText(
+                "○  Syauth disattivato"
+            )
+
+            self.master_state.setStyleSheet(
+                "color: #aeb4bc;"
+            )
+
+            self.toggle_button.setText(
+                "Attiva"
+            )
+
+        else:
+            self.master_state.setText(
+                "●  Stato degradato"
+            )
+
+            self.master_state.setStyleSheet(
+                "color: #d5a14f;"
+            )
+
+            self.toggle_button.setText(
+                "Ripristina"
+            )
+
+        phone = get_phone_info()
+
+        self.phone_name.setText(
+            phone["name"]
+            if data["bonded"] > 0
+            else "Nessun dispositivo associato"
+        )
+
+        self.device_action.hide()
+        self.device_revoke.hide()
+
+        if data["bonded"] == 0:
+            self.phone_state.setText(
+                "Syauth non ha un telefono configurato"
+            )
+            self.phone_state.setStyleSheet(
+                "color: #e06c75;"
+            )
+
+            self.device_action.setText(
+                "Associa telefono"
+            )
+            self.device_action.setProperty(
+                "action", "pair"
+            )
+            self.device_action.show()
+
+        elif master == "degraded":
+            self.phone_state.setText(
+                "Associazione presente · Problema Syauth"
+            )
+            self.phone_state.setStyleSheet(
+                "color: #e06c75;"
+            )
+
+            self.device_action.setText(
+                "Controlla"
+            )
+            self.device_action.setProperty(
+                "action", "doctor"
+            )
+            self.device_action.show()
+
+        elif phone["connected"]:
+            self.phone_state.setText(
+                "Associato a questo computer · Connesso"
+            )
+            self.phone_state.setStyleSheet(
+                "color: #63c174;"
+            )
+
+        else:
+            self.phone_state.setText(
+                "Associato a questo computer · Non connesso"
+            )
+            self.phone_state.setStyleSheet(
+                "color: #aeb4bc;"
+            )
+
+        if data["bonded"] > 0:
+            self.device_revoke.show()
+
+            if master != "degraded":
+                self.device_action.setText(
+                    "Cambia telefono"
+                )
+                self.device_action.setProperty(
+                    "action", "change"
+                )
+                self.device_action.show()
+
+        self.daemon_row.set_status(
+            data["daemon"],
+            "Attivo"
+            if data["daemon"]
+            else "Non attivo",
+        )
+
+        self.bluetooth_row.set_status(
+            data["bluetooth"],
+            "Disponibile"
+            if data["bluetooth"]
+            else "Non disponibile",
+        )
+
+        self.bond_row.set_status(
+            data["bonded"] > 0,
+            "Associato"
+            if data["bonded"] > 0
+            else "Non associato",
+        )
+
+        if data["bonded"] == 0:
+            self.presence_row.set_status(
+                False,
+                "Non associato",
+            )
+        else:
+            self.presence_row.set_status(
+                phone["connected"],
+                "Connesso"
+                if phone["connected"]
+                else "Non connesso",
+            )
+
+        unlock_ok = (
+            data["last_unlock"] != "Mai"
+        )
+
+        self.unlock_row.set_status(
+            unlock_ok,
+            data["last_unlock"],
+        )
+
+        self.toggle_button.setEnabled(
+            not self.busy
+        )
+
+    def device_action_clicked(self):
+        action = self.device_action.property(
+            "action"
+        )
+
+        if action in ("pair", "change"):
+            QProcess.startDetached(
+                "ghostty",
+                [
+                    "-e",
+                    str(DEVICE_CONTROL),
+                    action,
+                ],
+            )
+
+        elif action == "doctor":
+            QProcess.startDetached(
+                "ghostty",
+                [
+                    "-e",
+                    "bash",
+                    "-lc",
+                    "syauth doctor; echo; read -rp "
+                    "\"Premi Invio per chiudere...\"",
+                ],
+            )
+
+    def revoke_device_clicked(self):
+        answer = QMessageBox.question(
+            self,
+            "Dissocia telefono",
+            (
+                "Dissociare il telefono da Syauth?\n\n"
+                "Non potrà più autenticare o sbloccare "
+                "questo computer.\n"
+                "La password Linux resterà disponibile.\n\n"
+                "Il normale pairing Bluetooth non verrà eliminato."
+            ),
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            result = subprocess.run(
+                [
+                    str(DEVICE_CONTROL),
+                    "revoke",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Errore",
+                "Dissociazione non riuscita.\n\n"
+                + str(exc),
+            )
+            return
+
+        if result.returncode != 0:
+            message = (
+                result.stderr.strip()
+                or result.stdout.strip()
+                or "Errore sconosciuto."
+            )
+            QMessageBox.critical(
+                self,
+                "Dissociazione non riuscita",
+                message,
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "Telefono dissociato",
+            (
+                "Il telefono è stato dissociato da Syauth.\n\n"
+                "Puoi associarne un altro con "
+                "\"Associa telefono\"."
+            ),
+        )
+        self.refresh()
+
+    def toggle_master(self):
+        if self.busy:
+            return
+
+        self.busy = True
+
+        self.toggle_button.setEnabled(False)
+        self.toggle_button.setText(
+            "Attendere…"
+        )
+
+        current = get_master_state()
+
+        if current == "on":
+            action = "off"
+        else:
+            action = "on"
+
+        self.process = QProcess(self)
+
+        self.process.finished.connect(
+            self.toggle_finished
+        )
+
+        self.process.start(
+            str(CONTROL),
+            [action],
+        )
+
+    def toggle_finished(self, *_):
+        if self.process:
+            self.process.deleteLater()
+            self.process = None
+
+        self.busy = False
+
+        QTimer.singleShot(
+            400,
+            self.refresh,
+        )
+
+
+app = QApplication(sys.argv)
+
+app.setApplicationName(
+    "Syauth Settings"
+)
+
+app.setDesktopFileName("syauth")
+
+window = SettingsWindow()
+window.show()
+
+sys.exit(app.exec())

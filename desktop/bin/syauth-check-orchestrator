@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -u
+
+READY=/run/syauth/gatt.ready
+rm -f "$READY"
+
+for i in $(seq 1 12); do
+    LOG=$(
+        journalctl --user             _SYSTEMD_INVOCATION_ID="${INVOCATION_ID:-}"             --no-pager -o cat 2>/dev/null
+    )
+
+    if grep -q "orchestrator not started" <<<"$LOG"; then
+        rm -f "$READY"
+        echo "syauth-check-orchestrator: orchestrator FALLITO" >&2
+        exit 1
+    fi
+
+    if grep -q "GATT app registration accepted by BlueZ" <<<"$LOG"; then
+        : > "$READY"
+        chmod 0644 "$READY"
+        echo "syauth-check-orchestrator: GATT pronto"
+        exit 0
+    fi
+
+    sleep 1
+done
+
+rm -f "$READY"
+echo "syauth-check-orchestrator: GATT non pronto entro timeout" >&2
+exit 1

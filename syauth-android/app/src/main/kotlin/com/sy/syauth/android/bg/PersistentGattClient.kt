@@ -184,6 +184,17 @@ public class PersistentGattClient internal constructor(
      */
     private val reconnectHandler: Handler = Handler(Looper.getMainLooper())
 
+    private val presenceHandler: Handler = Handler(Looper.getMainLooper())
+
+    private val presenceRunnable: Runnable = object : Runnable {
+        override fun run() {
+            if (stopped.get()) return
+            val ok = writeResponse(PRESENCE_HEARTBEAT)
+            Log.d(PERSISTENT_GATT_LOG_TAG, "presence heartbeat write=$ok")
+            presenceHandler.postDelayed(this, PRESENCE_HEARTBEAT_INTERVAL_MS)
+        }
+    }
+
     /**
      * Watchdog that re-issues a fresh `connectGatt` if we are still
      * disconnected after [RECONNECT_INTERVAL_MS]. Android's
@@ -255,6 +266,7 @@ public class PersistentGattClient internal constructor(
     public fun stop() {
         stopped.set(true)
         reconnectHandler.removeCallbacks(reconnectRunnable)
+        presenceHandler.removeCallbacks(presenceRunnable)
         val handle = gatt.getAndSet(null) ?: return
         runCatching { handle.disconnect() }
         runCatching { handle.close() }
@@ -347,6 +359,7 @@ public class PersistentGattClient internal constructor(
                     g.discoverServices()
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
+                    presenceHandler.removeCallbacks(presenceRunnable)
                     // Arm the watchdog. autoConnect=true alone is too lazy
                     // for field reality (Doze + long out-of-range absences
                     // routinely take minutes to re-acquire). The watchdog
@@ -394,6 +407,8 @@ public class PersistentGattClient internal constructor(
             if (characteristic.uuid != SYAUTH_CHALLENGE_CHAR_UUID) return
             val bytes = characteristic.value ?: return
             Log.i(PERSISTENT_GATT_LOG_TAG, "challenge frame received len=${bytes.size}")
+            presenceHandler.removeCallbacks(presenceRunnable)
+            presenceHandler.postDelayed(presenceRunnable, 30_000L)
             onChallenge(peerId, bytes)
         }
 
@@ -404,6 +419,8 @@ public class PersistentGattClient internal constructor(
         ) {
             if (characteristic.uuid != SYAUTH_CHALLENGE_CHAR_UUID) return
             Log.i(PERSISTENT_GATT_LOG_TAG, "challenge frame received (api33) len=${value.size}")
+            presenceHandler.removeCallbacks(presenceRunnable)
+            presenceHandler.postDelayed(presenceRunnable, 30_000L)
             onChallenge(peerId, value)
         }
 
@@ -413,6 +430,11 @@ public class PersistentGattClient internal constructor(
             status: Int,
         ) {
             Log.i(PERSISTENT_GATT_LOG_TAG, "descriptor write status=$status uuid=${descriptor.uuid}")
+            if (descriptor.uuid == CCCD_UUID && status == BluetoothGatt.GATT_SUCCESS) {
+                presenceHandler.removeCallbacks(presenceRunnable)
+                presenceHandler.post(presenceRunnable)
+                Log.i(PERSISTENT_GATT_LOG_TAG, "presence heartbeat armed")
+            }
         }
     }
 
@@ -448,7 +470,11 @@ public class PersistentGattClient internal constructor(
          * `connectGatt` triggers a scan window which has a small but
          * non-zero radio cost).
          */
-        internal const val RECONNECT_INTERVAL_MS: Long = 15_000L
+        internal const val RECONNECT_INTERVAL_MS: Long = 2_000L
+
+        private const val PRESENCE_HEARTBEAT_INTERVAL_MS: Long = 10_000L
+        private val PRESENCE_HEARTBEAT: ByteArray =
+            "SYAUTH-PRESENCE-v1".toByteArray(Charsets.UTF_8)
 
         /**
          * The `autoConnect` flag the production code always passes

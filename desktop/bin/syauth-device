@@ -1,0 +1,289 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SYAUTH_BIN="${SYAUTH_BIN:-$(command -v syauth || true)}"
+STATE_SETUP="${SYAUTH_STATE_SETUP:-/usr/lib/syauth/syauth-state-setup}"
+USER_SETUP="${SYAUTH_USER_SETUP:-/usr/bin/syauth-user-setup}"
+
+if [[ -z "$SYAUTH_BIN" ]]; then
+    echo "ERRORE: syauth non trovato nel PATH" >&2
+    exit 127
+fi
+
+active_ids() {
+    "$SYAUTH_BIN" list 2>/dev/null |
+        awk -F '\t' '$3 == "bonded" { print $1 }'
+}
+
+load_active_ids() {
+    mapfile -t ACTIVE_IDS < <(active_ids)
+}
+
+reconcile() {
+    systemctl --user start syauth-reconcile.service >/dev/null 2>&1 || true
+}
+
+state_ready() {
+    [[ -d /var/lib/syauth ]] &&
+        [[ -d /var/lib/syauth/keys ]] &&
+        [[ -w /var/lib/syauth ]] &&
+        [[ -w /var/lib/syauth/keys ]]
+}
+
+ensure_state() {
+    if state_ready; then
+        return 0
+    fi
+
+    if ! command -v pkexec >/dev/null 2>&1; then
+        echo "ERRORE: pkexec non disponibile; impossibile inizializzare Syauth." >&2
+        return 10
+    fi
+
+    if [[ ! -x "$STATE_SETUP" ]]; then
+        echo "ERRORE: helper di inizializzazione non trovato: $STATE_SETUP" >&2
+        return 11
+    fi
+
+    local target_user
+    target_user="$(id -un)"
+
+    echo "Prima configurazione Syauth: richiesta autorizzazione amministrativa..."
+
+    if ! pkexec "$STATE_SETUP" "$target_user"; then
+        echo "ERRORE: inizializzazione dello stato Syauth non completata." >&2
+        return 12
+    fi
+
+    if ! state_ready; then
+        echo "ERRORE: stato Syauth ancora non utilizzabile dopo l'inizializzazione." >&2
+        return 13
+    fi
+
+    echo "Stato Syauth inizializzato."
+}
+
+ensure_services() {
+    if [[ ! -x "$USER_SETUP" ]]; then
+        echo "ERRORE: helper servizi utente non trovato: $USER_SETUP" >&2
+        return 14
+    fi
+
+    "$USER_SETUP" --activate
+}
+
+verify_single() {
+    load_active_ids
+    [[ "${#ACTIVE_IDS[@]}" -eq 1 ]]
+}
+
+usage() {
+    cat <<'EOF'
+Uso: syauth-device {status|pair|change|revoke}
+
+  status  Mostra lo stato single-device senza esporre peer_id
+  pair    Associa un telefono quando non ce n'è uno attivo
+  change  Sostituisce il telefono attivo in modo transazionale
+  revoke  Dissocia l'unico telefono attivo
+EOF
+}
+
+cmd_status() {
+    load_active_ids
+
+    case "${#ACTIVE_IDS[@]}" in
+        0)
+            echo "NO_DEVICE"
+            ;;
+        1)
+            echo "SINGLE_DEVICE"
+            ;;
+        *)
+            echo "DEGRADED_MULTIPLE (${#ACTIVE_IDS[@]})"
+            return 2
+            ;;
+    esac
+}
+
+cmd_pair() {
+    if ! ensure_state; then
+        return 10
+    fi
+
+    if ! ensure_services; then
+        return 14
+    fi
+
+    load_active_ids
+
+    if [[ "${#ACTIVE_IDS[@]}" -ne 0 ]]; then
+        echo "ERRORE: esiste già un telefono attivo. Usa: syauth-device change" >&2
+        return 2
+    fi
+
+    echo "Avvio associazione telefono..."
+    if ! "$SYAUTH_BIN" pair --force; then
+        echo "Associazione non completata. Nessuna sostituzione eseguita." >&2
+        reconcile
+        return 1
+    fi
+
+    reconcile
+
+    if ! verify_single; then
+        echo "ERRORE: dopo il pairing lo stato non è single-device." >&2
+        cmd_status >&2 || true
+        return 3
+    fi
+
+    echo "Associazione completata: un solo telefono attivo."
+}
+
+cmd_change() {
+    if ! ensure_state; then
+        return 10
+    fi
+
+    if ! ensure_services; then
+        return 14
+    fi
+
+    load_active_ids
+
+    if [[ "${#ACTIVE_IDS[@]}" -ne 1 ]]; then
+        echo "ERRORE: il cambio richiede esattamente un telefono attivo." >&2
+        cmd_status >&2 || true
+        return 2
+    fi
+
+    old_id="${ACTIVE_IDS[0]}"
+
+    echo "Associa il nuovo telefono."
+    echo "Il telefono attuale resterà valido finché il nuovo pairing non sarà riuscito."
+
+    set +e
+    "$SYAUTH_BIN" pair --force
+    pair_rc=$?
+    set -e
+
+    reconcile
+    load_active_ids
+
+    if [[ "$pair_rc" -ne 0 ]]; then
+        echo "Cambio annullato: il nuovo pairing non è riuscito." >&2
+        if [[ "${#ACTIVE_IDS[@]}" -eq 1 && "${ACTIVE_IDS[0]}" == "$old_id" ]]; then
+            echo "Il telefono precedente è rimasto attivo."
+            return 1
+        fi
+
+        echo "ATTENZIONE: stato inatteso dopo il pairing fallito." >&2
+        cmd_status >&2 || true
+        return 4
+    fi
+
+    new_ids=()
+    for id in "${ACTIVE_IDS[@]}"; do
+        if [[ "$id" != "$old_id" ]]; then
+            new_ids+=("$id")
+        fi
+    done
+
+    if [[ "${#new_ids[@]}" -ne 1 ]]; then
+        echo "ERRORE: impossibile identificare in modo univoco il nuovo telefono." >&2
+        echo "Rollback dei nuovi bond creati durante questo tentativo..." >&2
+
+        for id in "${new_ids[@]}"; do
+            "$SYAUTH_BIN" revoke \
+                --id "$id" \
+                --reason "ui: rollback ambiguous phone change" \
+                >/dev/null 2>&1 || true
+        done
+
+        reconcile
+        echo "Il telefono precedente non è stato revocato." >&2
+        return 5
+    fi
+
+    new_id="${new_ids[0]}"
+
+    echo "Nuovo telefono associato. Revoco il precedente..."
+
+    if ! "$SYAUTH_BIN" revoke \
+        --id "$old_id" \
+        --reason "ui: replaced by new phone"
+    then
+        echo "ERRORE: revoca del vecchio telefono fallita." >&2
+        echo "Rollback: revoco il nuovo telefono e mantengo il precedente." >&2
+
+        "$SYAUTH_BIN" revoke \
+            --id "$new_id" \
+            --reason "ui: rollback after failed old-phone revoke" \
+            >/dev/null 2>&1 || true
+
+        reconcile
+        return 6
+    fi
+
+    reconcile
+    load_active_ids
+
+    if [[ "${#ACTIVE_IDS[@]}" -ne 1 || "${ACTIVE_IDS[0]}" != "$new_id" ]]; then
+        echo "ERRORE: verifica finale single-device fallita." >&2
+        cmd_status >&2 || true
+        return 7
+    fi
+
+    echo "Cambio completato: il nuovo telefono è l'unico dispositivo Syauth attivo."
+}
+
+cmd_revoke() {
+    load_active_ids
+
+    if [[ "${#ACTIVE_IDS[@]}" -eq 0 ]]; then
+        echo "Nessun telefono Syauth attivo."
+        return 0
+    fi
+
+    if [[ "${#ACTIVE_IDS[@]}" -ne 1 ]]; then
+        echo "ERRORE: stato non single-device; revoca automatica rifiutata." >&2
+        cmd_status >&2 || true
+        return 2
+    fi
+
+    "$SYAUTH_BIN" revoke \
+        --id "${ACTIVE_IDS[0]}" \
+        --reason "ui: device dissociated"
+
+    reconcile
+    load_active_ids
+
+    if [[ "${#ACTIVE_IDS[@]}" -ne 0 ]]; then
+        echo "ERRORE: la dissociazione non ha lasciato zero dispositivi attivi." >&2
+        return 3
+    fi
+
+    echo "Telefono dissociato da Syauth."
+}
+
+case "${1:-}" in
+    status)
+        cmd_status
+        ;;
+    pair)
+        cmd_pair
+        ;;
+    change)
+        cmd_change
+        ;;
+    revoke)
+        cmd_revoke
+        ;;
+    -h|--help|help|"")
+        usage
+        ;;
+    *)
+        echo "Comando sconosciuto: $1" >&2
+        usage >&2
+        exit 2
+        ;;
+esac

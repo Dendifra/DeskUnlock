@@ -172,7 +172,14 @@ class PairingViewModel(
      * compute the OOB via UniFFI and transition to [OobConfirming]. On
      * failure: transition to [Failed] and remove the BT bond.
      */
-    fun onLescResult(result: LescResult) {
+    fun onPairingCode(code: String) {
+val current = _state.value
+if (current is PairingState.LescNegotiating) {
+_state.value = current.copy(code = code)
+}
+}
+
+fun onLescResult(result: LescResult) {
         if (_state.value !is PairingState.LescNegotiating) return
         when (result) {
             is LescResult.Bonded -> {

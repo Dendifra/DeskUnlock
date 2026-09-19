@@ -161,15 +161,20 @@ public object ApproveNotification {
         hostname: String,
         peerId: String,
     ): Intent {
-        val encoded = Base64.encodeToString(challengeBytes, B64_FLAGS)
-        return Intent(APPROVE_INTENT_ACTION).apply {
-            setClassName(context, "com.sy.syauth.android.MainActivity")
-            data = Uri.fromParts(APPROVE_INTENT_SCHEME, APPROVE_INTENT_HOST, peerId)
+        val keystoreAlias =
+            SyauthCompanionService.keystoreAliasResolver
+                ?.keystoreAliasFor(peerId)
+                .orEmpty()
+
+        return Intent(context, ChallengeApprovalActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-            putExtra(APPROVE_EXTRA_CHALLENGE_B64, encoded)
-            putExtra(APPROVE_EXTRA_HOSTNAME, hostname)
-            putExtra(APPROVE_EXTRA_PEER_ID, peerId)
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+
+            putExtra(EXTRA_PEER_ID, peerId)
+            putExtra(EXTRA_HOSTNAME, hostname)
+            putExtra(EXTRA_CHALLENGE_BYTES, challengeBytes)
+            putExtra(EXTRA_KEYSTORE_ALIAS, keystoreAlias)
         }
     }
 

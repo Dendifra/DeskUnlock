@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -u
+
+# Attende che BlueZ esponga un adapter realmente Powered.
+# Due letture consecutive evitano falsi positivi senza aggiungere
+# diversi secondi artificiali al boot.
+
+stable=0
+
+for i in $(seq 1 80); do
+    if timeout 1 bluetoothctl show 2>/dev/null | grep -q "Powered: yes"; then
+        stable=$((stable + 1))
+
+        if (( stable >= 2 )); then
+            echo "syauth-wait-bluez: adapter powered e stabile"
+            exit 0
+        fi
+    else
+        stable=0
+    fi
+
+    sleep 0.25
+done
+
+echo "syauth-wait-bluez: BlueZ non pronto entro timeout" >&2
+exit 1

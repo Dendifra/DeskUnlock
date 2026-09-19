@@ -22,9 +22,42 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
+use nix::unistd::User;
+use std::ffi::CStr;
 use syslog::{Facility, Formatter3164};
 
 use crate::{auth, config::Config};
+
+#[link(name = "pam")]
+unsafe extern "C" {
+    fn pam_get_user(pamh: *mut c_void, user: *mut *const c_char, prompt: *const c_char) -> c_int;
+}
+
+/// Resolve the UID of the account currently being authenticated by PAM.
+///
+/// The PAM host process can run as root, so its effective UID must not
+/// be used to select the per-user Syauth runtime socket.
+unsafe fn pam_login_uid(pamh: *mut c_void) -> Option<u32> {
+    if pamh.is_null() {
+        return None;
+    }
+
+    let mut user_ptr: *const c_char = std::ptr::null();
+
+    // SAFETY: pamh is provided by libpam for this invocation and
+    // user_ptr is a valid output pointer for pam_get_user.
+    let rc = unsafe { pam_get_user(pamh, &mut user_ptr, std::ptr::null()) };
+
+    if rc != PAM_SUCCESS || user_ptr.is_null() {
+        return None;
+    }
+
+    // SAFETY: on PAM_SUCCESS pam_get_user returns a non-null,
+    // NUL-terminated username owned by libpam.
+    let username = unsafe { CStr::from_ptr(user_ptr) }.to_str().ok()?;
+
+    User::from_name(username).ok().flatten().map(|user| user.uid.as_raw())
+}
 
 // -----------------------------------------------------------------------------
 // PAM return-code constants
@@ -168,7 +201,7 @@ where
 /// In the S-008 stub we read neither pointer; the parameters exist to match
 /// the ABI signature.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pam_sm_authenticate(_pamh: *mut c_void, _flags: c_int, argc: c_int, argv: *const *const c_char) -> c_int {
+pub unsafe extern "C" fn pam_sm_authenticate(pamh: *mut c_void, _flags: c_int, argc: c_int, argv: *const *const c_char) -> c_int {
     run_entry(|| {
         // SAFETY: libpam guarantees `argv` is either null or points
         // to `argc` valid `*const c_char` entries. The helper
@@ -177,7 +210,15 @@ pub unsafe extern "C" fn pam_sm_authenticate(_pamh: *mut c_void, _flags: c_int, 
         // total even on hostile callers.
         let argv_strings = unsafe { collect_pam_argv(argc, argv) };
         let argv_refs: Vec<&str> = argv_strings.iter().map(String::as_str).collect();
-        let cfg = Config::from_pam_argv(&argv_refs);
+        let pam_uid = match unsafe { pam_login_uid(pamh) } {
+            Some(uid) => uid,
+            None => {
+                log_info("syauth: unlock unavailable reason=pam-user");
+                return PAM_AUTHINFO_UNAVAIL;
+            }
+        };
+
+        let cfg = Config::from_pam_argv_for_uid(&argv_refs, pam_uid);
         let outcome = auth::authenticate(&cfg);
         log_info(&format!(
             "syauth: unlock {} reason={} peer_id={}",

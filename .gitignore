@@ -8,3 +8,7 @@
 /.claude/worktrees
 *.iml
 .DS_Store
+/desktop/bin/dms-syauth
+/desktop/dms/dms-syauth
+__pycache__/
+*.py[cod]

@@ -1,0 +1,7 @@
+[Unit]
+Description=Syauth health check
+After=syauth-presenced.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/syauth-health

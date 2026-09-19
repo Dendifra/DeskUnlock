@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MARKER="$HOME/.config/syauth/disabled"
+
+units=(
+  syauth-presenced.service
+  syauth-proximity.service
+  syauth-reconcile.path
+)
+
+status_cmd() {
+    if [[ -e "$MARKER" ]]; then
+        echo "Syauth: OFF"
+        exit 0
+    fi
+
+    bad=0
+    for u in "${units[@]}"; do
+        systemctl --user is-active --quiet "$u" || bad=1
+        systemctl --user is-enabled --quiet "$u" || bad=1
+    done
+
+    if (( bad == 0 )); then
+        echo "Syauth: ON"
+    else
+        echo "Syauth: DEGRADED"
+        exit 2
+    fi
+}
+
+off_cmd() {
+    mkdir -p "$(dirname "$MARKER")"
+    touch "$MARKER"
+
+    systemctl --user disable --now syauth-reconcile.path >/dev/null 2>&1 || true
+    systemctl --user stop syauth-reconcile.service >/dev/null 2>&1 || true
+    systemctl --user disable --now syauth-proximity.service >/dev/null 2>&1 || true
+    systemctl --user disable --now syauth-presenced.service >/dev/null 2>&1 || true
+
+    rm -f /run/syauth/gatt.ready /run/syauth/presence.last 2>/dev/null || true
+
+    echo "Syauth: OFF"
+}
+
+on_cmd() {
+    rm -f "$MARKER"
+    systemctl --user daemon-reload
+
+    systemctl --user enable syauth-presenced.service >/dev/null
+    systemctl --user enable syauth-proximity.service >/dev/null
+    systemctl --user enable syauth-reconcile.path >/dev/null
+
+    if ! systemctl --user start syauth-presenced.service; then
+        echo "Syauth ON fallito: presenced"
+        off_cmd
+        exit 1
+    fi
+
+    systemctl --user start syauth-reconcile.path
+
+    if ! systemctl --user start syauth-proximity.service; then
+        echo "Syauth ON fallito: proximity"
+        off_cmd
+        exit 1
+    fi
+
+    echo "Syauth: ON"
+}
+
+case "${1:-status}" in
+    on)
+        on_cmd
+        ;;
+    off)
+        off_cmd
+        ;;
+    status)
+        status_cmd
+        ;;
+    toggle)
+        if [[ -e "$MARKER" ]]; then
+            on_cmd
+        else
+            off_cmd
+        fi
+        ;;
+    *)
+        echo "Uso: syauth-control {on|off|toggle|status}" >&2
+        exit 64
+        ;;
+esac

@@ -104,7 +104,7 @@ pub const RELOAD_CHANNEL_CAPACITY: usize = 16;
 /// ≤ 1.2 s per SPEC §4.3". The PAM caller falls through to FIDO
 /// when this deadline elapses without a response on the
 /// per-peer response characteristic.
-pub const DEFAULT_AUTH_TIMEOUT: StdDuration = StdDuration::from_millis(8000);
+pub const DEFAULT_AUTH_TIMEOUT: StdDuration = StdDuration::from_millis(20000);
 
 /// Width in bytes of the per-challenge nonce. The value matches
 /// `syauth_core::NONCE_LEN` (SPEC §3 scope item #6); the constant

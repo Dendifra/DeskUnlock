@@ -59,12 +59,12 @@ pub const DAEMON_CONNECT_TIMEOUT: Duration = Duration::from_millis(50);
 pub const DAEMON_WRITE_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// Read-budget for the daemon's typed `Response::Challenge`. Matches
-/// the daemon's `DEFAULT_AUTH_TIMEOUT` (8000 ms) so the daemon's own
+/// the daemon's `DEFAULT_AUTH_TIMEOUT` (20000 ms) so the daemon's own
 /// `tokio::time::timeout` trips first; the PAM-side budget is a
 /// belt-and-suspenders fallback for the case where the daemon does
-/// not respect its own deadline. 8000 ms accommodates real
+/// not respect its own deadline. 20000 ms accommodates real
 /// BiometricPrompt reaction time on the phone (~4-5s typical).
-pub const DAEMON_RESPONSE_BUDGET: Duration = Duration::from_millis(8_000);
+pub const DAEMON_RESPONSE_BUDGET: Duration = Duration::from_millis(20_000);
 
 /// Wall-clock slack added to [`DAEMON_CONNECT_TIMEOUT`] when the
 /// daemon-down test measures "≤ 50 ms". Process scheduling under
@@ -337,10 +337,17 @@ fn resolve_peer_id(cfg: &Config) -> Result<String, AuthOutcome> {
     Ok(bond.peer_id.clone())
 }
 
-/// Find the first bond whose status is `Bonded`. Returns `None` if
-/// the store is empty or every bond is revoked.
+/// Return the newest bond whose status is `Bonded`.
+///
+/// Re-pairing can temporarily leave an older bonded record in the
+/// store. Authentication must follow the most recently completed
+/// pairing rather than filesystem/list insertion order.
 fn first_bonded(store: &BondStore) -> Option<&Bond> {
-    store.list().iter().find(|b| matches!(b.status, BondStatus::Bonded))
+    store
+        .list()
+        .iter()
+        .filter(|b| matches!(b.status, BondStatus::Bonded))
+        .max_by(|a, b| a.created_at.cmp(&b.created_at))
 }
 
 /// Fill `buf` with cryptographically-random bytes via the OS RNG.
@@ -849,7 +856,7 @@ mod tests {
     fn daemon_constants_match_spec() {
         assert_eq!(DAEMON_CONNECT_TIMEOUT, Duration::from_millis(50));
         assert_eq!(DAEMON_WRITE_TIMEOUT, Duration::from_millis(50));
-        assert_eq!(DAEMON_RESPONSE_BUDGET, Duration::from_millis(8_000));
+        assert_eq!(DAEMON_RESPONSE_BUDGET, Duration::from_millis(20_000));
     }
 
     /// Reason-token round-trip: every constant we re-export from

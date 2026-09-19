@@ -73,7 +73,6 @@
       Required for `android:showWhenLocked` + `android:turnScreenOn` to
       wake the screen and render over the keyguard on Android 14+.
     -->
-    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
     <!--
       S-018: CompanionDeviceService background bridge. The four
@@ -124,6 +123,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:excludeFromRecents="true"
             android:theme="@style/Theme.SyauthAndroid">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -157,6 +157,7 @@
         <service
             android:name=".bg.SyauthCompanionService"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="connectedDevice"
             tools:targetApi="31" />
 
@@ -174,6 +175,7 @@
             android:exported="false"
             android:launchMode="singleInstance"
             android:noHistory="true"
+            android:excludeFromRecents="true"
             android:showOnLockScreen="true"
             android:turnScreenOn="true"
             android:theme="@style/Theme.SyauthTranslucent"
@@ -195,6 +197,14 @@
             android:enabled="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name=".bg.PackageReplacedReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
     </application>
