@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch Syauth pairing database
+ConditionPathExists=!%h/.config/syauth/disabled
+
+[Path]
+PathChanged=/var/lib/syauth/bonds.toml
+Unit=syauth-reconcile.service
+
+[Install]
+WantedBy=default.target

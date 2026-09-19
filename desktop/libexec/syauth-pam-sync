@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+PAM_FILE="/etc/pam.d/plasmalogin"
+MODE="${1:-install}"
+
+[[ "$(id -u)" -eq 0 ]] || {
+    echo "syauth-pam-sync richiede root" >&2
+    exit 1
+}
+
+case "$MODE" in
+    install)
+        [[ -f "$PAM_FILE" ]] || {
+            echo "PAM file non trovato: $PAM_FILE" >&2
+            exit 1
+        }
+
+        python3 - "$PAM_FILE" <<'PY'
+from pathlib import Path
+import re
+import shutil
+import sys
+import time
+
+p = Path(sys.argv[1])
+text = p.read_text()
+lines = text.splitlines()
+
+begin = "# BEGIN syauth-suite"
+entry = "auth sufficient pam_syauth.so"
+end = "# END syauth-suite"
+
+# Remove an older managed block, if present.
+out = []
+inside = False
+for line in lines:
+    if line.strip() == begin:
+        inside = True
+        continue
+    if inside and line.strip() == end:
+        inside = False
+        continue
+    if not inside:
+        out.append(line)
+
+# Remove old unmanaged/legacy Syauth auth lines, including the UID-1000 socket override.
+legacy = re.compile(
+    r"^\s*auth\s+sufficient\s+pam_syauth\.so(?:\s+.*)?$"
+)
+out = [line for line in out if not legacy.match(line)]
+
+anchor_re = re.compile(
+    r"^\s*auth\s+include\s+system-login(?:\s|$)"
+)
+
+insert_at = None
+for i, line in enumerate(out):
+    if anchor_re.match(line):
+        insert_at = i
+        break
+
+if insert_at is None:
+    raise SystemExit(
+        "STOP: fallback 'auth include system-login' non trovato; PAM non modificato"
+    )
+
+block = [begin, entry, end]
+new_lines = out[:insert_at] + block + out[insert_at:]
+new_text = "\n".join(new_lines) + "\n"
+
+if new_text == text:
+    print("Syauth PAM integration già corretta")
+    raise SystemExit(0)
+
+stamp = time.strftime("%Y%m%d-%H%M%S")
+backup = p.with_name(p.name + f".syauth-backup-{stamp}")
+shutil.copy2(p, backup)
+
+tmp = p.with_name(p.name + ".syauth-new")
+tmp.write_text(new_text)
+tmp.chmod(p.stat().st_mode & 0o777)
+tmp.replace(p)
+
+print(f"Syauth PAM integration applicata; backup: {backup}")
+PY
+        ;;
+
+    remove)
+        [[ -f "$PAM_FILE" ]] || exit 0
+
+        python3 - "$PAM_FILE" <<'PY'
+from pathlib import Path
+import sys
+
+p = Path(sys.argv[1])
+lines = p.read_text().splitlines()
+
+begin = "# BEGIN syauth-suite"
+end = "# END syauth-suite"
+
+out = []
+inside = False
+changed = False
+
+for line in lines:
+    if line.strip() == begin:
+        inside = True
+        changed = True
+        continue
+    if inside and line.strip() == end:
+        inside = False
+        continue
+    if not inside:
+        out.append(line)
+
+if changed:
+    p.write_text("\n".join(out) + "\n")
+    print("Blocco PAM gestito da syauth-suite rimosso")
+PY
+        ;;
+
+    *)
+        echo "Uso: syauth-pam-sync {install|remove}" >&2
+        exit 2
+        ;;
+esac

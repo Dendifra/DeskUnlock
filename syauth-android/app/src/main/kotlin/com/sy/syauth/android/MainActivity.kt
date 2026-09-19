@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.items
@@ -655,6 +656,7 @@ private fun SyauthApp(
             HomeRoute(
                 bondRecord = bondRecord,
                 pairedAtMillis = pairedAtMillis,
+                filesDir = activity.filesDir,
                 onPairTapped = { navController.navigate(NavRoutes.PAIR) },
                 onRevokeTapped = onRevoke,
                 onDiagnosticTapped = { navController.navigate(NavRoutes.DIAGNOSTIC) },
@@ -683,7 +685,7 @@ private fun SyauthApp(
                 onOobYes = viewModel::onOobYesTapped,
                 onOobNo = viewModel::onOobNoTapped,
                 onDone = {
-                    navController.popBackStack(NavRoutes.HOME, inclusive = false)
+                    activity.finishAndRemoveTask()
                 },
             )
         }
@@ -862,16 +864,38 @@ private val BLUETOOTH_RUNTIME_PERMISSIONS: Array<String> = arrayOf(
 private fun HomeRoute(
     bondRecord: BondRecord?,
     pairedAtMillis: Long,
+    filesDir: java.io.File,
     onPairTapped: () -> Unit,
     onRevokeTapped: () -> Unit,
     onDiagnosticTapped: () -> Unit,
 ) {
-    val revokeDialogState = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-    val revokeDialogOpen = revokeDialogState.value
+    val revokeDialogState =
+        androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+
+    val serviceRunning by produceState(
+        initialValue = SyauthCompanionService.isRunning.get(),
+    ) {
+        while (true) {
+            value = SyauthCompanionService.isRunning.get()
+            kotlinx.coroutines.delay(1000L)
+        }
+    }
+
+    val latestEvent by produceState<ChallengeHistoryRecord?>(
+        initialValue = null,
+        filesDir,
+    ) {
+        value = runCatching {
+            ChallengeHistoryDao(filesDir = filesDir)
+                .recent(1)
+                .firstOrNull()
+        }.getOrNull()
+    }
+
     androidx.compose.foundation.layout.Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(20.dp),
     ) {
         androidx.compose.material3.TextButton(
             onClick = onDiagnosticTapped,
@@ -881,44 +905,72 @@ private fun HomeRoute(
         ) {
             Text(text = "?")
         }
+
         Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.Center,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            Text(
+                text = "Syauth",
+                style = MaterialTheme.typography.headlineMedium,
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = "Phone as biometric key",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(modifier = Modifier.height(28.dp))
+
             if (bondRecord == null) {
                 UnpairedHomeBody(onPairTapped = onPairTapped)
             } else {
                 PairedHomeBody(
                     bondRecord = bondRecord,
                     pairedAtMillis = pairedAtMillis,
+                    serviceRunning = serviceRunning,
+                    latestEvent = latestEvent,
                     onRepairTapped = onPairTapped,
-                    onRevokeTapped = { revokeDialogState.value = true },
+                    onRevokeTapped = {
+                        revokeDialogState.value = true
+                    },
                 )
             }
         }
     }
-    if (revokeDialogOpen && bondRecord != null) {
+
+    if (revokeDialogState.value && bondRecord != null) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { revokeDialogState.value = false },
-            title = { Text(text = "Revoke pairing with ${bondRecord.hostName}?") },
+            title = {
+                Text(text = "Revoke pairing with ${bondRecord.hostName}?")
+            },
             text = {
                 Text(
-                    text = "This removes the bond on the phone and clears the Keystore key. " +
-                        "The system Bluetooth bond is not touched; remove it from BT Settings " +
-                        "if you want a full re-pair.",
+                    text =
+                        "This removes the Syauth bond and its Keystore key. " +
+                        "The Android Bluetooth bond is not changed.",
                 )
             },
             confirmButton = {
-                androidx.compose.material3.TextButton(onClick = {
-                    revokeDialogState.value = false
-                    onRevokeTapped()
-                }) {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        revokeDialogState.value = false
+                        onRevokeTapped()
+                    },
+                ) {
                     Text(text = "Revoke")
                 }
             },
             dismissButton = {
-                androidx.compose.material3.TextButton(onClick = { revokeDialogState.value = false }) {
+                androidx.compose.material3.TextButton(
+                    onClick = { revokeDialogState.value = false },
+                ) {
                     Text(text = "Cancel")
                 }
             },
@@ -927,14 +979,41 @@ private fun HomeRoute(
 }
 
 @Composable
-private fun UnpairedHomeBody(onPairTapped: () -> Unit) {
-    Text(text = "Not paired with a computer yet.")
-    Spacer(modifier = Modifier.height(24.dp))
-    Button(
-        onClick = onPairTapped,
-        modifier = Modifier.semantics { testTag = HOME_PAIR_BUTTON_TAG },
+private fun UnpairedHomeBody(
+    onPairTapped: () -> Unit,
+) {
+    androidx.compose.material3.Card(
+        modifier = Modifier.fillMaxWidth(),
     ) {
-        Text(text = "Pair")
+        Column(
+            modifier = Modifier.padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = "No computer paired",
+                style = MaterialTheme.typography.titleLarge,
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Pair a computer to use the Pixel as a biometric key.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Button(
+                onClick = onPairTapped,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { testTag = HOME_PAIR_BUTTON_TAG },
+            ) {
+                Text(text = "Pair with computer")
+            }
+        }
     }
 }
 
@@ -942,31 +1021,107 @@ private fun UnpairedHomeBody(onPairTapped: () -> Unit) {
 private fun PairedHomeBody(
     bondRecord: BondRecord,
     pairedAtMillis: Long,
+    serviceRunning: Boolean,
+    latestEvent: ChallengeHistoryRecord?,
     onRepairTapped: () -> Unit,
     onRevokeTapped: () -> Unit,
 ) {
-    Text(text = "Paired with", style = MaterialTheme.typography.bodyMedium)
-    Text(text = bondRecord.hostName, style = MaterialTheme.typography.headlineSmall)
-    Spacer(modifier = Modifier.height(16.dp))
-    Text(text = "peer_id: ${truncatedPeerId(bondRecord.peerId)}")
-    if (pairedAtMillis > 0L) {
-        Text(text = "paired:  ${formatPairedAt(pairedAtMillis)}")
-    }
-    Spacer(modifier = Modifier.height(24.dp))
-    androidx.compose.foundation.layout.Row(
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    androidx.compose.material3.Card(
+        modifier = Modifier.fillMaxWidth(),
     ) {
-        Button(
-            onClick = onRepairTapped,
-            modifier = Modifier.semantics { testTag = HOME_REPAIR_BUTTON_TAG },
+        Column(
+            modifier = Modifier.padding(24.dp),
         ) {
-            Text(text = "Re-pair")
-        }
-        androidx.compose.material3.OutlinedButton(
-            onClick = onRevokeTapped,
-            modifier = Modifier.semantics { testTag = HOME_REVOKE_BUTTON_TAG },
-        ) {
-            Text(text = "Revoke")
+            Text(
+                text = "Paired computer",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = bondRecord.hostName,
+                style = MaterialTheme.typography.headlineSmall,
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            androidx.compose.material3.HorizontalDivider()
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            Text(
+                text = if (serviceRunning)
+                    "● Syauth service active"
+                else
+                    "○ Syauth service inactive",
+                style = MaterialTheme.typography.titleMedium,
+                color = if (serviceRunning)
+                    MaterialTheme.colorScheme.primary
+                else
+                    MaterialTheme.colorScheme.error,
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "peer_id: ${truncatedPeerId(bondRecord.peerId)}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+
+            if (pairedAtMillis > 0L) {
+                Text(
+                    text = "Paired: ${formatPairedAt(pairedAtMillis)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+
+            latestEvent?.let { event ->
+                Spacer(modifier = Modifier.height(18.dp))
+
+                androidx.compose.material3.HorizontalDivider()
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Text(
+                    text = "Last authentication",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = "${event.outcome} • ${formatPairedAt(event.timestampMs)}",
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            }
+
+            Spacer(modifier = Modifier.height(26.dp))
+
+            androidx.compose.foundation.layout.Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Button(
+                    onClick = onRepairTapped,
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics { testTag = HOME_REPAIR_BUTTON_TAG },
+                ) {
+                    Text(text = "Re-pair")
+                }
+
+                androidx.compose.material3.OutlinedButton(
+                    onClick = onRevokeTapped,
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics { testTag = HOME_REVOKE_BUTTON_TAG },
+                ) {
+                    Text(text = "Revoke")
+                }
+            }
         }
     }
 }
@@ -1112,6 +1267,7 @@ private object PairingViewModelFactoryHolder {
                 // the state machine transitions Scanning → LescNegotiating
                 // exactly once per pair attempt.
                 backend.setOnPeerPickedCallback { peer -> vm.onPeerPicked(peer) }
+                backend.setOnPairingCodeCallback { code -> vm.onPairingCode(code) }
                 backend.setOnScanFailedCallback { _ -> vm.onCancelTapped() }
                 return vm as T
             }

@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+MODE="${1:---bootstrap}"
+DISABLED_MARKER="$HOME/.config/syauth/disabled"
+
+warn() {
+    printf 'ATTENZIONE: %s\n' "$*" >&2
+}
+
+state_ready() {
+    [[ -d /var/lib/syauth ]] &&
+        [[ -d /var/lib/syauth/keys ]] &&
+        [[ -w /var/lib/syauth ]] &&
+        [[ -w /var/lib/syauth/keys ]]
+}
+
+reload_user_manager() {
+    systemctl --user daemon-reload
+}
+
+start_dms() {
+    # DMS must remain available even when the Syauth master switch is OFF.
+    systemctl --user start --no-block dms.service ||
+        warn "dms.service non avviato"
+}
+
+activate_core() {
+    if [[ -e "$DISABLED_MARKER" ]]; then
+        if [[ "$MODE" == "--activate" ]]; then
+            echo "ERRORE: Syauth è disattivato. Attivalo prima del pairing." >&2
+            return 20
+        fi
+
+        echo "Syauth master OFF: servizi core lasciati disattivati."
+        return 0
+    fi
+
+    if ! state_ready; then
+        if [[ "$MODE" == "--activate" ]]; then
+            echo "ERRORE: stato Syauth non ancora inizializzato." >&2
+            return 21
+        fi
+
+        echo "Syauth non ancora associato: attivazione core rinviata al primo pairing."
+        return 0
+    fi
+
+    systemctl --user enable \
+        syauth-presenced.service \
+        syauth-proximity.service \
+        syauth-reconcile.path \
+        >/dev/null
+
+    systemctl --user start --no-block \
+        syauth-presenced.service \
+        syauth-proximity.service \
+        syauth-reconcile.path
+
+    echo "Servizi core Syauth attivati."
+}
+
+case "$MODE" in
+    --bootstrap|--activate|--gui)
+        ;;
+    *)
+        echo "Uso: syauth-user-setup {--bootstrap|--activate|--gui}" >&2
+        exit 2
+        ;;
+esac
+
+reload_user_manager
+start_dms
+activate_core
+
+if [[ "$MODE" == "--gui" ]]; then
+    exec /usr/bin/syauth-settings
+fi

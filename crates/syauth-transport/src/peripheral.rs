@@ -68,6 +68,7 @@ use crate::{
 /// thread; one in-flight challenge per peer (SPEC §3 #7) makes 8 frames
 /// generous headroom.
 const RESPONSE_READ_BUF_BYTES: usize = 512;
+const PRESENCE_HEARTBEAT: &[u8] = b"SYAUTH-PRESENCE-v1";
 
 /// Stable service UUID per bond, derived from the bond key at minute=0.
 /// The phone's GATT client discovers characteristics by UUID after the
@@ -565,12 +566,9 @@ impl PersistentPeripheral {
             let mut slot = self.app_handle.lock().await;
             *slot = Some(new_handle);
         }
-        // Kick connected peers so phones with stale CCCD bindings to
-        // the previous Application are forced to reconnect and
-        // re-subscribe against the fresh registration.
-        if let Err(err) = self.kick_connected_peers().await {
-            tracing::warn!(target: "syauth_transport", error = %err, "kick_connected_peers post-rebuild failed");
-        }
+        // Fast path: preserve already-connected BLE peers.
+        // Stale subscriptions are recovered on demand by
+        // rebuild_peer_registration().
         // Spawn the pair watcher: every CharacteristicControlEvent::Write
         // on the phone-pubkey characteristic is a phone trying to
         // commit a pair. Read 32 bytes, forward (host_pubkey,
@@ -705,24 +703,10 @@ impl PersistentPeripheral {
         *slot = Some(new_handle);
         drop(slot);
 
-        // Kick any LE peer that survived the previous daemon process
-        // / Application registration. A phone running PersistentGattClient
-        // with `autoConnect=true` keeps the LE link alive across our
-        // `serve_gatt_application` swap, but its CCCD subscription is
-        // bound to the dead application registration — every
-        // `notify_challenge` against it lands on notifier_slot=None.
-        // Forcing a Device::disconnect() drops the link cleanly; the
-        // phone's autoConnect re-establishes it within seconds and
-        // (per the phone-side fix) calls `gatt.refresh()` +
-        // `discoverServices()` so the fresh app's CCCD subscription
-        // takes effect.
-        if let Err(err) = self.kick_connected_peers().await {
-            tracing::warn!(
-                target: "syauth_transport",
-                error = %err,
-                "kick_connected_peers failed; phones with stale subscriptions may need a manual BT cycle"
-            );
-        }
+        // Fast path: do not force an Android BLE reconnect here.
+        // If the notifier is genuinely stale, notify_challenge()
+        // invokes rebuild_peer_registration(), which performs the
+        // controlled disconnect and fresh GATT registration.
 
         let notifier_slot: Arc<Mutex<Option<CharacteristicWriter>>> = Arc::new(Mutex::new(None));
         let (response_tx, response_rx) = mpsc::channel::<Vec<u8>>(RESPONSE_BUFFER_DEPTH);
@@ -738,6 +722,14 @@ impl PersistentPeripheral {
                             Some(CharacteristicControlEvent::Notify(writer)) => {
                                 tracing::info!(target: "syauth_transport", "chal_control: Notify event — phone subscribed");
                                 *notifier_slot_for_task.lock().await = Some(writer);
+
+                                if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
+                                    let path = std::path::PathBuf::from(runtime)
+                                        .join("syauth")
+                                        .join("challenge-ready.last");
+                                    let _ = std::fs::write(path, b"1
+                ");
+                                }
                             }
                             Some(CharacteristicControlEvent::Write(_)) => {
                                 tracing::warn!(target: "syauth_transport", "chal_control: unexpected Write event");
@@ -784,7 +776,21 @@ impl PersistentPeripheral {
                     } => {
                         match read_res {
                             Ok(bytes) if !bytes.is_empty() => {
-                                let _ = response_tx_for_task.send(bytes).await;
+                                if bytes.as_slice() == PRESENCE_HEARTBEAT {
+                                    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
+                                        let path = std::path::PathBuf::from(runtime)
+                                            .join("syauth")
+                                            .join("presence.last");
+                                        let _ = std::fs::write(path, b"1
+                ");
+                                    }
+                                    tracing::debug!(
+                                        target: "syauth_transport",
+                                        "presence heartbeat received"
+                                    );
+                                } else {
+                                    let _ = response_tx_for_task.send(bytes).await;
+                                }
                             }
                             Ok(_) | Err(_) => {
                                 // Reader closed or errored; drop it, wait for next Write event.
@@ -824,6 +830,11 @@ impl PersistentPeripheral {
     /// take the `peers` lock briefly to read `bond_key`, drop it,
     /// touch `app_handle`, then take `peers` again to swap the entry.
     async fn rebuild_peer_registration(&self, peer_id: &str) -> Result<(), PeripheralError> {
+        if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
+            let path = std::path::PathBuf::from(runtime).join("syauth").join("challenge-ready.last");
+            let _ = std::fs::remove_file(path);
+        }
+
         let bond_key: BondKey = {
             let peers = self.peers.lock().await;
             let entry = peers.get(peer_id).ok_or_else(|| PeripheralError::UnknownPeer {
@@ -951,73 +962,119 @@ impl Peripheral for PersistentPeripheral {
     }
 
     async fn notify_challenge(&self, peer_id: &str, frame: &[u8]) -> Result<(), PeripheralError> {
-        let peers = self.peers.lock().await;
-        let peer = peers.get(peer_id).ok_or_else(|| PeripheralError::UnknownPeer {
-            peer_id: peer_id.to_owned(),
-        })?;
-        let notifier_slot = peer.notifier_slot.clone();
-        // Drain any stale response from a previous timed-out challenge.
-        // Without this, the next wait_for_response would grab the old
-        // bytes and verify them against the new nonce → bad-signature.
+        use tokio::io::AsyncWriteExt;
+
+        // Drain stale responses left by a previous timed-out challenge.
         {
+            let peers = self.peers.lock().await;
+            let peer = peers.get(peer_id).ok_or_else(|| PeripheralError::UnknownPeer {
+                peer_id: peer_id.to_owned(),
+            })?;
             let mut rx = peer.response_rx.lock().await;
             while rx.try_recv().is_ok() {}
         }
-        drop(peers);
-        let mut slot = notifier_slot.lock().await;
-        let Some(writer) = slot.as_mut() else {
-            tracing::warn!(target: "syauth_transport", peer_id=%peer_id, "notify_challenge: notifier_slot=None — phone never subscribed (or task missed event)");
-            return Err(PeripheralError::Backend {
-                reason: format!("no active GATT subscription for peer_id={peer_id}"),
-            });
-        };
-        use tokio::io::AsyncWriteExt;
-        tracing::info!(target: "syauth_transport", peer_id=%peer_id, bytes=frame.len(), "notify_challenge: writing frame");
-        match writer.write_all(frame).await {
-            Ok(()) => Ok(()),
-            Err(err) => {
-                // The cached BlueZ CharacteristicWriter is dead — the phone's
-                // CCCD subscription went stale (out-of-range, suspend/resume,
-                // app restart, radio glitch). Field testing showed that
-                // simply Device::disconnect()ing the LE link is NOT enough:
-                // BlueZ keeps the per-characteristic subscription state across
-                // link transitions, so when the phone reconnects and writes
-                // CCCD again, BlueZ silently merges that into the existing
-                // subscription and never emits a fresh
-                // `CharacteristicControlEvent::Notify` to our application.
-                // The cached writer in `notifier_slot` stays dead forever
-                // until the daemon restarts.
-                //
-                // Real recovery: unregister and re-register the entire
-                // per-peer application via `rebuild_peer_registration`.
-                // bluer issues `UnregisterApplication` on `ApplicationHandle`
-                // drop, which discards BlueZ's subscription state. The fresh
-                // registration's chal_control stream then emits `Notify` the
-                // first time the (kicked) phone re-subscribes against it.
-                // This call still fails (FIDO takes over once), but the
-                // next challenge after the phone watchdog reconnects lands
-                // on a healthy writer.
+
+        // First attempt uses the currently cached writer.
+        // If that writer is dead/missing, rebuild the GATT application once,
+        // wait for the phone to subscribe to the fresh characteristic,
+        // then retry THIS SAME challenge instead of losing it.
+        for attempt in 0..2 {
+            let notifier_slot = {
+                let peers = self.peers.lock().await;
+                let peer = peers.get(peer_id).ok_or_else(|| PeripheralError::UnknownPeer {
+                    peer_id: peer_id.to_owned(),
+                })?;
+                peer.notifier_slot.clone()
+            };
+
+            let mut slot = notifier_slot.lock().await;
+
+            if let Some(writer) = slot.as_mut() {
+                tracing::info!(
+                    target: "syauth_transport",
+                    peer_id = %peer_id,
+                    bytes = frame.len(),
+                    attempt,
+                    "notify_challenge: writing frame"
+                );
+
+                match writer.write_all(frame).await {
+                    Ok(()) => {
+                        if attempt == 1 {
+                            tracing::info!(
+                                target: "syauth_transport",
+                                peer_id = %peer_id,
+                                "notify_challenge: retry succeeded after GATT rebuild"
+                            );
+                        }
+                        return Ok(());
+                    }
+                    Err(err) if attempt == 0 => {
+                        tracing::warn!(
+                            target: "syauth_transport",
+                            peer_id = %peer_id,
+                            error = %err,
+                            "notify_challenge: cached writer dead — rebuilding GATT application and retrying"
+                        );
+                        *slot = None;
+                    }
+                    Err(err) => {
+                        return Err(PeripheralError::Backend {
+                            reason: format!("notify_challenge retry write: {err}"),
+                        });
+                    }
+                }
+            } else if attempt == 0 {
                 tracing::warn!(
                     target: "syauth_transport",
                     peer_id = %peer_id,
-                    error = %err,
-                    "notify_challenge: cached writer dead — rebuilding GATT application"
+                    "notify_challenge: notifier missing — rebuilding GATT application and retrying"
                 );
-                *slot = None;
-                drop(slot);
-                if let Err(rebuild_err) = self.rebuild_peer_registration(peer_id).await {
-                    tracing::warn!(
+            } else {
+                return Err(PeripheralError::Backend {
+                    reason: format!("no active GATT subscription after rebuild for peer_id={peer_id}"),
+                });
+            }
+
+            drop(slot);
+
+            self.rebuild_peer_registration(peer_id).await?;
+
+            // Fresh ApplicationHandle means BlueZ has forgotten the stale CCCD.
+            // Wait for Android to reconnect and produce a genuinely new Notify writer.
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+
+            loop {
+                let ready = {
+                    let peers = self.peers.lock().await;
+                    let peer = peers.get(peer_id).ok_or_else(|| PeripheralError::UnknownPeer {
+                        peer_id: peer_id.to_owned(),
+                    })?;
+                    peer.notifier_slot.lock().await.is_some()
+                };
+
+                if ready {
+                    tracing::info!(
                         target: "syauth_transport",
                         peer_id = %peer_id,
-                        error = %rebuild_err,
-                        "notify_challenge recovery: rebuild_peer_registration failed"
+                        "notify_challenge: fresh subscription ready — retrying challenge"
                     );
+                    break;
                 }
-                Err(PeripheralError::Backend {
-                    reason: format!("notify_challenge write: {err}"),
-                })
+
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(PeripheralError::Backend {
+                        reason: format!("fresh GATT subscription timeout for peer_id={peer_id}"),
+                    });
+                }
+
+                tokio::time::sleep(Duration::from_millis(250)).await;
             }
         }
+
+        Err(PeripheralError::Backend {
+            reason: format!("notify_challenge retry exhausted for peer_id={peer_id}"),
+        })
     }
 
     async fn wait_for_response(&self, peer_id: &str, deadline: Duration) -> Result<Vec<u8>, PeripheralError> {

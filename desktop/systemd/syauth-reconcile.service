@@ -1,0 +1,9 @@
+[Unit]
+Description=Reconcile Syauth phone registration
+After=syauth-presenced.service
+Requires=syauth-presenced.service
+ConditionPathExists=!%h/.config/syauth/disabled
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/syauth-reconcile

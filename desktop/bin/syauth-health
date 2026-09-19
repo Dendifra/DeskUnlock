@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -u
+
+FAIL=0
+
+ok() {
+    printf 'OK %s\n' "$*"
+}
+
+bad() {
+    printf 'FAIL %s\n' "$*" >&2
+    FAIL=1
+}
+
+if [[ ! -d /var/lib/syauth ]]; then
+    echo "OK Syauth non ancora configurato"
+    echo "SYAUTH HEALTH: UNCONFIGURED"
+    exit 0
+fi
+
+if [[ ! -x /usr/bin/syauth-control ]]; then
+    bad "syauth-control"
+else
+    set +e
+    CONTROL_RAW="$(/usr/bin/syauth-control status 2>/dev/null)"
+    CONTROL_RC=$?
+    set -e
+
+    CONTROL_STATE="$(
+        sed -n 's/^Syauth:[[:space:]]*//p' <<<"$CONTROL_RAW" |
+            tail -n1
+    )"
+
+    if [[ "$CONTROL_STATE" == "OFF" ]]; then
+        echo "OK Syauth disattivato volontariamente"
+        echo "SYAUTH HEALTH: OFF"
+        exit 0
+    fi
+
+    if [[ "$CONTROL_STATE" != "ON" || "$CONTROL_RC" -ne 0 ]]; then
+        bad "master state=${CONTROL_RAW:-unknown}"
+    else
+        ok "master switch"
+    fi
+fi
+
+check_exec() {
+    local label="$1"
+    local path="$2"
+
+    if [[ -x "$path" ]]; then
+        ok "$label"
+    else
+        bad "$label ($path)"
+    fi
+}
+
+check_exec "PAM module" "/usr/lib/security/pam_syauth.so"
+check_exec "proximity watcher" "/usr/bin/syauth-proximity"
+check_exec "pair reconciler" "/usr/bin/syauth-reconcile"
+check_exec "presenced binary" "/usr/lib/syauth/syauth-presenced"
+check_exec "DMS Syauth bridge" "/usr/bin/dms-syauth"
+
+if systemctl --user is-active --quiet syauth-presenced.service; then
+    ok "syauth-presenced.service"
+else
+    bad "syauth-presenced.service"
+fi
+
+if systemctl --user is-active --quiet syauth-proximity.service; then
+    ok "syauth-proximity.service"
+else
+    bad "syauth-proximity.service"
+fi
+
+if systemctl --user is-active --quiet syauth-reconcile.path; then
+    ok "syauth-reconcile.path"
+else
+    bad "syauth-reconcile.path"
+fi
+
+if grep -Eq '^[[:space:]]*auth[[:space:]]+sufficient[[:space:]]+pam_syauth\.so([[:space:]]|$)' /etc/pam.d/plasmalogin 2>/dev/null; then
+    ok "Plasma Syauth PAM entry"
+else
+    bad "Plasma Syauth PAM entry"
+fi
+
+if grep -Eq '^[[:space:]]*auth[[:space:]]+include[[:space:]]+system-login([[:space:]]|$)' /etc/pam.d/plasmalogin 2>/dev/null; then
+    ok "password fallback"
+else
+    bad "password fallback"
+fi
+
+if [[ -x /usr/bin/syauth ]]; then
+    BONDED="$(
+        /usr/bin/syauth list 2>/dev/null |
+            awk -F '\t' '$3 == "bonded" { n++ } END { print n+0 }'
+    )"
+
+    case "$BONDED" in
+        0)
+            ok "no bonded peer (unpaired state)"
+            ;;
+        1)
+            ok "exactly one bonded peer"
+            ;;
+        *)
+            bad "bonded peer count=$BONDED (single-device policy violation)"
+            ;;
+    esac
+else
+    bad "syauth CLI"
+fi
+
+if [[ "$FAIL" -eq 0 ]]; then
+    echo "SYAUTH HEALTH: PASS"
+    exit 0
+fi
+
+echo "SYAUTH HEALTH: FAIL"
+exit 1

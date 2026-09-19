@@ -30,11 +30,11 @@ use std::{
 pub const DEFAULT_BOND_DIR: &str = "/var/lib/syauth";
 
 /// Default budget for the daemon round-trip. Matches the daemon's
-/// own `DEFAULT_AUTH_TIMEOUT` (8000 ms) so the daemon's tokio
+/// own `DEFAULT_AUTH_TIMEOUT` (20000 ms) so the daemon's tokio
 /// `time::timeout` trips first; the PAM-side budget is a
-/// belt-and-suspenders fallback. 8000 ms accommodates real
+/// belt-and-suspenders fallback. 20000 ms accommodates real
 /// BiometricPrompt reaction time on the phone (~4-5s typical).
-pub const DEFAULT_AUTH_TIMEOUT: Duration = Duration::from_millis(8_000);
+pub const DEFAULT_AUTH_TIMEOUT: Duration = Duration::from_millis(20_000);
 
 /// Name of the file appended to under [`Config::bond_dir`] on every
 /// `authenticate` call.
@@ -106,6 +106,30 @@ impl Config {
         Self {
             bond_dir: PathBuf::from(DEFAULT_BOND_DIR),
             socket_path: Self::resolve_socket_path(socket_override),
+            auth_timeout: DEFAULT_AUTH_TIMEOUT,
+        }
+    }
+
+    /// Build PAM configuration for the account being authenticated.
+    ///
+    /// An explicit `socket=` module argument has priority. Otherwise the
+    /// runtime socket is selected using the UID that belongs to PAM_USER.
+    #[must_use]
+    pub fn from_pam_argv_for_uid(argv: &[&str], uid: u32) -> Self {
+        let socket_override = argv
+            .iter()
+            .find_map(|arg| arg.strip_prefix(PAM_SOCKET_ARG_PREFIX))
+            .map(PathBuf::from);
+
+        let socket_path = socket_override.unwrap_or_else(|| {
+            PathBuf::from(format!("{DEFAULT_RUNTIME_FALLBACK_PREFIX}{uid}"))
+                .join(RUNTIME_SUBDIR)
+                .join(DEFAULT_SOCKET_BASENAME)
+        });
+
+        Self {
+            bond_dir: PathBuf::from(DEFAULT_BOND_DIR),
+            socket_path,
             auth_timeout: DEFAULT_AUTH_TIMEOUT,
         }
     }
@@ -211,10 +235,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn pam_uid_resolution_uses_login_account_uid() {
+        let cfg = Config::from_pam_argv_for_uid(&[], 4242);
+        assert_eq!(cfg.socket_path, PathBuf::from("/run/user/4242/syauth/auth.sock"));
+
+        let cfg = Config::from_pam_argv_for_uid(&["socket=/tmp/syauth-explicit.sock"], 4242);
+        assert_eq!(cfg.socket_path, PathBuf::from("/tmp/syauth-explicit.sock"));
+    }
+
     /// Sanity: default timeout matches the SPEC §4.3 budget.
     #[test]
     fn default_auth_timeout_matches_spec_offline_budget() {
-        assert_eq!(DEFAULT_AUTH_TIMEOUT, Duration::from_millis(8_000));
+        assert_eq!(DEFAULT_AUTH_TIMEOUT, Duration::from_millis(20_000));
     }
 
     /// Sanity: default bond dir matches SPEC §4.4.

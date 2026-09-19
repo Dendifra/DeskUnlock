@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+set -u
+
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+MARKER="$RUNTIME_DIR/syauth/presence.last"
+PUBLIC_MARKER="/run/syauth/presence.last"
+
+ABSENT_AFTER=60
+LOCK_AFTER=120
+CHECK_INTERVAL=1
+RETURN_DELAY=0.5
+
+USER_NAME="${USER:-$(id -un)}"
+
+seen_presence=0
+was_present=0
+locked_by_proximity=0
+last_seen_epoch=0
+biometric_requested=0
+
+log() {
+    echo "syauth-proximity: $*"
+}
+
+marker_mtime() {
+    if [[ -e "$MARKER" ]]; then
+        stat -c %Y "$MARKER" 2>/dev/null || echo 0
+    else
+        echo 0
+    fi
+}
+
+session_id() {
+    loginctl show-user "$USER_NAME" -p Display --value 2>/dev/null | head -n1
+}
+
+is_locked() {
+    local sid="$1"
+    [[ "$(loginctl show-session "$sid" -p LockedHint --value 2>/dev/null)" == "yes" ]]
+}
+
+publish_marker() {
+    if [[ -e "$MARKER" ]]; then
+        touch -r "$MARKER" "$PUBLIC_MARKER" 2>/dev/null || true
+        chmod 0644 "$PUBLIC_MARKER" 2>/dev/null || true
+    else
+        rm -f "$PUBLIC_MARKER" 2>/dev/null || true
+    fi
+}
+
+# Stato iniziale: MAI bloccare finché non abbiamo visto
+# almeno un heartbeat telefono reale.
+now=$(date +%s)
+mtime=$(marker_mtime)
+
+if (( mtime > 0 )); then
+    age=$((now - mtime))
+    (( age < 0 )) && age=0
+
+    if (( age <= ABSENT_AFTER )); then
+        seen_presence=1
+        was_present=1
+        last_seen_epoch=$mtime
+        publish_marker
+        log "startup: telefono presente age=${age}s"
+    else
+        log "startup: attendo heartbeat telefono"
+    fi
+else
+    log "startup: attendo heartbeat telefono"
+fi
+
+while sleep "$CHECK_INTERVAL"; do
+    now=$(date +%s)
+    mtime=$(marker_mtime)
+
+    if (( mtime > 0 )); then
+        age=$((now - mtime))
+        (( age < 0 )) && age=0
+
+        publish_marker
+
+        if (( age <= ABSENT_AFTER )); then
+            last_seen_epoch=$mtime
+
+            if (( seen_presence == 0 )); then
+                seen_presence=1
+                was_present=1
+                log "primo heartbeat acquisito age=${age}s"
+                continue
+            fi
+
+            if (( was_present == 0 )); then
+                was_present=1
+                biometric_requested=0
+                log "telefono tornato age=${age}s"
+            fi
+
+            # Qualunque sessione bloccata può richiedere biometria:
+            # sia lock proximity sia lock manuale/scorciatoia.
+            sid=$(session_id)
+
+            if [[ -n "$sid" ]] && is_locked "$sid"; then
+                if (( biometric_requested == 0 )); then
+                    sleep "$RETURN_DELAY"
+
+                    now2=$(date +%s)
+                    mtime2=$(marker_mtime)
+
+                    if (( mtime2 > 0 )); then
+                        age2=$((now2 - mtime2))
+                        (( age2 < 0 )) && age2=0
+
+                        if (( age2 <= ABSENT_AFTER )) && is_locked "$sid"; then
+                            if command -v dms >/dev/null 2>&1; then
+                                if dms ipc call syauth phoneReturned >/dev/null 2>&1; then
+                                    biometric_requested=1
+                                    locked_by_proximity=0
+                                    log "richiesta biometrica inviata: sessione bloccata e telefono presente"
+                                else
+                                    log "ERRORE: richiesta biometrica DMS fallita"
+                                fi
+                            else
+                                log "ERRORE: comando dms non trovato"
+                            fi
+                        fi
+                    fi
+                fi
+            else
+                # Nuovo ciclo di lock: permetti una nuova richiesta biometrica.
+                biometric_requested=0
+            fi
+
+            continue
+        fi
+
+        if (( seen_presence == 1 && was_present == 1 )); then
+            was_present=0
+            biometric_requested=0
+            log "heartbeat realmente perso age=${age}s"
+        fi
+
+    else
+        rm -f "$PUBLIC_MARKER" 2>/dev/null || true
+
+        # IMPORTANTE:
+        # marker sparito != telefono assente da infinito.
+        # Conserviamo last_seen_epoch.
+        if (( seen_presence == 1 && was_present == 1 )); then
+            was_present=0
+            biometric_requested=0
+            log "marker temporaneamente assente; uso ultimo heartbeat reale"
+        fi
+    fi
+
+    if (( seen_presence == 1 &&
+          was_present == 0 &&
+          last_seen_epoch > 0 &&
+          locked_by_proximity == 0 )); then
+
+        absent_for=$((now - last_seen_epoch))
+        (( absent_for < 0 )) && absent_for=0
+
+        if (( absent_for >= LOCK_AFTER )); then
+            sid=$(session_id)
+
+            if [[ -n "$sid" ]] && ! is_locked "$sid"; then
+                log "telefono assente da ${absent_for}s: blocco sessione $sid"
+                loginctl lock-session "$sid"
+
+                if [[ $? -eq 0 ]]; then
+                    locked_by_proximity=1
+                fi
+            fi
+        fi
+    fi
+done

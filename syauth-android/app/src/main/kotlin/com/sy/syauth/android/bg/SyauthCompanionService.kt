@@ -19,7 +19,9 @@
 // legacy CDM-style direct-controller extension point is gone.
 package com.sy.syauth.android.bg
 
+import android.bluetooth.BluetoothAdapter
 import android.app.Notification
+import android.app.ActivityOptions
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -30,6 +32,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.media.RingtoneManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.sy.syauth.android.bond.BondRecord
@@ -245,6 +248,41 @@ public class SyauthCompanionService : Service() {
     internal var lastForegroundType: Int = 0
         private set
 
+    private val bluetoothStateReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context?, intent: Intent?) {
+            if (intent?.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+
+            val state = intent.getIntExtra(
+                BluetoothAdapter.EXTRA_STATE,
+                BluetoothAdapter.ERROR,
+            )
+
+            Log.i(SYAUTH_BG_LOG_TAG, "bluetooth state changed state=$state")
+
+            if (state == BluetoothAdapter.STATE_ON) {
+                val provider = bondListProvider ?: defaultBondListProvider()
+
+                for (bond in provider.bonds()) {
+                    val client = PersistentGattClientRegistry.lookup(bond.peerId)
+                    if (client != null) {
+                        Log.i(
+                            SYAUTH_BG_LOG_TAG,
+                            "bluetooth STATE_ON: forceReconnect peer=${bond.peerId}",
+                        )
+                        runCatching { client.forceReconnect() }
+                            .onFailure {
+                                Log.w(
+                                    SYAUTH_BG_LOG_TAG,
+                                    "bluetooth STATE_ON reconnect failed peer=${bond.peerId}",
+                                    it,
+                                )
+                            }
+                    }
+                }
+            }
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -255,6 +293,22 @@ public class SyauthCompanionService : Service() {
         ensureDefaultGattClientFactory()
         ensureDefaultCompanionSeams()
         injectClientsForBonds()
+
+        val btFilter = android.content.IntentFilter(
+            BluetoothAdapter.ACTION_STATE_CHANGED
+        )
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(
+                bluetoothStateReceiver,
+                btFilter,
+                android.content.Context.RECEIVER_NOT_EXPORTED,
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(bluetoothStateReceiver, btFilter)
+        }
+
         isRunning.set(true)
         Log.i(SYAUTH_BG_LOG_TAG, "onCreate: foreground up, clients=${clients.size}")
     }
@@ -267,6 +321,8 @@ public class SyauthCompanionService : Service() {
     }
 
     override fun onDestroy() {
+        runCatching { unregisterReceiver(bluetoothStateReceiver) }
+
         for ((peerId, client) in clients) {
             runCatching { client.stop() }
                 .onFailure {
@@ -562,7 +618,9 @@ public class SyauthCompanionService : Service() {
             challengeBytes: ByteArray,
         ) {
             val hostname = hostnameResolver?.hostnameFor(peerId) ?: peerId
-            val keystoreAlias = keystoreAliasResolver?.keystoreAliasFor(peerId).orEmpty()
+            val keystoreAlias =
+                keystoreAliasResolver?.keystoreAliasFor(peerId).orEmpty()
+
             val intent = buildApprovalIntent(
                 context = context,
                 peerId = peerId,
@@ -570,14 +628,68 @@ public class SyauthCompanionService : Service() {
                 challengeBytes = challengeBytes,
                 keystoreAlias = keystoreAlias,
             )
+
             val pending = PendingIntent.getActivity(
                 context,
                 APPROVAL_PENDING_REQUEST_CODE,
                 intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                PendingIntent.FLAG_UPDATE_CURRENT or
+                    PendingIntent.FLAG_IMMUTABLE,
             )
-            runCatching { pending.send() }
-                .onFailure { Log.w(SYAUTH_BG_LOG_TAG, "approval pending-intent send failed peer=$peerId", it) }
+
+            runCatching {
+                val soundUri =
+                    RingtoneManager.getDefaultUri(
+                        RingtoneManager.TYPE_NOTIFICATION,
+                    )
+
+                RingtoneManager
+                    .getRingtone(context, soundUri)
+                    ?.play()
+            }.onFailure {
+                Log.w(
+                    SYAUTH_BG_LOG_TAG,
+                    "approval sound failed peer=$peerId",
+                    it,
+                )
+            }
+
+            runCatching {
+                if (Build.VERSION.SDK_INT >= 34) {
+                    val options = ActivityOptions.makeBasic().apply {
+                        setPendingIntentBackgroundActivityStartMode(
+                            if (Build.VERSION.SDK_INT >= 36) {
+                                3 // MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS
+                            } else {
+                                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                            },
+                        )
+                    }
+
+                    pending.send(
+                        context,
+                        0,
+                        null,
+                        null,
+                        null,
+                        null,
+                        options.toBundle(),
+                    )
+                } else {
+                    pending.send()
+                }
+
+                Log.i(
+                    SYAUTH_BG_LOG_TAG,
+                    "approval activity dispatched peer=$peerId",
+                )
+            }.onFailure {
+                Log.e(
+                    SYAUTH_BG_LOG_TAG,
+                    "approval activity dispatch failed peer=$peerId",
+                    it,
+                )
+            }
         }
     }
 }

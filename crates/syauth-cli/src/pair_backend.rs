@@ -173,8 +173,10 @@ impl BluerPairBackend {
             // returns and the previous default re-takes the slot.
             request_default: true,
             request_confirmation: Some(Box::new(move |RequestConfirmation { passkey, .. }: RequestConfirmation| {
+                eprintln!("DEBUG AGENT: RequestConfirmation received passkey={passkey:06}");
                 let confirm = Arc::clone(&confirm);
                 Box::pin(async move {
+                    eprintln!("DEBUG AGENT: async future entered");
                     // The operator-supplied handler is synchronous and
                     // may block (the stdio prompt reads `y/N` from
                     // stdin; even the `--yes` auto-accept handler
@@ -187,13 +189,19 @@ impl BluerPairBackend {
                     // onto a blocking pool via `spawn_blocking` so
                     // the poller stays free.
                     let accepted = tokio::task::spawn_blocking(move || {
+                        eprintln!("DEBUG AGENT: spawn_blocking entered");
+                        eprintln!("DEBUG AGENT: before confirm.lock()");
                         let guard = confirm.lock().ok()?;
-                        guard.as_ref().map(|h| h(passkey))
+                        eprintln!("DEBUG AGENT: after confirm.lock()");
+                        let result = guard.as_ref().map(|h| h(passkey));
+                        eprintln!("DEBUG AGENT: handler returned");
+                        result
                     })
                     .await
                     .ok()
                     .flatten()
                     .unwrap_or(false);
+                    eprintln!("DEBUG AGENT: confirmation decision accepted={accepted}");
                     if accepted { Ok(()) } else { Err(ReqError::Rejected) }
                 })
             })),
@@ -494,9 +502,7 @@ pub fn make_stdio_confirm_handler() -> OsConfirmHandler {
 /// untrusted phone can read the code from the log post-hoc.
 pub fn make_auto_accept_confirm_handler() -> OsConfirmHandler {
     Box::new(|passkey: u32| {
-        let mut stdout = io::stdout().lock();
-        let _ = writeln!(stdout, "BT pairing code: {passkey:06}  auto-accept (--yes)");
-        let _ = stdout.flush();
+        eprintln!("BT pairing code: {passkey:06}  auto-accept (--yes)");
         true
     })
 }

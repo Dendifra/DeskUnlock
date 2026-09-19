@@ -163,6 +163,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     // S-017: Material `Lock` icon for the Approve screen header.
     implementation("androidx.compose.material:material-icons-core")
+    implementation("androidx.compose.material:material-icons-extended")
 
     // JVM-side unit tests:
     //   S-016: Robolectric @Config(sdk = [34]) for PairingViewModelTest

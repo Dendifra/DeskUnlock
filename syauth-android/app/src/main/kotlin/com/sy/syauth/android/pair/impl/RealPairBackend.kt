@@ -333,6 +333,13 @@ public class RealPairBackend(
     public var lastPairingCode: String = LESC_PENDING_PLACEHOLDER
         private set
 
+    private val onPairingCodeCallback: AtomicReference<(String) -> Unit> =
+        AtomicReference { _ -> }
+
+    public fun setOnPairingCodeCallback(cb: (String) -> Unit) {
+        onPairingCodeCallback.set(cb)
+    }
+
     /**
      * Address of the peer the operator picked. Held so the bond-state
      * receiver can derive the device handle on `BOND_BONDED`.
@@ -352,7 +359,11 @@ public class RealPairBackend(
 
     /** Pairing-request receiver registered at init. */
     private val pairingReceiver: PairingBroadcastReceiver = PairingBroadcastReceiver(
-        onAccept = { passkey -> lastPairingCode = passkey.toString().padStart(LESC_CODE_DIGITS, '0') },
+        onAccept = { passkey ->
+val code = passkey.toString().padStart(LESC_CODE_DIGITS, '0')
+lastPairingCode = code
+onPairingCodeCallback.get().invoke(code)
+},
         onReject = { variant ->
             Log.w(REAL_PAIR_BACKEND_LOG_TAG, "pairing variant rejected variant=$variant")
             lescResultDeferred.complete(LescResult.Failed("OS pairing variant rejected: $variant"))
@@ -462,6 +473,9 @@ public class RealPairBackend(
         }
         pickedAddress = peer.id
         pickedName = peer.name
+        // Never reuse the numeric-comparison code from a previous attempt.
+        // ACTION_PAIRING_REQUEST will provide the current OS passkey asynchronously.
+        lastPairingCode = LESC_PENDING_PLACEHOLDER
         // Force the LE transport for bonding. `createBond()` without
         // a transport defaults to `BT_TRANSPORT_AUTO`, which the
         // Android stack resolves to BR/EDR on dual-mode peers — the

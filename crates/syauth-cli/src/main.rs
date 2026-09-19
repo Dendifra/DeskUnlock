@@ -22,7 +22,7 @@ use syauth_cli::{
     install_pam::{self, InstallOpts, InstallOutcome},
     install_presenced::{self, InstallPresencedOpts, InstallPresencedOutcome},
     list::run_list,
-    pair::ListOpts,
+    pair::{ListOpts, PairOpts, run_pair},
     revoke::{RevokeOpts, run_revoke},
     status::{StatusOpts, run_status},
     uninstall_pam::{self, UninstallOpts, UninstallOutcome},
@@ -42,6 +42,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Cmd {
+    /// Pair a phone with this computer.
+    Pair(PairOpts),
     /// Print the bonds file as TSV: id\tname\tstatus\tcreated_at.
     List(ListOpts),
     /// Mark a bond as revoked (idempotent). The bond record itself is
@@ -96,6 +98,7 @@ fn main() -> ExitCode {
 
 async fn dispatch(cli: Cli) -> Result<()> {
     match cli.cmd {
+        Cmd::Pair(opts) => run_pair_cli(&opts).await,
         Cmd::List(opts) => run_list_cli(&opts),
         Cmd::Revoke(opts) => run_revoke_cli(&opts),
         Cmd::Status(opts) => run_status_cli(&opts).await,
@@ -104,6 +107,31 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Cmd::InstallPresenced(opts) => run_install_presenced(&opts),
         Cmd::Doctor(opts) => run_doctor_cli(&opts),
     }
+}
+
+async fn run_pair_cli(opts: &PairOpts) -> Result<()> {
+    use rand::{RngCore, rngs::OsRng};
+    use syauth_cli::pair_backend::{
+        BluerPairBackend, make_auto_accept_confirm_handler, make_stdio_confirm_handler, make_waybar_confirm_handler,
+    };
+    use syauth_core::SigningKey;
+
+    let mut seed = [0u8; 32];
+    OsRng.fill_bytes(&mut seed);
+    let signing_key = SigningKey::from_bytes(&seed);
+
+    let backend = BluerPairBackend::new(&opts.adapter, &signing_key);
+
+    if opts.waybar {
+        backend.install_confirm_handler(make_waybar_confirm_handler());
+    } else if opts.yes {
+        backend.install_confirm_handler(make_auto_accept_confirm_handler());
+    } else {
+        backend.install_confirm_handler(make_stdio_confirm_handler());
+    }
+
+    run_pair(opts, &backend).await?;
+    Ok(())
 }
 
 fn run_doctor_cli(opts: &DoctorOpts) -> Result<()> {

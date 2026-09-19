@@ -75,6 +75,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -314,6 +315,8 @@ public class ChallengeApprovalActivity : FragmentActivity() {
     private var resolvedHostname: String = ""
     private var resolvedChallenge: ByteArray = ByteArray(0)
     private var resolvedKeystoreAlias: String = ""
+    private var biometricStarted: Boolean = false
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -338,7 +341,6 @@ public class ChallengeApprovalActivity : FragmentActivity() {
         val promptText = "$hostname is requesting sudo (peer_id $short)"
         lastPromptText = promptText
         Log.i(APPROVAL_LOG_TAG, "render peer=$peerId host=$hostname")
-        setContent { ApprovalContent(promptText = promptText, onApprove = ::onApproveClicked, onCancel = ::onCancelClicked) }
     }
 
     /** Test seam: invoked by the Compose Cancel button. */
@@ -354,6 +356,23 @@ public class ChallengeApprovalActivity : FragmentActivity() {
      * Each invocation produces exactly one BiometricPrompt round
      * (per-use Keystore key contract per SPEC §3.2 D6).
      */
+    override fun onPostResume() {
+        super.onPostResume()
+
+        if (biometricStarted || isFinishing || isDestroyed) {
+            return
+        }
+
+        biometricStarted = true
+
+        Log.i(
+            APPROVAL_LOG_TAG,
+            "biometric prompt start peer=$resolvedPeerId",
+        )
+
+        onApproveClicked()
+    }
+
     internal fun onApproveClicked() {
         Log.i(APPROVAL_LOG_TAG, "approve peer=$resolvedPeerId alias=$resolvedKeystoreAlias")
         // Test override on the companion seam takes precedence over
@@ -600,7 +619,7 @@ private val APPROVAL_SECTION_SPACING_DP = 16.dp
 private val APPROVAL_BUTTON_SPACING_DP = 12.dp
 
 /** Lock-icon diameter at the top of the screen. */
-private val APPROVAL_ICON_SIZE_DP = 72.dp
+private val APPROVAL_ICON_SIZE_DP = 104.dp
 
 /** Primary-button height; matches prrr-android's Connect button (56.dp). */
 private val APPROVAL_BUTTON_HEIGHT_DP = 56.dp
@@ -610,12 +629,21 @@ private val APPROVAL_BUTTON_HORIZONTAL_PADDING_DP = 24.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ApprovalContent(promptText: String, onApprove: () -> Unit, onCancel: () -> Unit) {
+private fun ApprovalContent(
+    promptText: String,
+    onApprove: () -> Unit,
+    onCancel: () -> Unit,
+) {
     SyauthTheme {
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text(APPROVAL_SCREEN_TITLE) },
+                    title = {
+                        Text(
+                            text = "Syauth",
+                            style = MaterialTheme.typography.titleLarge,
+                        )
+                    },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.background,
                         titleContentColor = MaterialTheme.colorScheme.onBackground,
@@ -634,24 +662,45 @@ private fun ApprovalContent(promptText: String, onApprove: () -> Unit, onCancel:
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = APPROVAL_PADDING_DP),
-                    verticalArrangement = Arrangement.Top,
                     horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
                 ) {
-                    Spacer(modifier = Modifier.height(APPROVAL_SECTION_SPACING_DP))
                     Icon(
-                        imageVector = Icons.Filled.Lock,
-                        contentDescription = null,
+                        imageVector = Icons.Filled.Fingerprint,
+                        contentDescription = "Biometric authentication",
                         modifier = Modifier.size(APPROVAL_ICON_SIZE_DP),
                         tint = MaterialTheme.colorScheme.primary,
                     )
-                    Spacer(modifier = Modifier.height(APPROVAL_SECTION_SPACING_DP))
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
                     Text(
-                        text = promptText,
-                        style = MaterialTheme.typography.titleMedium,
+                        text = "Unlock request",
+                        style = MaterialTheme.typography.headlineSmall,
                         color = MaterialTheme.colorScheme.onBackground,
                         textAlign = TextAlign.Center,
                     )
-                    Spacer(modifier = Modifier.weight(1f))
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = promptText,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = "Confirm with your fingerprint",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        textAlign = TextAlign.Center,
+                    )
+
+                    Spacer(modifier = Modifier.height(40.dp))
+
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -663,17 +712,15 @@ private fun ApprovalContent(promptText: String, onApprove: () -> Unit, onCancel:
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(APPROVAL_BUTTON_HEIGHT_DP),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary,
-                            ),
                         ) {
                             Text(
                                 text = "Approve",
                                 style = MaterialTheme.typography.titleMedium,
                             )
                         }
+
                         Spacer(modifier = Modifier.height(APPROVAL_BUTTON_SPACING_DP))
+
                         OutlinedButton(
                             onClick = onCancel,
                             modifier = Modifier
@@ -689,7 +736,6 @@ private fun ApprovalContent(promptText: String, onApprove: () -> Unit, onCancel:
                             )
                         }
                     }
-                    Spacer(modifier = Modifier.height(APPROVAL_SECTION_SPACING_DP))
                 }
             }
         }
