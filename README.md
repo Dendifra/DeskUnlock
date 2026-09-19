@@ -94,32 +94,70 @@ See [docs/installation.md](docs/installation.md) and [docs/packaging.md](docs/pa
 
 ## Project layout
 
-```text
-DeskUnlock/
-├── crates/                  Rust desktop/core components
-├── syauth-android/          Android companion app
-├── desktop/                 Desktop helpers and integration layer
-├── packaging/               Distribution packaging groundwork
-├── docs/                    Architecture, security and installation docs
-├── assets/                  Branding and documentation graphics
-└── scripts/                 Build, audit and development helpers
-```
+<table>
+  <tr>
+    <td><b>📦 crates/</b></td>
+    <td>Rust desktop and core authentication components.</td>
+  </tr>
+  <tr>
+    <td><b>📱 syauth-android/</b></td>
+    <td>Android companion app used for approval and biometric confirmation.</td>
+  </tr>
+  <tr>
+    <td><b>🖥️ desktop/</b></td>
+    <td>Desktop integration helpers, session logic and user-facing tooling.</td>
+  </tr>
+  <tr>
+    <td><b>📁 packaging/</b></td>
+    <td>Arch/CachyOS packaging groundwork and distribution-related files.</td>
+  </tr>
+  <tr>
+    <td><b>📚 docs/</b></td>
+    <td>Architecture notes, installation guidance and security documentation.</td>
+  </tr>
+  <tr>
+    <td><b>🎨 assets/</b></td>
+    <td>Branding assets, README graphics and project visuals.</td>
+  </tr>
+  <tr>
+    <td><b>🛠️ scripts/</b></td>
+    <td>Audit, build, sync and development helper scripts.</td>
+  </tr>
+</table>
 
 ## Contributing
 
-Contributions are welcome. Useful areas include distro packaging, KDE/GNOME and other desktop integrations, Android compatibility testing, BLE/GATT reliability, PAM portability and security review, GUI improvements, automated tests, documentation, and translations.
+> [!TIP]
+> Contributions are welcome — especially where DeskUnlock becomes more robust, portable and friendly for real desktop use.
 
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a pull request.
+### Good contribution areas
+
+- **Desktop integrations** — KDE, GNOME, lock-screen bridges and session behavior.
+- **Android compatibility** — device testing, BLE/GATT reliability and biometric approval flow.
+- **Security review** — PAM portability, hardening and authentication logic.
+- **GUI and usability** — settings, onboarding and status reporting.
+- **Packaging** — Arch/CachyOS today, additional Linux distributions later.
+- **Documentation** — guides, diagrams, examples and translations.
+
+➡️ Please read **[CONTRIBUTING.md](CONTRIBUTING.md)** before opening a pull request.
 
 ## Upstream and license
 
-DeskUnlock is an independent fork of the MIT-licensed [`syauth`](https://github.com/dmytrogajewski/syauth) project, focused on Linux desktop integration, usability, packaging, proximity locking, and smartphone-assisted authentication.
-
-The original copyright notice and MIT license are preserved. See [LICENSE](LICENSE), [NOTICE.md](NOTICE.md), and [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
-
----
-
-<p align="center">
-  <strong>DeskUnlock</strong><br>
-  Secure smartphone-assisted authentication for the Linux desktop.
-</p>
+<table>
+  <tr>
+    <td><b>Upstream</b></td>
+    <td><a href="https://github.com/dmytrogajewski/syauth">dmytrogajewski/syauth</a></td>
+  </tr>
+  <tr>
+    <td><b>DeskUnlock focus</b></td>
+    <td>Linux desktop integration, usability, packaging, proximity behavior and smartphone-assisted authentication.</td>
+  </tr>
+  <tr>
+    <td><b>License</b></td>
+    <td>MIT — original upstream copyright notice preserved.</td>
+  </tr>
+  <tr>
+    <td><b>Legal / third-party notes</b></td>
+    <td><a href="NOTICE.md">NOTICE.md</a> · <a href="THIRD_PARTY_LICENSES.md">THIRD_PARTY_LICENSES.md</a></td>
+  </tr>
+</table>
