@@ -141,13 +141,56 @@ replacement_icon = '''                                if (pam.u2fPending)
                                     return "passkey";
                                 if (pam.u2f.active)
                                     return "passkey";
-                                if (pam.syauthAvailable)
-                                    return "fingerprint";
                                 if (pam.fprint.tries >= SettingsData.maxFprintTries)
 '''
 if needle_icon not in ui:
     raise SystemExit("LockScreenContent.qml layout mismatch: lock icon anchor not found")
 ui = ui.replace(needle_icon, replacement_icon, 1)
+
+needle_syauth_logo = """                            Behavior on opacity {
+                                NumberAnimation {
+                                    duration: Theme.mediumDuration
+                                    easing.type: Theme.standardEasing
+                                }
+                            }
+                        }
+                    }
+
+                    FocusScope {
+                        id: passwordField
+"""
+if needle_syauth_logo not in ui:
+    raise SystemExit("LockScreenContent.qml layout mismatch: logo anchor not found")
+ui = ui.replace(needle_syauth_logo, """                            Behavior on opacity {
+                                NumberAnimation {
+                                    duration: Theme.mediumDuration
+                                    easing.type: Theme.standardEasing
+                                }
+                            }
+                        }
+
+                        Image {
+                            anchors.centerIn: parent
+                            width: 20
+                            height: 20
+                            source: root.encodeFileUrl("/usr/share/icons/hicolor/256x256/apps/deskunlock.png")
+                            sourceSize: Qt.size(20, 20)
+                            fillMode: Image.PreserveAspectFit
+                            visible: pam.syauthAvailable && !pam.u2fPending && !pam.u2f.active
+                            opacity: pam.passwd.active ? 0 : 1
+
+                            Behavior on opacity {
+                                NumberAnimation {
+                                    duration: Theme.mediumDuration
+                                    easing.type: Theme.standardEasing
+                                }
+                            }
+                        }
+                    }
+
+                    FocusScope {
+                        id: passwordField
+""", 1)
 lock_screen.write_text(ui, encoding="utf-8")
 PY
 

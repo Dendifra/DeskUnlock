@@ -36,6 +36,8 @@ fn dms_lock_indicator_uses_persistent_syauth_state() {
     assert!(patch.contains("if (start())"));
     assert!(patch.contains("root.syauthAvailable = false"));
     assert!(patch.contains("pam.syauthAvailable"));
+    assert!(patch.contains("/usr/share/icons/hicolor/256x256/apps/deskunlock.png"));
+    assert!(patch.contains("visible: pam.syauthAvailable && !pam.u2fPending && !pam.u2f.active"));
     assert!(patch.contains("LockScreenContent.qml"));
     assert!(!patch.contains("syauthAvailable: SettingsData.lockFingerprintReady"));
 }
