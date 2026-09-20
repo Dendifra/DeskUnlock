@@ -25,6 +25,12 @@ HOME = Path.home()
 CONTROL = Path("/usr/bin/syauth-control")
 DEVICE_CONTROL = Path("/usr/bin/syauth-device")
 PRESENCE_MARKER = Path("/run/syauth/presence.last")
+DESKUNLOCK_LOGO = Path("/usr/share/icons/hicolor/256x256/apps/deskunlock.png")
+
+
+def deskunlock_icon():
+    icon = QIcon(str(DESKUNLOCK_LOGO))
+    return icon if not icon.isNull() else QIcon.fromTheme("security-high")
 
 
 def run_command(command, timeout=2):
@@ -199,11 +205,11 @@ class SettingsWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("Syauth")
+        self.setWindowTitle("DeskUnlock")
         self.setMinimumWidth(520)
         self.setMaximumWidth(620)
 
-        icon = QIcon.fromTheme("security-high")
+        icon = deskunlock_icon()
 
         if not icon.isNull():
             self.setWindowIcon(icon)
@@ -268,7 +274,7 @@ class SettingsWindow(QMainWindow):
 
         icon_label = QLabel()
 
-        icon = QIcon.fromTheme("security-high")
+        icon = deskunlock_icon()
 
         if not icon.isNull():
             icon_label.setPixmap(
@@ -278,7 +284,7 @@ class SettingsWindow(QMainWindow):
         titles = QVBoxLayout()
         titles.setSpacing(1)
 
-        title = QLabel("Syauth")
+        title = QLabel("DeskUnlock")
 
         font = QFont()
         font.setPointSize(19)
@@ -460,7 +466,7 @@ class SettingsWindow(QMainWindow):
         layout.setSpacing(1)
 
         self.daemon_row = StatusRow(
-            "Servizio Syauth"
+            "Servizio DeskUnlock"
         )
 
         self.bluetooth_row = StatusRow(
@@ -471,10 +477,6 @@ class SettingsWindow(QMainWindow):
             "Associazione"
         )
 
-        self.presence_row = StatusRow(
-            "Telefono"
-        )
-
         self.unlock_row = StatusRow(
             "Ultimo sblocco"
         )
@@ -483,7 +485,6 @@ class SettingsWindow(QMainWindow):
             self.daemon_row,
             self.bluetooth_row,
             self.bond_row,
-            self.presence_row,
             self.unlock_row,
         ):
             layout.addWidget(row)
@@ -496,7 +497,7 @@ class SettingsWindow(QMainWindow):
 
         if master == "on":
             self.master_state.setText(
-                "●  Syauth attivo"
+                "●  DeskUnlock attivo"
             )
 
             self.master_state.setStyleSheet(
@@ -509,7 +510,7 @@ class SettingsWindow(QMainWindow):
 
         elif master == "off":
             self.master_state.setText(
-                "○  Syauth disattivato"
+                "○  DeskUnlock disattivato"
             )
 
             self.master_state.setStyleSheet(
@@ -546,7 +547,7 @@ class SettingsWindow(QMainWindow):
 
         if data["bonded"] == 0:
             self.phone_state.setText(
-                "Syauth non ha un telefono configurato"
+                "DeskUnlock non ha un telefono configurato"
             )
             self.phone_state.setStyleSheet(
                 "color: #e06c75;"
@@ -562,7 +563,7 @@ class SettingsWindow(QMainWindow):
 
         elif master == "degraded":
             self.phone_state.setText(
-                "Associazione presente · Problema Syauth"
+                "Associazione presente · Problema DeskUnlock"
             )
             self.phone_state.setStyleSheet(
                 "color: #e06c75;"
@@ -625,19 +626,6 @@ class SettingsWindow(QMainWindow):
             else "Non associato",
         )
 
-        if data["bonded"] == 0:
-            self.presence_row.set_status(
-                False,
-                "Non associato",
-            )
-        else:
-            self.presence_row.set_status(
-                phone["connected"],
-                "Connesso"
-                if phone["connected"]
-                else "Non connesso",
-            )
-
         unlock_ok = (
             data["last_unlock"] != "Mai"
         )
@@ -683,7 +671,7 @@ class SettingsWindow(QMainWindow):
             self,
             "Dissocia telefono",
             (
-                "Dissociare il telefono da Syauth?\n\n"
+                "Dissociare il telefono da DeskUnlock?\n\n"
                 "Non potrà più autenticare o sbloccare "
                 "questo computer.\n"
                 "La password Linux resterà disponibile.\n\n"
@@ -734,7 +722,7 @@ class SettingsWindow(QMainWindow):
             self,
             "Telefono dissociato",
             (
-                "Il telefono è stato dissociato da Syauth.\n\n"
+                "Il telefono è stato dissociato da DeskUnlock.\n\n"
                 "Puoi associarne un altro con "
                 "\"Associa telefono\"."
             ),
@@ -786,7 +774,7 @@ class SettingsWindow(QMainWindow):
 app = QApplication(sys.argv)
 
 app.setApplicationName(
-    "Syauth Settings"
+    "DeskUnlock Settings"
 )
 
 app.setDesktopFileName("syauth")

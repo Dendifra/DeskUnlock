@@ -13,13 +13,20 @@ git -C "$work/DankMaterialShell" checkout --quiet "$DMS_COMMIT"
 git -C "$work/DankMaterialShell" submodule update --init --recursive --quiet
 
 pam="$work/DankMaterialShell/quickshell/Modules/Lock/Pam.qml"
+lock_screen="$work/DankMaterialShell/quickshell/Modules/Lock/LockScreenContent.qml"
 
-python3 - "$pam" <<'PY'
+python3 - "$pam" "$lock_screen" <<'PY'
 from pathlib import Path
 import sys
 
-p = Path(sys.argv[1])
-s = p.read_text(encoding="utf-8")
+pam = Path(sys.argv[1])
+lock_screen = Path(sys.argv[2])
+s = pam.read_text(encoding="utf-8")
+
+needle_state = "    property bool unlockInProgress: false\n"
+if needle_state not in s:
+    raise SystemExit("Pam.qml layout mismatch: root state anchor not found")
+s = s.replace(needle_state, needle_state + "    property bool syauthAvailable: false\n", 1)
 
 needle_fprint = """    PamContext {
         id: fprint
@@ -29,6 +36,13 @@ if needle_fprint not in s:
 
 syauth_block = """    PamContext {
         id: syauth
+
+        function startIfAvailable(): void {
+            if (!root.lockSecured || root.unlockInProgress || active)
+                return;
+            if (start())
+                root.syauthAvailable = true;
+        }
 
         config: "syauth-dms"
         configDirectory: "/etc/pam.d"
@@ -53,7 +67,7 @@ syauth_block = """    PamContext {
 
         function phoneReturned(): void {
             if (root.lockSecured && !root.unlockInProgress && !syauth.active)
-                syauth.start();
+                syauth.startIfAvailable();
         }
     }
 
@@ -62,7 +76,7 @@ syauth_block = """    PamContext {
 
         function onActiveChanged(): void {
             if (passwd.active && root.lockSecured && !root.unlockInProgress && !syauth.active)
-                syauth.start();
+                syauth.startIfAvailable();
         }
     }
 
@@ -83,7 +97,7 @@ syauth_timer = """    Timer {
         repeat: false
         onTriggered: {
             if (root.lockSecured && !syauth.active)
-                syauth.start();
+                syauth.startIfAvailable();
         }
     }
 
@@ -102,7 +116,39 @@ replacement_lock = """        fprint.checkAvail();
 """
 s = s.replace(needle_lock, replacement_lock, 1)
 
-p.write_text(s, encoding="utf-8")
+needle_unlock = """        if (!lockSecured) {
+            root.resetAuthFlows();
+            return;
+        }
+"""
+if needle_unlock not in s:
+    raise SystemExit("Pam.qml layout mismatch: unlock reset anchor not found")
+s = s.replace(needle_unlock, """        if (!lockSecured) {
+            root.syauthAvailable = false;
+            root.resetAuthFlows();
+            return;
+        }
+""", 1)
+
+pam.write_text(s, encoding="utf-8")
+
+ui = lock_screen.read_text(encoding="utf-8")
+needle_icon = '''                                if (pam.u2fPending)
+                                    return "passkey";
+                                if (pam.fprint.tries >= SettingsData.maxFprintTries)
+'''
+replacement_icon = '''                                if (pam.u2fPending)
+                                    return "passkey";
+                                if (pam.u2f.active)
+                                    return "passkey";
+                                if (pam.syauthAvailable)
+                                    return "fingerprint";
+                                if (pam.fprint.tries >= SettingsData.maxFprintTries)
+'''
+if needle_icon not in ui:
+    raise SystemExit("LockScreenContent.qml layout mismatch: lock icon anchor not found")
+ui = ui.replace(needle_icon, replacement_icon, 1)
+lock_screen.write_text(ui, encoding="utf-8")
 PY
 
 (
