@@ -21,11 +21,24 @@ fn arch_package_reapplies_pam_on_install_and_upgrade() {
     let install = repo_file("packaging/arch/deskunlock.install");
 
     assert!(build.contains("install=deskunlock.install"));
+    assert!(build.contains("desktop/applications/syauth.desktop"));
+    assert!(build.contains("/usr/share/applications/syauth.desktop"));
     assert!(build.contains("assets/deskunlock-logo.png"));
+    assert!(build.contains("/usr/share/icons/hicolor/256x256/apps/deskunlock.png"));
     assert!(install.contains("post_install()"));
     assert!(install.contains("post_upgrade()"));
     assert!(install.contains("/usr/lib/syauth/syauth-pam-sync install"));
     assert!(!install.contains("post_remove()"));
+}
+
+#[test]
+fn desktop_launcher_uses_deskunlock_branding() {
+    let launcher = repo_file("desktop/applications/syauth.desktop");
+
+    assert!(launcher.contains("Name=DeskUnlock"));
+    assert!(launcher.contains("Comment=Autenticazione sicura con il telefono"));
+    assert!(launcher.contains("Exec=/usr/bin/syauth-user-setup --gui"));
+    assert!(launcher.contains("Icon=deskunlock"));
 }
 
 #[test]
@@ -36,8 +49,10 @@ fn dms_lock_indicator_uses_persistent_syauth_state() {
     assert!(patch.contains("if (start())"));
     assert!(patch.contains("root.syauthAvailable = false"));
     assert!(patch.contains("pam.syauthAvailable"));
-    assert!(patch.contains("/usr/share/icons/hicolor/256x256/apps/deskunlock.png"));
-    assert!(patch.contains("visible: pam.syauthAvailable && !pam.u2fPending && !pam.u2f.active"));
+    assert!(patch.contains("if (pam.syauthAvailable)"));
+    assert!(patch.contains("return \"fingerprint\";"));
+    assert!(!patch.contains("/usr/share/icons/hicolor/256x256/apps/deskunlock.png"));
+    assert!(!patch.contains("visible: pam.syauthAvailable"));
     assert!(patch.contains("LockScreenContent.qml"));
     assert!(!patch.contains("syauthAvailable: SettingsData.lockFingerprintReady"));
 }
