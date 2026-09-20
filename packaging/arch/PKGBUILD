@@ -7,13 +7,13 @@ replaces=('syauth-suite')
 pkgdesc='Phone-assisted Linux authentication with PAM fallback'
 arch=('x86_64')
 license=('MIT')
-depends=('bluez' 'dbus' 'pam' 'systemd')
+depends=('bash' 'bluez' 'bluez-utils' 'dbus' 'dms-shell' 'ghostty' 'pam' 'polkit' 'pyside6' 'python' 'systemd')
 makedepends=('cargo' 'go' 'git')
 source=()
 
 build() {
     cd "$startdir/../.."
-    RUSTFLAGS='-C debuginfo=0 --remap-path-prefix=/home/user=/usr/src' cargo build --release --workspace
+    RUSTFLAGS="-C debuginfo=0 --remap-path-prefix=${HOME}=/usr/src" cargo build --release --workspace
     desktop/dms/build-dms-syauth.sh "$srcdir/dms-syauth"
 }
 

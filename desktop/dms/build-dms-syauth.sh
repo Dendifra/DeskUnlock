@@ -107,7 +107,7 @@ PY
 
 (
   cd "$work/DankMaterialShell"
-  make build
+  make build GOFLAGS=-trimpath
 )
 
 built="$work/DankMaterialShell/core/bin/dms"
