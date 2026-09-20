@@ -1,21 +1,19 @@
-# syauth — Continuous Integration.
+# DeskUnlock — Continuous Integration.
 #
 # Runs the same gates a developer runs locally:
 #   - `make lint` (clippy --all-targets -D warnings, fmt --check,
 #                  cargo deny check, scope-discipline grep).
 #   - `make test` (workspace, all targets, all features).
 #   - `make build` (release; verifies `libpam_syauth.so` ships).
-#   - Android: `:app:assembleDebug` + `:app:testDebugUnitTest` so the
-#              Compose app cannot drift from the Rust workspace.
 #
 # System libraries the bluer / libpam-sys / libbluetooth-sys build
 # scripts consume are installed via apt on every job that touches
-# them. cargo / gradle caches are warmed by Swatinem/rust-cache and
-# the gradle/actions/setup-gradle@v3 cache.
+# them. cargo caches are warmed by Swatinem/rust-cache.
 
 name: ci
 
 on:
+  workflow_dispatch:
   push:
     branches: ["**"]
   pull_request:
@@ -28,9 +26,6 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
   RUST_BACKTRACE: "1"
-  # CARGO_INCREMENTAL is disabled in CI by the rust-cache action and
-  # explicitly here so a flaky cache eviction cannot leave incremental
-  # state behind.
   CARGO_INCREMENTAL: "0"
 
 jobs:
@@ -122,13 +117,6 @@ jobs:
   # NOTE: the Android assembleDebug job depends on the Rust-built
   # `crates/syauth-mobile/target/syauth_mobile.aar` (UniFFI Kotlin
   # bindings + per-ABI `libsyauth_mobile.so`). Building that in CI
-  # requires the NDK, the four Android rustc targets, and
-  # `uniffi-bindgen-cli`, which is a substantial workstream of its
-  # own. It is intentionally out of scope for this workflow; see the
-  # `release.yml` workflow which already exercises the full Android
-  # build (and is gated behind a release-keystore secret).
-  #
-  # The desktop-side `make lint / test / build` gates above are the
-  # core of "is the workspace healthy" coverage; the Android side has
-  # its own Robolectric unit-test layer that runs locally via
-  # `./gradlew :app:testDebugUnitTest`.
+  # requires the NDK, the Android rustc targets and UniFFI tooling.
+  # The desktop-side lint/test/build gates above cover the current
+  # clean-machine workspace health check for DeskUnlock.
