@@ -43,6 +43,13 @@ Before release, scan both payload and final package for:
 - tokens/secrets;
 - build-directory leakage.
 
+## PAM integration on Arch install and upgrade
+
+`deskunlock.install` invokes `/usr/lib/syauth/syauth-pam-sync install` from
+`post_install` and `post_upgrade` when `plasmalogin` exists. The helper is
+idempotent, preserves the `system-login` password fallback, and no
+`post_remove` callback strips PAM configuration during package renames.
+
 ## Arch packaging
 
 The initial downstream implementation has validated an Arch/CachyOS package approach. Before AUR publication, the PKGBUILD should build from public tagged source rather than rely on a private local payload archive.

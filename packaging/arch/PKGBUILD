@@ -10,6 +10,7 @@ license=('MIT')
 depends=('bash' 'bluez' 'bluez-utils' 'dbus' 'dms-shell' 'ghostty' 'pam' 'polkit' 'pyside6' 'python' 'systemd')
 makedepends=('cargo' 'go' 'git')
 source=()
+install=deskunlock.install
 
 build() {
     cd "$startdir/../.."

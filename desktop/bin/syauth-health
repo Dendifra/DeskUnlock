@@ -44,6 +44,17 @@ else
     fi
 fi
 
+check_file() {
+    local label="$1"
+    local path="$2"
+
+    if [[ -f "$path" && -r "$path" ]]; then
+        ok "$label"
+    else
+        bad "$label ($path)"
+    fi
+}
+
 check_exec() {
     local label="$1"
     local path="$2"
@@ -55,7 +66,7 @@ check_exec() {
     fi
 }
 
-check_exec "PAM module" "/usr/lib/security/pam_syauth.so"
+check_file "PAM module" "/usr/lib/security/pam_syauth.so"
 check_exec "proximity watcher" "/usr/bin/syauth-proximity"
 check_exec "pair reconciler" "/usr/bin/syauth-reconcile"
 check_exec "presenced binary" "/usr/lib/syauth/syauth-presenced"

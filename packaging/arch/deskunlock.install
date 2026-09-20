@@ -1,0 +1,13 @@
+_syauth_pam_sync_install() {
+    if [[ -f /etc/pam.d/plasmalogin ]]; then
+        /usr/lib/syauth/syauth-pam-sync install
+    fi
+}
+
+post_install() {
+    _syauth_pam_sync_install
+}
+
+post_upgrade() {
+    _syauth_pam_sync_install
+}
