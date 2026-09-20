@@ -1,6 +1,9 @@
 pkgname=deskunlock
 pkgver=0.1.0
 pkgrel=1
+provides=('syauth-suite=0.1.0')
+conflicts=('syauth-suite')
+replaces=('syauth-suite')
 pkgdesc='Phone-assisted Linux authentication with PAM fallback'
 arch=('x86_64')
 license=('MIT')
