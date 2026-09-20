@@ -1,0 +1,45 @@
+pkgname=deskunlock
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Phone-assisted Linux authentication with PAM fallback'
+arch=('x86_64')
+license=('MIT')
+depends=('bluez' 'dbus' 'pam' 'systemd')
+makedepends=('cargo' 'go' 'git')
+source=()
+
+build() {
+    cd "$startdir/../.."
+    RUSTFLAGS='-C debuginfo=0 --remap-path-prefix=/home/user=/usr/src' cargo build --release --workspace
+    desktop/dms/build-dms-syauth.sh "$srcdir/dms-syauth"
+}
+
+package() {
+    cd "$startdir/../.."
+
+    install -Dm755 target/release/syauth "$pkgdir/usr/bin/syauth"
+    install -Dm755 target/release/syauth-presenced "$pkgdir/usr/lib/syauth/syauth-presenced"
+    install -Dm644 target/release/libpam_syauth.so "$pkgdir/usr/lib/security/pam_syauth.so"
+    install -Dm755 "$srcdir/dms-syauth" "$pkgdir/usr/bin/dms-syauth"
+
+    for file in desktop/bin/*; do
+        install -Dm755 "$file" "$pkgdir/usr/bin/$(basename "$file")"
+    done
+    for file in desktop/libexec/*; do
+        install -Dm755 "$file" "$pkgdir/usr/lib/syauth/$(basename "$file")"
+    done
+    for file in desktop/systemd/*.service desktop/systemd/*.timer desktop/systemd/*.path; do
+        install -Dm644 "$file" "$pkgdir/usr/lib/systemd/user/$(basename "$file")"
+    done
+    install -Dm644 desktop/systemd/dms.service.d/syauth.conf \
+        "$pkgdir/usr/lib/systemd/user/dms.service.d/syauth.conf"
+    install -Dm644 desktop/pam/syauth-dms "$pkgdir/etc/pam.d/syauth-dms"
+    install -Dm644 desktop/hooks/syauth-pam.hook \
+        "$pkgdir/usr/share/libalpm/hooks/syauth-pam.hook"
+    install -Dm644 desktop/applications/syauth.desktop \
+        "$pkgdir/usr/share/applications/syauth.desktop"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+    install -Dm644 docs/security.md "$pkgdir/usr/share/doc/$pkgname/security.md"
+    install -Dm644 docs/packaging.md "$pkgdir/usr/share/doc/$pkgname/packaging.md"
+}

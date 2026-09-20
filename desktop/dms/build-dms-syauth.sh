@@ -10,6 +10,7 @@ trap 'rm -rf "$work"' EXIT
 
 git clone --quiet "$DMS_REPO" "$work/DankMaterialShell"
 git -C "$work/DankMaterialShell" checkout --quiet "$DMS_COMMIT"
+git -C "$work/DankMaterialShell" submodule update --init --recursive --quiet
 
 pam="$work/DankMaterialShell/quickshell/Modules/Lock/Pam.qml"
 
@@ -44,6 +45,24 @@ syauth_block = """    PamContext {
                     root.proceedAfterPrimaryAuth();
                 }
             }
+        }
+    }
+
+    IpcHandler {
+        target: "syauth"
+
+        function phoneReturned(): void {
+            if (root.lockSecured && !root.unlockInProgress && !syauth.active)
+                syauth.start();
+        }
+    }
+
+    Connections {
+        target: passwd
+
+        function onActiveChanged(): void {
+            if (passwd.active && root.lockSecured && !root.unlockInProgress && !syauth.active)
+                syauth.start();
         }
     }
 
