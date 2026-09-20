@@ -38,6 +38,16 @@ Passive Bluetooth proximity alone should not be enough to unlock a computer. Des
 - Arch/CachyOS package management;
 - cryptographic state stored outside the package payload.
 
+## Desktop app
+
+DeskUnlock includes a desktop settings application for managing the paired Android device, controlling proximity authentication, and checking the current system status.
+
+<p align="center">
+  <img src="assets/deskunlock-settings-overview.webp" alt="DeskUnlock desktop settings and configuration overview" width="100%">
+</p>
+
+The application provides quick access to activation controls, paired-device management, security features, Bluetooth and service status, and recent unlock information.
+
 ## How it works
 
 <p align="center">
