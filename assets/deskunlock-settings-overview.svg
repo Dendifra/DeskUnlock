@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="860" viewBox="0 0 1200 860" role="img" aria-labelledby="title desc">
+  <title id="title">DeskUnlock desktop settings overview</title>
+  <desc id="desc">Privacy-safe overview of the DeskUnlock desktop settings application with callouts for status, paired device, quick controls, security features and system health.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#08131f"/>
+      <stop offset="1" stop-color="#0d1d2d"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#18222d"/>
+      <stop offset="1" stop-color="#101820"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#000" flood-opacity=".35"/>
+    </filter>
+    <style>
+      .t{font-family:Inter,Segoe UI,Arial,sans-serif;fill:#e9f1f8}.m{fill:#aebdca}.g{fill:#55d983}.b{fill:#54a9ff}.line{stroke:#3d7fd1;stroke-width:2}.card{fill:#112231;stroke:#274b68;stroke-width:1.5}.label{font:700 17px Inter,Segoe UI,Arial,sans-serif}.body{font:15px Inter,Segoe UI,Arial,sans-serif}.small{font:13px Inter,Segoe UI,Arial,sans-serif}.mono{font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
+    </style>
+  </defs>
+
+  <rect width="1200" height="860" rx="26" fill="url(#bg)"/>
+  <text x="42" y="58" class="t" font-size="31" font-weight="750">Desktop app and configuration</text>
+  <text x="42" y="95" class="m" font-size="17">Manage the paired Android device, proximity behavior and system status from one place.</text>
+
+  <!-- central app -->
+  <g filter="url(#shadow)">
+    <rect x="316" y="138" width="568" height="632" rx="18" fill="url(#panel)" stroke="#35536a" stroke-width="1.5"/>
+    <rect x="316" y="138" width="568" height="42" rx="18" fill="#111923"/>
+    <rect x="316" y="164" width="568" height="16" fill="#111923"/>
+    <circle cx="342" cy="159" r="6" fill="#54a9ff"/>
+    <text x="600" y="165" text-anchor="middle" class="m" font-size="14">DeskUnlock</text>
+    <text x="848" y="165" class="m" font-size="18">×</text>
+
+    <g transform="translate(354 211)">
+      <path d="M0 0 20 8v18c0 16-9 28-20 34-11-6-20-18-20-34V8z" fill="#5adf69"/>
+      <path d="m-8 28 6 6 12-15" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <text x="394" y="230" class="t" font-size="27" font-weight="760">DeskUnlock</text>
+    <text x="394" y="255" class="m" font-size="15">Secure authentication with your phone</text>
+
+    <circle cx="360" cy="306" r="7" fill="#55d983"/>
+    <text x="378" y="312" class="g" font-size="17" font-weight="700">DeskUnlock active</text>
+    <text x="378" y="333" class="m" font-size="13">Authentication and proximity control enabled</text>
+    <rect x="761" y="290" width="90" height="38" rx="7" fill="#1e2933" stroke="#435361"/>
+    <text x="806" y="314" text-anchor="middle" class="t" font-size="14">Disable</text>
+
+    <text x="354" y="378" class="m" font-size="12" letter-spacing="1.1">PAIRED DEVICE</text>
+    <rect x="362" y="404" width="18" height="34" rx="3" fill="#466781" stroke="#88a8c0"/>
+    <rect x="365" y="408" width="12" height="23" rx="1" fill="#16212b"/>
+    <text x="398" y="417" class="t" font-size="15" font-weight="700">Android device</text>
+    <text x="398" y="439" class="g" font-size="13">Connected</text>
+    <rect x="650" y="400" width="104" height="36" rx="7" fill="#1e2933" stroke="#435361"/>
+    <text x="702" y="423" text-anchor="middle" class="t" font-size="13">Change device</text>
+    <rect x="764" y="400" width="87" height="36" rx="7" fill="#1e2933" stroke="#435361"/>
+    <text x="807" y="423" text-anchor="middle" class="t" font-size="13">Unpair</text>
+
+    <text x="354" y="486" class="m" font-size="12" letter-spacing="1.1">USED FOR</text>
+    <text x="372" y="518" class="t" font-size="14">✓  Login and session unlock</text>
+    <text x="372" y="546" class="t" font-size="14">✓  Biometric confirmation on the phone</text>
+    <text x="372" y="574" class="t" font-size="14">✓  Automatic lock on disconnection</text>
+    <text x="372" y="602" class="t" font-size="14">✓  Linux password available as fallback</text>
+
+    <text x="354" y="646" class="m" font-size="12" letter-spacing="1.1">SYSTEM STATUS</text>
+    <circle cx="368" cy="678" r="7" fill="#55d983"/><text x="390" y="683" class="t" font-size="14">DeskUnlock service</text><text x="834" y="683" text-anchor="end" class="m" font-size="13">Active</text>
+    <circle cx="368" cy="708" r="7" fill="#55d983"/><text x="390" y="713" class="t" font-size="14">Bluetooth</text><text x="834" y="713" text-anchor="end" class="m" font-size="13">Available</text>
+    <circle cx="368" cy="738" r="7" fill="#55d983"/><text x="390" y="743" class="t" font-size="14">Phone</text><text x="834" y="743" text-anchor="end" class="m" font-size="13">Connected</text>
+  </g>
+
+  <!-- left cards -->
+  <rect x="38" y="188" width="230" height="128" rx="14" class="card"/>
+  <circle cx="67" cy="219" r="12" fill="#55d983"/><text x="91" y="225" class="t label">Status</text>
+  <text x="62" y="254" class="m body">See at a glance whether</text><text x="62" y="277" class="m body">DeskUnlock is active</text><text x="62" y="300" class="m body">and working.</text>
+  <line x1="268" y1="252" x2="316" y2="285" class="line"/><circle cx="316" cy="285" r="6" class="b"/>
+
+  <rect x="38" y="355" width="230" height="146" rx="14" class="card"/>
+  <rect x="56" y="383" width="21" height="31" rx="3" fill="#54a9ff"/><rect x="61" y="388" width="11" height="20" rx="1" fill="#132131"/>
+  <text x="91" y="405" class="t label">Paired device</text>
+  <text x="62" y="438" class="m body">Change or unpair the</text><text x="62" y="461" class="m body">Android device without</text><text x="62" y="484" class="m body">exposing private IDs.</text>
+  <line x1="268" y1="428" x2="316" y2="420" class="line"/><circle cx="316" cy="420" r="6" class="b"/>
+
+  <rect x="38" y="548" width="230" height="152" rx="14" class="card"/>
+  <circle cx="68" cy="580" r="13" fill="#54a9ff"/><path d="M68 569v22M57 580h22" stroke="#0c1a27" stroke-width="3"/>
+  <text x="91" y="585" class="t label">System status</text>
+  <text x="62" y="618" class="m body">Service, Bluetooth, pairing</text><text x="62" y="641" class="m body">and connection state in</text><text x="62" y="664" class="m body">one diagnostic view.</text>
+  <line x1="268" y1="623" x2="316" y2="680" class="line"/><circle cx="316" cy="680" r="6" class="b"/>
+
+  <!-- right cards -->
+  <rect x="930" y="200" width="232" height="128" rx="14" class="card"/>
+  <rect x="950" y="221" width="34" height="18" rx="9" fill="#54a9ff"/><circle cx="975" cy="230" r="7" fill="#fff"/>
+  <text x="997" y="235" class="t label">Quick control</text>
+  <text x="954" y="265" class="m body">Enable or disable the</text><text x="954" y="288" class="m body">desktop integration with</text><text x="954" y="311" class="m body">a single click.</text>
+  <line x1="930" y1="264" x2="884" y2="308" class="line"/><circle cx="884" cy="308" r="6" class="b"/>
+
+  <rect x="930" y="390" width="232" height="144" rx="14" class="card"/>
+  <text x="954" y="424" class="b" font-size="24">≡</text><text x="997" y="423" class="t label">Security features</text>
+  <text x="954" y="455" class="m body">See exactly what DeskUnlock</text><text x="954" y="478" class="m body">is used for and which</text><text x="954" y="501" class="m body">fallbacks remain available.</text>
+  <line x1="930" y1="460" x2="884" y2="546" class="line"/><circle cx="884" cy="546" r="6" class="b"/>
+
+  <rect x="930" y="582" width="232" height="132" rx="14" class="card"/>
+  <circle cx="968" cy="614" r="13" fill="none" stroke="#54a9ff" stroke-width="3"/><path d="M968 606v9l7 4" fill="none" stroke="#54a9ff" stroke-width="3" stroke-linecap="round"/>
+  <text x="997" y="620" class="t label">Recent unlock</text>
+  <text x="954" y="652" class="m body">Shows recent successful</text><text x="954" y="675" class="m body">activity without embedding</text><text x="954" y="698" class="m body">personal identifiers.</text>
+  <line x1="930" y1="646" x2="884" y2="738" class="line"/><circle cx="884" cy="738" r="6" class="b"/>
+
+  <rect x="38" y="792" width="1124" height="44" rx="12" fill="#0c2a21" stroke="#1d704a"/>
+  <text x="58" y="820" class="g" font-size="15" font-weight="700">Privacy-safe documentation:</text>
+  <text x="257" y="820" class="m" font-size="15">generic device labels, no account data, no MAC address, no private key material and no personal timestamp.</text>
+</svg>
