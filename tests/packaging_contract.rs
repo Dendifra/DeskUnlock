@@ -47,7 +47,7 @@ fn dms_lock_indicator_uses_persistent_syauth_state() {
     let patch = repo_file("desktop/dms/build-dms-syauth.sh");
 
     assert!(patch.contains("property bool syauthAvailable: false"));
-    assert!(patch.contains("if (start())"));
+    assert!(patch.contains("root.syauthAvailable = start();"));
     assert!(patch.contains("root.syauthAvailable = false"));
     assert!(patch.contains("pam.syauthAvailable"));
     assert!(patch.contains("if (pam.syauthAvailable)"));

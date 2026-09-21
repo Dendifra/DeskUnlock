@@ -26,7 +26,7 @@ s = pam.read_text(encoding="utf-8")
 needle_state = "    property bool unlockInProgress: false\n"
 if needle_state not in s:
     raise SystemExit("Pam.qml layout mismatch: root state anchor not found")
-s = s.replace(needle_state, needle_state + "    property bool syauthAvailable: false\n    property int syauthGeneration: 0\n", 1)
+s = s.replace(needle_state, needle_state + "    property bool syauthAvailable: false\n    property bool localInteractionConsumed: false\n    property int syauthGeneration: 0\n", 1)
 
 needle_fprint = """    PamContext {
         id: fprint
@@ -37,15 +37,13 @@ if needle_fprint not in s:
 syauth_block = """    PamContext {
         id: syauth
 
-        function startIfAvailable(): void {
+        function startIfAvailable(): bool {
             if (!root.lockSecured || root.unlockInProgress || active)
-                return;
+                return false;
             ++root.syauthGeneration;
             requestGeneration = root.syauthGeneration;
-            if (start())
-                root.syauthAvailable = true;
-            else
-                root.syauthAvailable = false;
+            root.syauthAvailable = start();
+            return root.syauthAvailable;
         }
 
         // PamContext.abort() cancels the active PAM conversation and does not
@@ -85,8 +83,12 @@ syauth_block = """    PamContext {
         target: passwd
 
         function onActiveChanged(): void {
-            if (passwd.active && root.lockSecured && !root.unlockInProgress && !syauth.active)
-                syauth.startIfAvailable();
+            if (!passwd.active) {
+                root.localInteractionConsumed = false;
+                return;
+            }
+            if (!root.localInteractionConsumed)
+                root.localInteractionConsumed = syauth.startIfAvailable();
         }
     }
 
@@ -115,6 +117,7 @@ if needle_unlock not in s:
 s = s.replace(needle_unlock, """        if (!lockSecured) {
             ++root.syauthGeneration;
             root.syauthAvailable = false;
+            root.localInteractionConsumed = false;
             if (syauth.active)
                 syauth.abort();
             root.resetAuthFlows();
