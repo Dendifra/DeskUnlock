@@ -176,6 +176,32 @@ test_proximity_return_sends_one_auth() {
     assert_eq 1 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG")" "proximity return auth"
 }
 
+test_return_waits_for_late_challenge_ready() {
+    far_lock
+    PROXIMITY_STATE=NEAR
+    STATE_CHANGED=0
+    SYAUTH_TEST_READY=0
+    maybe_auto_auth || true
+    assert_eq 0 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG" || true)" "early challenge-ready auth"
+    SYAUTH_TEST_READY=1
+    maybe_auto_auth || true
+    assert_eq 1 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG")" "late challenge-ready auth"
+    maybe_auto_auth || true
+    assert_eq 1 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG")" "late challenge-ready retry"
+}
+
+test_return_waits_for_late_heartbeat() {
+    far_lock
+    PROXIMITY_STATE=NEAR
+    STATE_CHANGED=0
+    SYAUTH_TEST_HEARTBEAT_AGE_MS=$((HEARTBEAT_STALE_AFTER_MS + 1))
+    maybe_auto_auth || true
+    assert_eq 0 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG" || true)" "early heartbeat auth"
+    SYAUTH_TEST_HEARTBEAT_AGE_MS=0
+    maybe_auto_auth || true
+    assert_eq 1 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG")" "late heartbeat auth"
+}
+
 test_phone_remaining_near_does_not_spam() {
     far_lock
     tick_sample -53 1000
@@ -345,6 +371,8 @@ tests=(
     test_lost_heartbeat_becomes_absent_and_locks
     test_proximity_lock_reason_is_runtime_only
     test_proximity_return_sends_one_auth
+    test_return_waits_for_late_challenge_ready
+    test_return_waits_for_late_heartbeat
     test_phone_remaining_near_does_not_spam
     test_denied_auth_has_no_retry
     test_timeout_auth_has_no_retry

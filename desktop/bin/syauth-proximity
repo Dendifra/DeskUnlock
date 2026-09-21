@@ -446,7 +446,6 @@ request_proximity_lock() {
 }
 
 maybe_auto_auth() {
-    (( STATE_CHANGED == 1 )) || return
     [[ "$PROXIMITY_STATE" == NEAR ]] || return
     [[ "$LOCK_REASON" == PROXIMITY ]] || return
     (( AUTO_AUTH_SENT == 0 )) || return
