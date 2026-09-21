@@ -20,6 +20,7 @@ BASELINE_BOOTSTRAP_MAX_RANGE_DB=8
 BASELINE_ALPHA_PERCENT=5
 MID_PERSISTENCE_SECONDS=2
 FAST_RETURN_CONSECUTIVE_SAMPLES=2
+RETURN_SETTLING_NEAR_SAMPLES=2
 
 DEFAULT_PROFILE="balanced"
 DEFAULT_ENABLED=1
@@ -27,6 +28,11 @@ DEFAULT_LOCK_REASON="MANUAL_OR_OTHER"
 LOCK_NOT_ISSUED=0
 LOCK_REQUEST_PENDING=1
 LOCK_OBSERVED=2
+RETURN_MODE_NONE="NONE"
+RETURN_MODE_PROXIMITY="PROXIMITY_RETURN"
+RETURN_MODE_MANUAL_WAIT="MANUAL_WAIT_FOR_DEPARTURE"
+RETURN_MODE_MANUAL_ARMED="MANUAL_ARMED_FOR_RETURN"
+RETURN_MODE_SETTLING="RETURN_SETTLING"
 
 PROFILE="$DEFAULT_PROFILE"
 ENABLED="$DEFAULT_ENABLED"
@@ -46,6 +52,10 @@ LOCK_REASON="$DEFAULT_LOCK_REASON"
 LOCK_ISSUED=$LOCK_NOT_ISSUED
 AUTO_AUTH_SENT=0
 FAST_RETURN_SAMPLE_COUNT=0
+FAST_RETURN_LAST_SAMPLE_MS=0
+RETURN_MODE="$RETURN_MODE_NONE"
+RETURN_SETTLING_NEAR_COUNT=0
+RETURN_SETTLING_LAST_SAMPLE_MS=0
 
 RSSI_RAW=""
 RSSI_FILTERED=""
@@ -73,14 +83,17 @@ profile_value() {
         near:near_delta) printf '%s\n' -3 ;;
         near:far_persistence) printf '%s\n' 6 ;;
         near:near_persistence) printf '%s\n' 3 ;;
+        near:return_delta) printf '%s\n' -2 ;;
         balanced:far_delta) printf '%s\n' -7 ;;
         balanced:near_delta) printf '%s\n' -4 ;;
         balanced:far_persistence) printf '%s\n' 8 ;;
         balanced:near_persistence) printf '%s\n' 4 ;;
+        balanced:return_delta) printf '%s\n' -2 ;;
         wide:far_delta) printf '%s\n' -9 ;;
         wide:near_delta) printf '%s\n' -6 ;;
         wide:far_persistence) printf '%s\n' 10 ;;
         wide:near_persistence) printf '%s\n' 5 ;;
+        wide:return_delta) printf '%s\n' -4 ;;
         *) return 1 ;;
     esac
 }
@@ -165,6 +178,11 @@ load_runtime() {
     LOCK_REASON="$DEFAULT_LOCK_REASON"
     LOCK_ISSUED=$LOCK_NOT_ISSUED
     AUTO_AUTH_SENT=0
+    FAST_RETURN_SAMPLE_COUNT=0
+    FAST_RETURN_LAST_SAMPLE_MS=0
+    RETURN_MODE="$RETURN_MODE_NONE"
+    RETURN_SETTLING_NEAR_COUNT=0
+    RETURN_SETTLING_LAST_SAMPLE_MS=0
 
     [[ -r "$RUNTIME_STATE" ]] || return 0
     while IFS='=' read -r key value; do
@@ -176,6 +194,13 @@ load_runtime() {
             last_sample_ms) [[ "$value" =~ ^[0-9]+$ ]] && LAST_SAMPLE_MS="$value" ;;
             lock_issued) [[ "$value" =~ ^[0-9]+$ ]] && LOCK_ISSUED="$value" ;;
             auto_auth_sent) [[ "$value" =~ ^[0-9]+$ ]] && AUTO_AUTH_SENT="$value" ;;
+            fast_return_sample_count) [[ "$value" =~ ^[0-9]+$ ]] && FAST_RETURN_SAMPLE_COUNT="$value" ;;
+            fast_return_last_sample_ms) [[ "$value" =~ ^[0-9]+$ ]] && FAST_RETURN_LAST_SAMPLE_MS="$value" ;;
+            return_settling_near_count) [[ "$value" =~ ^[0-9]+$ ]] && RETURN_SETTLING_NEAR_COUNT="$value" ;;
+            return_settling_last_sample_ms) [[ "$value" =~ ^[0-9]+$ ]] && RETURN_SETTLING_LAST_SAMPLE_MS="$value" ;;
+            return_mode)
+                [[ "$value" == "$RETURN_MODE_NONE" || "$value" == "$RETURN_MODE_PROXIMITY" || "$value" == "$RETURN_MODE_MANUAL_WAIT" || "$value" == "$RETURN_MODE_MANUAL_ARMED" || "$value" == "$RETURN_MODE_SETTLING" ]] && RETURN_MODE="$value"
+                ;;
             seen_presence) [[ "$value" =~ ^[0-9]+$ ]] && SEEN_PRESENCE="$value" ;;
             bootstrap_sum) [[ "$value" =~ ^-?[0-9]+([.][0-9]+)?$ ]] && BOOTSTRAP_SUM="$value" ;;
             bootstrap_min) [[ "$value" =~ ^-?[0-9]+([.][0-9]+)?$ ]] && BOOTSTRAP_MIN="$value" ;;
@@ -207,6 +232,11 @@ save_runtime() {
         printf 'lock_reason=%s\n' "$LOCK_REASON"
         printf 'lock_issued=%s\n' "$LOCK_ISSUED"
         printf 'auto_auth_sent=%s\n' "$AUTO_AUTH_SENT"
+        printf 'fast_return_sample_count=%s\n' "$FAST_RETURN_SAMPLE_COUNT"
+        printf 'fast_return_last_sample_ms=%s\n' "$FAST_RETURN_LAST_SAMPLE_MS"
+        printf 'return_mode=%s\n' "$RETURN_MODE"
+        printf 'return_settling_near_count=%s\n' "$RETURN_SETTLING_NEAR_COUNT"
+        printf 'return_settling_last_sample_ms=%s\n' "$RETURN_SETTLING_LAST_SAMPLE_MS"
     } > "$temp" || {
         rm -f "$temp"
         return 1
@@ -382,20 +412,29 @@ apply_candidate() {
     fi
 }
 
+return_lifecycle_eligible() {
+    [[ "$RETURN_MODE" == "$RETURN_MODE_PROXIMITY" || "$RETURN_MODE" == "$RETURN_MODE_SETTLING" ]] && [[ "$LOCK_REASON" == PROXIMITY ]] && return 0
+    [[ "$RETURN_MODE" == "$RETURN_MODE_MANUAL_ARMED" || "$RETURN_MODE" == "$RETURN_MODE_SETTLING" ]] && [[ "$LOCK_REASON" == MANUAL_OR_OTHER ]]
+}
+
 fast_return_candidate() {
-    local raw_delta near_delta
-    if [[ "$LOCK_REASON" != PROXIMITY || "$PROXIMITY_STATE" != FAR && "$PROXIMITY_STATE" != MID || -z "$BASELINE" || "$RSSI_SAMPLE_MS" != "$LAST_SAMPLE_MS" || ! "$RSSI_RAW" =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
+    local raw_delta return_delta
+    [[ "$RSSI_SAMPLE_MS" =~ ^[0-9]+$ && "$RSSI_SAMPLE_MS" != "$FAST_RETURN_LAST_SAMPLE_MS" ]] || return 0
+    FAST_RETURN_LAST_SAMPLE_MS="$RSSI_SAMPLE_MS"
+
+    if ! return_lifecycle_eligible || [[ "$PROXIMITY_STATE" != FAR && "$PROXIMITY_STATE" != MID && ! ( "$PROXIMITY_STATE" == ABSENT && "$RETURN_MODE" == "$RETURN_MODE_MANUAL_ARMED" ) ]] || [[ -z "$BASELINE" ]] || [[ ! "$RSSI_RAW" =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
         FAST_RETURN_SAMPLE_COUNT=0
-        return
+        return 0
     fi
 
-    near_delta="$(profile_value "$PROFILE" near_delta)"
+    return_delta="$(profile_value "$PROFILE" return_delta)"
     raw_delta="$(float_delta "$RSSI_RAW" "$BASELINE")"
-    if float_ge "$raw_delta" "$near_delta"; then
+    if float_ge "$raw_delta" "$return_delta"; then
         FAST_RETURN_SAMPLE_COUNT=$((FAST_RETURN_SAMPLE_COUNT + 1))
+        log "fast return candidate ${FAST_RETURN_SAMPLE_COUNT}/${FAST_RETURN_CONSECUTIVE_SAMPLES}"
     else
         FAST_RETURN_SAMPLE_COUNT=0
-        return
+        return 0
     fi
 
     if (( FAST_RETURN_SAMPLE_COUNT >= FAST_RETURN_CONSECUTIVE_SAMPLES )); then
@@ -404,7 +443,33 @@ fast_return_candidate() {
         PENDING_SINCE_MS=0
         STATE_CHANGED=1
         FAST_RETURN_SAMPLE_COUNT=0
+        RETURN_MODE="$RETURN_MODE_SETTLING"
+        RETURN_SETTLING_NEAR_COUNT=0
+        RETURN_SETTLING_LAST_SAMPLE_MS=0
+        log "fast return confirmed"
+        log "return settling entered"
     fi
+}
+
+update_return_settling() {
+    local candidate="$1"
+    [[ "$RETURN_MODE" == "$RETURN_MODE_SETTLING" ]] || return 1
+    PENDING_STATE=""
+    PENDING_SINCE_MS=0
+    if [[ "$candidate" == NEAR && "$RSSI_SAMPLE_MS" != "$RETURN_SETTLING_LAST_SAMPLE_MS" ]]; then
+        RETURN_SETTLING_LAST_SAMPLE_MS="$RSSI_SAMPLE_MS"
+        RETURN_SETTLING_NEAR_COUNT=$((RETURN_SETTLING_NEAR_COUNT + 1))
+    elif [[ "$candidate" != NEAR ]]; then
+        RETURN_SETTLING_NEAR_COUNT=0
+        RETURN_SETTLING_LAST_SAMPLE_MS=0
+    fi
+    if (( RETURN_SETTLING_NEAR_COUNT >= RETURN_SETTLING_NEAR_SAMPLES )); then
+        RETURN_MODE="$RETURN_MODE_NONE"
+        RETURN_SETTLING_NEAR_COUNT=0
+        RETURN_SETTLING_LAST_SAMPLE_MS=0
+        log "return settling complete"
+    fi
+    return 0
 }
 
 process_rssi() {
@@ -425,6 +490,9 @@ process_rssi() {
     delta="$(float_delta "$RSSI_FILTERED" "$BASELINE")"
     candidate="$(candidate_state "$delta")"
     [[ "$candidate" == NEAR && "$PROXIMITY_STATE" == NEAR ]] && update_near_baseline "$RSSI_FILTERED" "$delta"
+    if update_return_settling "$candidate"; then
+        return 0
+    fi
     apply_candidate "$candidate" "$now"
 }
 
@@ -458,10 +526,31 @@ request_auto_auth() {
 }
 
 mark_manual_lock() {
-    [[ "$LOCK_REASON" == PROXIMITY ]] && return
+    [[ "$LOCK_REASON" == PROXIMITY || "$RETURN_MODE" == "$RETURN_MODE_SETTLING" || "$RETURN_MODE" == "$RETURN_MODE_MANUAL_ARMED" ]] && return 0
     LOCK_REASON=MANUAL_OR_OTHER
     LOCK_ISSUED=$LOCK_NOT_ISSUED
     AUTO_AUTH_SENT=0
+    FAST_RETURN_SAMPLE_COUNT=0
+    if [[ "$PROXIMITY_STATE" == FAR || "$PROXIMITY_STATE" == ABSENT ]]; then
+        if [[ "$RETURN_MODE" != "$RETURN_MODE_MANUAL_ARMED" ]]; then
+            RETURN_MODE="$RETURN_MODE_MANUAL_ARMED"
+            log "manual return armed"
+        fi
+    elif [[ "$RETURN_MODE" != "$RETURN_MODE_MANUAL_WAIT" ]]; then
+        RETURN_MODE="$RETURN_MODE_MANUAL_WAIT"
+        log "manual lock waiting for departure"
+    fi
+}
+
+arm_manual_return_if_departed() {
+    [[ "$LOCK_REASON" == MANUAL_OR_OTHER ]] || return 0
+    [[ "$RETURN_MODE" == "$RETURN_MODE_MANUAL_WAIT" ]] || return 0
+    if [[ "$PROXIMITY_STATE" == FAR || "$PROXIMITY_STATE" == ABSENT ]]; then
+        RETURN_MODE="$RETURN_MODE_MANUAL_ARMED"
+        FAST_RETURN_SAMPLE_COUNT=0
+        log "manual return armed"
+    fi
+    return 0
 }
 
 request_proximity_lock() {
@@ -471,13 +560,15 @@ request_proximity_lock() {
         LOCK_ISSUED=$LOCK_REQUEST_PENDING
         LOCK_REASON=PROXIMITY
         AUTO_AUTH_SENT=0
+        FAST_RETURN_SAMPLE_COUNT=0
+        RETURN_MODE="$RETURN_MODE_PROXIMITY"
         log "proximity lock requested state=$PROXIMITY_STATE"
     fi
 }
 
 maybe_auto_auth() {
     [[ "$PROXIMITY_STATE" == NEAR ]] || return
-    [[ "$LOCK_REASON" == PROXIMITY ]] || return
+    return_lifecycle_eligible || return
     (( AUTO_AUTH_SENT == 0 )) || return
     heartbeat_valid || return
     challenge_ready_valid || return
@@ -523,12 +614,18 @@ engine_tick() {
     if [[ -n "$sid" ]] && session_is_locked "$sid"; then
         locked=1
         [[ "$LOCK_REASON" == PROXIMITY && "$LOCK_ISSUED" == "$LOCK_REQUEST_PENDING" ]] && LOCK_ISSUED=$LOCK_OBSERVED
+    elif [[ "$RETURN_MODE" == "$RETURN_MODE_SETTLING" ]]; then
+        : # preserve return settling until fresh RSSI re-synchronizes the model.
     elif [[ "$LOCK_REASON" == PROXIMITY && "$LOCK_ISSUED" == "$LOCK_REQUEST_PENDING" ]]; then
         : # loginctl may expose the new lock on the next tick; retain provenance.
     else
         LOCK_REASON=MANUAL_OR_OTHER
         LOCK_ISSUED=$LOCK_NOT_ISSUED
         AUTO_AUTH_SENT=0
+        FAST_RETURN_SAMPLE_COUNT=0
+        RETURN_MODE="$RETURN_MODE_NONE"
+        RETURN_SETTLING_NEAR_COUNT=0
+        RETURN_SETTLING_LAST_SAMPLE_MS=0
     fi
 
     if (( ENABLED == 0 )); then
@@ -537,6 +634,12 @@ engine_tick() {
     fi
 
     if ! heartbeat_valid; then
+        if [[ "$RETURN_MODE" == "$RETURN_MODE_SETTLING" ]]; then
+            RETURN_MODE="$RETURN_MODE_NONE"
+            RETURN_SETTLING_NEAR_COUNT=0
+            RETURN_SETTLING_LAST_SAMPLE_MS=0
+            log "return settling cancelled by lost presence"
+        fi
         if [[ "$LOCK_REASON" == PROXIMITY && ( "$PROXIMITY_STATE" == FAR || "$PROXIMITY_STATE" == MID ) ]]; then
             process_rssi "$now"
             fast_return_candidate
@@ -559,6 +662,9 @@ engine_tick() {
         else
             PROXIMITY_STATE=ABSENT
         fi
+        if (( locked == 1 )); then
+            arm_manual_return_if_departed
+        fi
         save_runtime || true
         return
     fi
@@ -568,12 +674,14 @@ engine_tick() {
     fast_return_candidate
 
     if (( locked == 0 )); then
-        if [[ "$PROXIMITY_STATE" == FAR && "$STATE_CHANGED" == 1 && -n "$sid" ]]; then
+        if [[ "$PROXIMITY_STATE" == FAR && "$STATE_CHANGED" == 1 && "$RETURN_MODE" != "$RETURN_MODE_SETTLING" && -n "$sid" ]]; then
             request_proximity_lock "$sid"
         fi
     else
         if [[ "$LOCK_REASON" != PROXIMITY ]]; then
             mark_manual_lock
+            arm_manual_return_if_departed
+            return_lifecycle_eligible && maybe_auto_auth || true
         else
             maybe_auto_auth || true
         fi
@@ -612,6 +720,10 @@ diagnostics_cmd() {
     printf 'heartbeat age: %s ms\n' "$HEARTBEAT_AGE_MS"
     printf 'challenge-ready: %s\n' "$(challenge_ready_valid && echo yes || echo no)"
     printf 'lock reason: %s\n' "$LOCK_REASON"
+    printf 'return mode: %s\n' "$RETURN_MODE"
+    printf 'fast-return streak: %s/%s\n' "$FAST_RETURN_SAMPLE_COUNT" "$FAST_RETURN_CONSECUTIVE_SAMPLES"
+    printf 'return settling: %s\n' "$( [[ "$RETURN_MODE" == "$RETURN_MODE_SETTLING" ]] && echo yes || echo no )"
+    printf 'manual return armed: %s\n' "$( [[ "$RETURN_MODE" == "$RETURN_MODE_MANUAL_ARMED" ]] && echo yes || echo no )"
 }
 
 set_profile_cmd() {

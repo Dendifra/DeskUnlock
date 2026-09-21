@@ -185,20 +185,35 @@ test_proximity_lock_reason_survives_multiple_locked_ticks() {
 test_single_strong_raw_spike_does_not_return_near() {
     far_lock
     SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
-    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
     engine_tick
     assert_eq FAR "$PROXIMITY_STATE" "single strong raw spike"
+}
+
+test_same_rssi_sample_is_counted_once() {
+    far_lock
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq 1 "$FAST_RETURN_SAMPLE_COUNT" "first fast return streak"
+    engine_tick
+    assert_eq 1 "$FAST_RETURN_SAMPLE_COUNT" "duplicate fast return streak"
+    assert_eq FAR "$PROXIMITY_STATE" "duplicate sample state"
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq NEAR "$PROXIMITY_STATE" "distinct second sample state"
 }
 
 test_sustained_strong_raw_samples_return_quickly() {
     far_lock
     local started="$SYAUTH_TEST_NOW_MS"
     SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
-    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
     engine_tick
     assert_eq FAR "$PROXIMITY_STATE" "first strong raw sample"
     SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
-    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
     engine_tick
     assert_eq NEAR "$PROXIMITY_STATE" "sustained strong raw return"
     assert_eq 1 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG")" "fast return auth"
@@ -215,11 +230,11 @@ test_sustained_strong_raw_samples_return_from_mid() {
     engine_tick
     assert_eq MID "$PROXIMITY_STATE" "MID return starting state"
     SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
-    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
     engine_tick
     assert_eq MID "$PROXIMITY_STATE" "MID first strong raw sample"
     SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
-    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
     engine_tick
     assert_eq NEAR "$PROXIMITY_STATE" "MID sustained strong raw return"
     assert_eq 1 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG")" "MID fast return auth"
@@ -228,13 +243,13 @@ test_sustained_strong_raw_samples_return_from_mid() {
 test_alternating_raw_samples_do_not_flap() {
     far_lock
     SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
-    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
     engine_tick
     SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
     write_sample_values -61 -61 "$SYAUTH_TEST_NOW_MS"
     engine_tick
     SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
-    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
     engine_tick
     assert_eq FAR "$PROXIMITY_STATE" "alternating raw samples"
     assert_eq 0 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG" || true)" "alternating raw auth"
@@ -244,16 +259,16 @@ test_fast_return_waits_for_late_challenge_ready() {
     far_lock
     SYAUTH_TEST_READY=0
     SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
-    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
     engine_tick
     SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
-    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
     engine_tick
     assert_eq NEAR "$PROXIMITY_STATE" "fast return without challenge ready"
     assert_eq 0 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG" || true)" "early fast return auth"
     SYAUTH_TEST_READY=1
     SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
-    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
     engine_tick
     assert_eq 1 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG")" "late challenge-ready auth"
 }
@@ -262,16 +277,16 @@ test_fast_return_waits_for_late_heartbeat() {
     far_lock
     SYAUTH_TEST_HEARTBEAT_AGE_MS=$((HEARTBEAT_STALE_AFTER_MS + 1))
     SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
-    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
     engine_tick
     SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
-    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
     engine_tick
     assert_eq NEAR "$PROXIMITY_STATE" "fast return without heartbeat"
     assert_eq 0 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG" || true)" "early heartbeat auth"
     SYAUTH_TEST_HEARTBEAT_AGE_MS=0
     SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
-    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
     engine_tick
     assert_eq 1 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG")" "late heartbeat auth"
 }
@@ -379,7 +394,79 @@ test_manual_lock_near_does_not_auto_auth() {
     SYAUTH_TEST_LOCKED=1
     engine_tick
     assert_eq MANUAL_OR_OTHER "$LOCK_REASON" "manual lock reason"
+    assert_eq "$RETURN_MODE_MANUAL_WAIT" "$RETURN_MODE" "manual wait mode"
     assert_no_actions "manual lock near"
+}
+
+test_manual_lock_near_stays_quiet() {
+    bootstrap_near
+    SYAUTH_TEST_LOCKED=1
+    engine_tick
+    tick_sample -53 1000
+    tick_sample -54 1000
+    assert_eq "$RETURN_MODE_MANUAL_WAIT" "$RETURN_MODE" "manual wait remains near"
+    assert_no_actions "manual near samples"
+}
+
+test_manual_lock_arms_after_far_departure() {
+    bootstrap_near
+    SYAUTH_TEST_LOCKED=1
+    engine_tick
+    tick_sample -61 1000
+    tick_sample -61 8000
+    assert_eq FAR "$PROXIMITY_STATE" "manual departure FAR"
+    assert_eq "$RETURN_MODE_MANUAL_ARMED" "$RETURN_MODE" "manual FAR armed"
+    assert_no_actions "manual departure lock"
+}
+
+test_manual_lock_arms_after_absent_departure() {
+    bootstrap_near
+    SYAUTH_TEST_LOCKED=1
+    engine_tick
+    SYAUTH_TEST_HEARTBEAT_AGE_MS=$((HEARTBEAT_STALE_AFTER_MS + 1))
+    engine_tick
+    assert_eq ABSENT "$PROXIMITY_STATE" "manual departure ABSENT"
+    assert_eq "$RETURN_MODE_MANUAL_ARMED" "$RETURN_MODE" "manual ABSENT armed"
+    assert_no_actions "manual absent lock"
+}
+
+test_manual_armed_return_sends_one_auth() {
+    test_manual_lock_arms_after_far_departure
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq NEAR "$PROXIMITY_STATE" "manual armed return state"
+    assert_eq 1 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG")" "manual armed return auth"
+}
+
+test_manual_absent_armed_return_sends_one_auth() {
+    test_manual_lock_arms_after_absent_departure
+    SYAUTH_TEST_HEARTBEAT_AGE_MS=0
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq NEAR "$PROXIMITY_STATE" "manual ABSENT armed return state"
+    assert_eq 1 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG")" "manual ABSENT armed return auth"
+}
+
+test_manual_wait_near_samples_never_auth() {
+    bootstrap_near
+    SYAUTH_TEST_LOCKED=1
+    engine_tick
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -55 -53 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -55 -53 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq "$RETURN_MODE_MANUAL_WAIT" "$RETURN_MODE" "manual wait near raw samples"
+    assert_no_actions "manual wait near raw samples"
 }
 
 test_unlock_resets_proximity_provenance() {
@@ -406,6 +493,49 @@ test_auth_cancellation_guards_remain_present() {
 test_no_late_notification_contract_remains_present() {
     grep -Fq 'cancelSink' syauth-android/app/src/main/kotlin/com/sy/syauth/android/bg/ChallengeApprovalActivity.kt || fail "Android cancel sink missing"
     grep -Fq 'writeResponse' syauth-android/app/src/main/kotlin/com/sy/syauth/android/bg/PersistentGattClient.kt || fail "GATT response path missing"
+}
+
+test_return_settling_blocks_stale_filtered_relock() {
+    far_lock
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq "$RETURN_MODE_SETTLING" "$RETURN_MODE" "settling entered"
+    SYAUTH_TEST_LOCKED=0
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -61 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq "$RETURN_MODE_SETTLING" "$RETURN_MODE" "stale filtered settling"
+    assert_eq 1 "$(grep -c '^LOCK$' "$SYAUTH_TEST_ACTION_LOG")" "stale filtered relock"
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -53 -53 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -53 -53 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq "$RETURN_MODE_NONE" "$RETURN_MODE" "settling completion"
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 1000))
+    write_sample_values -61 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 8000))
+    write_sample_values -61 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq 2 "$(grep -c '^LOCK$' "$SYAUTH_TEST_ACTION_LOG")" "new departure relock"
+}
+
+test_restart_does_not_duplicate_fast_return_sample() {
+    far_lock
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq 1 "$FAST_RETURN_SAMPLE_COUNT" "restart streak before reload"
+    load_runtime
+    engine_tick
+    assert_eq 1 "$FAST_RETURN_SAMPLE_COUNT" "restart duplicate streak"
+    assert_eq FAR "$PROXIMITY_STATE" "restart duplicate state"
 }
 
 test_disconnect_reconnect_reaches_absent_then_near() {
@@ -499,7 +629,7 @@ test_privacy_state_contains_only_allowed_values() {
     done < "$CONFIG_PATH"
     while IFS='=' read -r key _; do
         case "$key" in
-            state|pending_state|pending_since_ms|bootstrap_count|bootstrap_sum|bootstrap_min|bootstrap_max|last_sample_ms|seen_presence|lock_reason|lock_issued|auto_auth_sent) ;;
+            state|pending_state|pending_since_ms|bootstrap_count|bootstrap_sum|bootstrap_min|bootstrap_max|last_sample_ms|seen_presence|lock_reason|lock_issued|auto_auth_sent|fast_return_sample_count|fast_return_last_sample_ms|return_mode|return_settling_near_count|return_settling_last_sample_ms) ;;
             *) fail "unexpected runtime key: $key" ;;
         esac
     done < "$RUNTIME_STATE"
@@ -528,6 +658,7 @@ tests=(
     test_proximity_lock_reason_survives_pending_locked_tick
     test_proximity_lock_reason_survives_multiple_locked_ticks
     test_single_strong_raw_spike_does_not_return_near
+    test_same_rssi_sample_is_counted_once
     test_sustained_strong_raw_samples_return_quickly
     test_sustained_strong_raw_samples_return_from_mid
     test_alternating_raw_samples_do_not_flap
@@ -544,10 +675,18 @@ tests=(
     test_denied_auth_has_no_retry
     test_timeout_auth_has_no_retry
     test_manual_lock_near_does_not_auto_auth
+    test_manual_lock_near_stays_quiet
+    test_manual_lock_arms_after_far_departure
+    test_manual_lock_arms_after_absent_departure
+    test_manual_armed_return_sends_one_auth
+    test_manual_absent_armed_return_sends_one_auth
+    test_manual_wait_near_samples_never_auth
     test_unlock_resets_proximity_provenance
     test_manual_lock_explicit_trigger_remains_dms_owned
     test_auth_cancellation_guards_remain_present
     test_no_late_notification_contract_remains_present
+    test_return_settling_blocks_stale_filtered_relock
+    test_restart_does_not_duplicate_fast_return_sample
     test_disconnect_reconnect_reaches_absent_then_near
     test_restart_does_not_invent_proximity_lock
     test_restart_status_recovers_without_markers
