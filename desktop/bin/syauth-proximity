@@ -357,8 +357,10 @@ bootstrap_baseline() {
 
 update_near_baseline() {
     local filtered="$1" delta="$2" near_delta
+    [[ "$PROXIMITY_STATE" == NEAR ]] || return 0
+    [[ "$RETURN_MODE" != "$RETURN_MODE_SETTLING" ]] || return 0
     near_delta="$(profile_value "$PROFILE" near_delta)"
-    if float_ge "$delta" "$near_delta"; then
+    if float_ge "$delta" "$near_delta" && float_le "$delta" 0; then
         BASELINE="$(awk -v old="$BASELINE" -v sample="$filtered" -v alpha="$BASELINE_ALPHA_PERCENT" 'BEGIN { printf "%.2f\n", old * (100 - alpha) / 100 + sample * alpha / 100 }')"
         save_config || true
     fi

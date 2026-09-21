@@ -121,6 +121,61 @@ test_near_state_is_stable() {
     assert_eq NEAR "$PROXIMITY_STATE" "near state"
 }
 
+test_strong_near_samples_do_not_raise_baseline() {
+    bootstrap_near
+    BASELINE=-57.00
+    save_config
+    for _ in {1..20}; do
+        tick_sample -51 1000
+    done
+    assert_eq -57.00 "$BASELINE" "strong samples raised baseline"
+    assert_eq -57.00 "$(grep '^baseline=' "$CONFIG_PATH" | cut -d= -f2)" "persisted baseline raised"
+}
+
+test_weaker_near_samples_adapt_baseline_downward() {
+    bootstrap_near
+    BASELINE=-57.00
+    save_config
+    tick_sample -58 1000
+    assert_eq -57.05 "$BASELINE" "weaker NEAR sample did not adapt baseline"
+    tick_sample -58 1000
+    [[ "$BASELINE" != "-57.05" ]] || fail "baseline did not continue conservative downward adaptation"
+}
+
+test_far_samples_never_train_baseline() {
+    bootstrap_near
+    BASELINE=-57.00
+    save_config
+    tick_sample -65 1000
+    tick_sample -65 8000
+    assert_eq -57.00 "$BASELINE" "FAR sample trained baseline"
+    assert_eq FAR "$PROXIMITY_STATE" "FAR training fixture state"
+}
+
+test_mid_and_far_states_never_train_baseline() {
+    bootstrap_near
+    BASELINE=-57.00
+    save_config
+    tick_sample -62 1000
+    tick_sample -62 2000
+    assert_eq MID "$PROXIMITY_STATE" "MID training fixture state"
+    tick_sample -65 2000
+    assert_eq -57.00 "$BASELINE" "MID/FAR sample trained baseline"
+}
+
+test_normal_near_signal_stays_near_after_strong_samples() {
+    bootstrap_near
+    BASELINE=-57.00
+    save_config
+    for _ in {1..100}; do
+        tick_sample -51 1000
+    done
+    for _ in {1..8}; do
+        tick_sample -60 1000
+    done
+    assert_eq NEAR "$PROXIMITY_STATE" "normal NEAR signal became FAR after strong samples"
+}
+
 test_single_weak_spike_does_not_become_far() {
     bootstrap_near
     tick_sample -61 1000
@@ -180,6 +235,22 @@ test_proximity_lock_reason_survives_multiple_locked_ticks() {
     engine_tick
     engine_tick
     assert_eq PROXIMITY "$LOCK_REASON" "multiple locked tick provenance"
+}
+
+test_settling_does_not_train_baseline() {
+    far_lock
+    local before="$BASELINE"
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -55 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq "$RETURN_MODE_SETTLING" "$RETURN_MODE" "settling fixture mode"
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -55 -53 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq "$before" "$BASELINE" "settling sample trained baseline"
 }
 
 test_single_strong_raw_spike_does_not_return_near() {
@@ -650,6 +721,11 @@ tests=(
     test_near_baseline_bootstrap
     test_baseline_does_not_follow_departure
     test_near_state_is_stable
+    test_strong_near_samples_do_not_raise_baseline
+    test_weaker_near_samples_adapt_baseline_downward
+    test_far_samples_never_train_baseline
+    test_mid_and_far_states_never_train_baseline
+    test_normal_near_signal_stays_near_after_strong_samples
     test_single_weak_spike_does_not_become_far
     test_mid_hysteresis_avoids_flap
     test_departure_behavior_remains_conservative
@@ -662,6 +738,7 @@ tests=(
     test_sustained_strong_raw_samples_return_quickly
     test_sustained_strong_raw_samples_return_from_mid
     test_alternating_raw_samples_do_not_flap
+    test_settling_does_not_train_baseline
     test_fast_return_waits_for_late_challenge_ready
     test_fast_return_waits_for_late_heartbeat
     test_stale_rssi_with_heartbeat_does_not_become_far
