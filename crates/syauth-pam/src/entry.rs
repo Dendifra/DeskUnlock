@@ -221,10 +221,9 @@ pub unsafe extern "C" fn pam_sm_authenticate(pamh: *mut c_void, _flags: c_int, a
         let cfg = Config::from_pam_argv_for_uid(&argv_refs, pam_uid);
         let outcome = auth::authenticate(&cfg);
         log_info(&format!(
-            "syauth: unlock {} reason={} peer_id={}",
+            "syauth: unlock {} reason={}",
             if outcome.is_success() { "success" } else { "denied" },
             outcome.reason(),
-            outcome.peer_id().unwrap_or(auth::LAST_LOG_UNKNOWN_PEER),
         ));
         outcome.to_pam_code()
     })

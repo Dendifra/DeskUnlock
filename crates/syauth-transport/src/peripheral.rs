@@ -877,7 +877,7 @@ impl PersistentPeripheral {
                                     let filtered = record_rssi(raw, rssi_filtered);
                                     rssi_filtered = Some(filtered);
                                     write_rssi_state(raw, filtered);
-                                    tracing::info!(
+                                    tracing::debug!(
                                         target: "syauth_transport",
                                         raw,
                                         filtered = format_args!("{filtered:.2}"),

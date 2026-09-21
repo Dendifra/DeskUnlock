@@ -749,12 +749,12 @@ impl Orchestrator {
             Ok(()) => {
                 let mut guard = self.peers.lock().await;
                 guard.remove(peer_id);
-                tracing::info!(target: ROTATION_LOG_TARGET, "reload removed peer={peer_id}");
+                tracing::info!(target: ROTATION_LOG_TARGET, "bond removed");
             }
-            Err(err) => {
+            Err(_err) => {
                 tracing::warn!(
                     target: ROTATION_LOG_TARGET,
-                    "reload remove_peer failed peer={peer_id} error={err}"
+                    "bond removal failed"
                 );
             }
         }
@@ -770,12 +770,12 @@ impl Orchestrator {
             Ok(()) => {
                 let mut guard = self.peers.lock().await;
                 guard.insert(peer_id.to_owned(), PeerEntry::new(*key, Some(phone_pubkey)));
-                tracing::info!(target: ROTATION_LOG_TARGET, "reload added peer={peer_id}");
+                tracing::info!(target: ROTATION_LOG_TARGET, "bond added");
             }
-            Err(err) => {
+            Err(_err) => {
                 tracing::warn!(
                     target: ROTATION_LOG_TARGET,
-                    "reload add_peer failed peer={peer_id} error={err}"
+                    "bond addition failed"
                 );
             }
         }
@@ -1044,7 +1044,7 @@ impl Orchestrator {
         }
         tracing::info!(
             target: ROTATION_LOG_TARGET,
-            "tx peer={peer_id} outcome={reason} t_start_ms={t_start_ms} t_end_ms={t_end_ms}"
+            "challenge completed outcome={reason} t_start_ms={t_start_ms} t_end_ms={t_end_ms}"
         );
     }
 

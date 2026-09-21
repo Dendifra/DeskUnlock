@@ -88,7 +88,7 @@ public class DiskBondPersister(private val bondStore: BondStore) : BondPersister
      * triggers BT bond removal.
      */
     public fun persistFull(record: BondRecord) {
-        Log.i(DISK_PERSISTER_LOG_TAG, "persisting LESC bond for peer=${record.peerId}")
+        Log.i(DISK_PERSISTER_LOG_TAG, "persisting LESC bond")
         try {
             bondStore.save(record)
         } catch (e: java.io.IOException) {

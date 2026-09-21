@@ -329,7 +329,7 @@ public class ChallengeApprovalActivity : FragmentActivity() {
         val peerId = intent?.getStringExtra(EXTRA_PEER_ID).orEmpty()
         val hostname = intent?.getStringExtra(EXTRA_HOSTNAME).orEmpty()
         if (peerId.isEmpty() || hostname.isEmpty()) {
-            Log.w(APPROVAL_LOG_TAG, "missing extras peer='$peerId' host='$hostname'; finishing")
+            Log.w(APPROVAL_LOG_TAG, "missing challenge metadata; finishing")
             finish()
             return
         }
@@ -340,12 +340,12 @@ public class ChallengeApprovalActivity : FragmentActivity() {
         val short = shortPeerId(peerId)
         val promptText = "$hostname is requesting sudo (peer_id $short)"
         lastPromptText = promptText
-        Log.i(APPROVAL_LOG_TAG, "render peer=$peerId host=$hostname")
+        Log.i(APPROVAL_LOG_TAG, "render challenge approval")
     }
 
     /** Test seam: invoked by the Compose Cancel button. */
     internal fun onCancelClicked() {
-        Log.i(APPROVAL_LOG_TAG, "cancel peer=$resolvedPeerId reason=$DENIED_FRAME_REASON")
+        Log.i(APPROVAL_LOG_TAG, "cancel reason=$DENIED_FRAME_REASON")
         cancelSink?.onCancel(resolvedPeerId, DENIED_FRAME_BYTES)
         finish()
     }
@@ -367,14 +367,14 @@ public class ChallengeApprovalActivity : FragmentActivity() {
 
         Log.i(
             APPROVAL_LOG_TAG,
-            "biometric prompt start peer=$resolvedPeerId",
+            "biometric prompt start",
         )
 
         onApproveClicked()
     }
 
     internal fun onApproveClicked() {
-        Log.i(APPROVAL_LOG_TAG, "approve peer=$resolvedPeerId alias=$resolvedKeystoreAlias")
+        Log.i(APPROVAL_LOG_TAG, "approve requested")
         // Test override on the companion seam takes precedence over
         // the per-instance production gate so a Robolectric JVM test
         // can drive succeed() / fail() without firing a real prompt.
@@ -388,12 +388,12 @@ public class ChallengeApprovalActivity : FragmentActivity() {
             resolvedChallenge,
             object : BiometricGateCallback {
                 override fun onSucceeded(signatureBytes: ByteArray) {
-                    Log.i(APPROVAL_LOG_TAG, "approve sig ok peer=$resolvedPeerId len=${signatureBytes.size}")
+                    Log.i(APPROVAL_LOG_TAG, "approve signature accepted")
                     writeResponseAndFinish(signatureBytes)
                 }
 
                 override fun onFailed(reason: String) {
-                    Log.i(APPROVAL_LOG_TAG, "approve fail peer=$resolvedPeerId reason=$reason")
+                    Log.i(APPROVAL_LOG_TAG, "approve failed reason=$reason")
                     writeResponseAndFinish(DENIED_FRAME_BYTES)
                 }
             },
@@ -542,7 +542,7 @@ internal class AndroidBiometricGate(
             if (err is KeyPermanentlyInvalidatedException) {
                 Log.w(
                     APPROVAL_LOG_TAG,
-                    "key invalidated for peer=$peerId alias=$keystoreAlias — deleting and prompting re-pair",
+                    "signing key invalidated — deleting and prompting re-pair",
                     err,
                 )
                 runCatching {
@@ -550,7 +550,7 @@ internal class AndroidBiometricGate(
                 }
                 callback.onFailed("key invalidated; please re-pair on the desktop")
             } else {
-                Log.w(APPROVAL_LOG_TAG, "initSign failed peer=$peerId", err)
+                Log.w(APPROVAL_LOG_TAG, "initSign failed", err)
                 callback.onFailed("initSign failed: ${err.message}")
             }
             return
@@ -582,7 +582,7 @@ internal class AndroidBiometricGate(
                 // prompt up; we do NOT route this to onFailed so the
                 // user can retry until cancel/lockout fires
                 // onAuthenticationError.
-                Log.i(APPROVAL_LOG_TAG, "biometric soft-failed peer=$peerId; user can retry")
+                Log.i(APPROVAL_LOG_TAG, "biometric soft-failed; user can retry")
             }
         }
         val prompt = BiometricPrompt(activity, executor, authCallback)

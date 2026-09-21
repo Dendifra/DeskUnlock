@@ -253,8 +253,8 @@ public class SyauthBleScannerController(
         val filters = slotUuids.map { uuid ->
             ScanFilter.Builder().setServiceUuid(ParcelUuid(uuid)).build()
         }
-        val onScanMatch = BleScanCallback { matchedUuid, deviceAddress ->
-            Log.i(BLE_SCAN_CONTROLLER_LOG_TAG, "matched uuid=$matchedUuid addr=$deviceAddress")
+        val onScanMatch = BleScanCallback { _, deviceAddress ->
+            Log.i(BLE_SCAN_CONTROLLER_LOG_TAG, "matched device service uuid")
             openClient(deviceAddress = deviceAddress, peerId = peerId, onChallenge = onChallenge)
         }
         scanner.set(handle)
@@ -276,7 +276,7 @@ public class SyauthBleScannerController(
                 onChallenge(peerId, frameBytes)
             }
             override fun onConnectionFailed(reason: String) {
-                Log.w(BLE_SCAN_CONTROLLER_LOG_TAG, "gatt client failed addr=$deviceAddress reason=$reason")
+                Log.w(BLE_SCAN_CONTROLLER_LOG_TAG, "gatt client failed reason=$reason")
             }
         }
         gattClient.set(client)

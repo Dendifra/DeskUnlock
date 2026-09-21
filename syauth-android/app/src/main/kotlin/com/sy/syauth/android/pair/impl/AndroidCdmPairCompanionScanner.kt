@@ -234,7 +234,7 @@ public class AndroidCdmPairCompanionScanner(
             if (mac != null) {
                 @Suppress("DEPRECATION")
                 runCatching { manager.stopObservingDevicePresence(mac) }.onSuccess {
-                    Log.i(CDM_PAIR_SCANNER_LOG_TAG, "pre-cycle: stopped observing id=$associationId (mac=$mac)")
+                    Log.i(CDM_PAIR_SCANNER_LOG_TAG, "pre-cycle: stopped observing device presence")
                 }
             }
         }
@@ -261,10 +261,10 @@ public class AndroidCdmPairCompanionScanner(
         @Suppress("DEPRECATION")
         runCatching { manager.startObservingDevicePresence(mac) }
             .onSuccess {
-                Log.i(CDM_PAIR_SCANNER_LOG_TAG, "started observing device presence (mac) id=$associationId addr=$mac")
+                Log.i(CDM_PAIR_SCANNER_LOG_TAG, "started observing device presence")
             }
             .onFailure { t ->
-                Log.w(CDM_PAIR_SCANNER_LOG_TAG, "startObservingDevicePresence id=$associationId addr=$mac failed", t)
+                Log.w(CDM_PAIR_SCANNER_LOG_TAG, "startObservingDevicePresence failed", t)
             }
     }
 

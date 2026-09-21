@@ -267,13 +267,13 @@ public class SyauthCompanionService : Service() {
                     if (client != null) {
                         Log.i(
                             SYAUTH_BG_LOG_TAG,
-                            "bluetooth STATE_ON: forceReconnect peer=${bond.peerId}",
+                            "bluetooth STATE_ON: forceReconnect",
                         )
                         runCatching { client.forceReconnect() }
                             .onFailure {
                                 Log.w(
                                     SYAUTH_BG_LOG_TAG,
-                                    "bluetooth STATE_ON reconnect failed peer=${bond.peerId}",
+                                    "bluetooth STATE_ON reconnect failed",
                                     it,
                                 )
                             }
@@ -326,7 +326,7 @@ public class SyauthCompanionService : Service() {
         for ((peerId, client) in clients) {
             runCatching { client.stop() }
                 .onFailure {
-                    Log.w(SYAUTH_BG_LOG_TAG, "onDestroy: client.stop failed peer=$peerId", it)
+                    Log.w(SYAUTH_BG_LOG_TAG, "onDestroy: client.stop failed", it)
                 }
         }
         clients.clear()
@@ -380,7 +380,7 @@ public class SyauthCompanionService : Service() {
             clients[bond.peerId] = client
             runCatching { client.start() }
                 .onFailure {
-                    Log.w(SYAUTH_BG_LOG_TAG, "client.start failed peer=${bond.peerId}", it)
+                    Log.w(SYAUTH_BG_LOG_TAG, "client.start failed", it)
                 }
         }
     }
@@ -488,11 +488,11 @@ public class SyauthCompanionService : Service() {
             ChallengeApprovalActivity.responseSink = ResponseSink { peerId, responseBytes ->
                 val client = PersistentGattClientRegistry.lookup(peerId)
                 if (client == null) {
-                    Log.w(SYAUTH_BG_LOG_TAG, "approve: no persistent client for peer=$peerId")
+                    Log.w(SYAUTH_BG_LOG_TAG, "approve: no persistent client")
                 } else {
                     runCatching { client.writeResponse(responseBytes) }
                         .onFailure {
-                            Log.w(SYAUTH_BG_LOG_TAG, "approve: writeResponse failed peer=$peerId", it)
+                            Log.w(SYAUTH_BG_LOG_TAG, "approve: writeResponse failed", it)
                         }
                 }
             }
@@ -501,11 +501,11 @@ public class SyauthCompanionService : Service() {
             ChallengeApprovalActivity.cancelSink = CancelSink { peerId, deniedFrameBytes ->
                 val client = PersistentGattClientRegistry.lookup(peerId)
                 if (client == null) {
-                    Log.w(SYAUTH_BG_LOG_TAG, "cancel: no persistent client for peer=$peerId")
+                    Log.w(SYAUTH_BG_LOG_TAG, "cancel: no persistent client")
                 } else {
                     runCatching { client.writeResponse(deniedFrameBytes) }
                         .onFailure {
-                            Log.w(SYAUTH_BG_LOG_TAG, "cancel: writeResponse failed peer=$peerId", it)
+                            Log.w(SYAUTH_BG_LOG_TAG, "cancel: writeResponse failed", it)
                         }
                 }
             }
@@ -681,12 +681,12 @@ public class SyauthCompanionService : Service() {
 
                 Log.i(
                     SYAUTH_BG_LOG_TAG,
-                    "approval activity dispatched peer=$peerId",
+                    "approval activity dispatched",
                 )
             }.onFailure {
                 Log.e(
                     SYAUTH_BG_LOG_TAG,
-                    "approval activity dispatch failed peer=$peerId",
+                    "approval activity dispatch failed",
                     it,
                 )
             }

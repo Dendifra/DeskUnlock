@@ -51,6 +51,6 @@ public fun resurrectIfDead(context: Context): Boolean {
     } else {
         context.startService(intent)
     }
-    Log.i(RESURRECT_LOG_TAG, "resurrected service for peer=${bond.peerId}")
+    Log.i(RESURRECT_LOG_TAG, "resurrected service for bonded device")
     return true
 }

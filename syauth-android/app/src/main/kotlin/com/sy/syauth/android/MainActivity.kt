@@ -366,7 +366,7 @@ class MainActivity : FragmentActivity() {
             }
         }.getOrDefault(emptyList())
         if (matched.isEmpty()) {
-            Log.w(PERMISSION_LOG_TAG, "no CDM associations match bonded mac=$targetMac")
+            Log.w(PERMISSION_LOG_TAG, "no CDM associations match bonded device")
             return
         }
         for (info in matched) {
@@ -401,10 +401,10 @@ class MainActivity : FragmentActivity() {
         ChallengeApprovalActivity.cancelSink = CancelSink { peerId, deniedFrameBytes ->
             val client = PersistentGattClientRegistry.lookup(peerId)
             if (client == null) {
-                Log.w(PERMISSION_LOG_TAG, "cancel: no persistent client for peer=$peerId")
+                Log.w(PERMISSION_LOG_TAG, "cancel: no persistent client")
             } else {
                 runCatching { client.writeResponse(deniedFrameBytes) }
-                    .onFailure { Log.w(PERMISSION_LOG_TAG, "cancel: writeResponse failed peer=$peerId", it) }
+                    .onFailure { Log.w(PERMISSION_LOG_TAG, "cancel: writeResponse failed", it) }
             }
             historyDispatcher.dispatch(
                 hostname = record.hostName,
@@ -422,10 +422,10 @@ class MainActivity : FragmentActivity() {
         ChallengeApprovalActivity.responseSink = ResponseSink { peerId, responseBytes ->
             val client = PersistentGattClientRegistry.lookup(peerId)
             if (client == null) {
-                Log.w(PERMISSION_LOG_TAG, "approve: no persistent client for peer=$peerId")
+                Log.w(PERMISSION_LOG_TAG, "approve: no persistent client")
             } else {
                 runCatching { client.writeResponse(responseBytes) }
-                    .onFailure { Log.w(PERMISSION_LOG_TAG, "approve: writeResponse failed peer=$peerId", it) }
+                    .onFailure { Log.w(PERMISSION_LOG_TAG, "approve: writeResponse failed", it) }
             }
             val outcome = if (responseBytes.contentEquals(DENIED_FRAME_BYTES)) {
                 HISTORY_OUTCOME_DENIED

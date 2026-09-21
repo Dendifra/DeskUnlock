@@ -645,7 +645,7 @@ onPairingCodeCallback.get().invoke(code)
             keystoreAlias = material.alias,
             phonePubkey = phonePubkey,
         )
-        Log.i(REAL_PAIR_BACKEND_LOG_TAG, "post-bond exchange complete addr=$address")
+        Log.i(REAL_PAIR_BACKEND_LOG_TAG, "post-bond exchange complete")
         lescResultDeferred.complete(result)
         onLescResultCallback.get().invoke(result)
     }
@@ -675,7 +675,7 @@ public class BondStateBroadcastReceiver(
         val newState = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE)
         val prevState = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, lastState)
         val device: BluetoothDevice? = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
-        Log.i(REAL_PAIR_BACKEND_LOG_TAG, "bond-state: prev=$prevState new=$newState addr=${device?.address}")
+        Log.i(REAL_PAIR_BACKEND_LOG_TAG, "bond-state changed prev=$prevState new=$newState")
         lastState = newState
         when (newState) {
             BluetoothDevice.BOND_BONDED -> {
