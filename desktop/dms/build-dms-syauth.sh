@@ -236,7 +236,7 @@ surface = surface.replace(needle_surface_rect, """    HoverHandler {
         color: \"transparent\"
     }
 """, 1)
-lock_surface = surface.replace("    Component.onCompleted: forceActiveFocus()", """    Component.onCompleted: {
+surface = surface.replace("    Component.onCompleted: forceActiveFocus()", """    Component.onCompleted: {
         pointerSurfaceReady = true;
         suppressInitialPointerSync = root.isLocked;
         forceActiveFocus();
