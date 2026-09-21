@@ -73,7 +73,7 @@ pub const DOCTOR_LAST_LOG_TAIL: usize = 10;
 /// Hard ceiling on the number of lines the audit-log probe will read
 /// before truncating, even if the on-disk file is unexpectedly
 /// unbounded. The `status` subcommand uses the same defensive cap
-/// (`status::LAST_UNLOCK_LOG_MAX_LINES = 64`); the doctor's cap is
+/// (the status reader streams the file); the doctor's cap is
 /// looser to surface up to 10 lines without a `Lines::rev` requirement.
 const DOCTOR_LOG_MAX_READ_LINES: usize = 4_096;
 

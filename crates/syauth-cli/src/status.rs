@@ -8,6 +8,7 @@
 //! advertising:       <true|false>
 //! bonds-count:       <N>
 //! last-unlock:       <timestamp>  <outcome>  <peer-id>     (or "(no entries)")
+//! last-successful-unlock: <timestamp>                       (or "(no entries)")
 //! ```
 //!
 //! `status` is read-only by contract: it never creates, truncates, or
@@ -18,9 +19,8 @@
 //!
 //! The PAM module (S-009) is the writer of `last.log`. The format pinned
 //! here is `<RFC3339 timestamp> <success|failure> <peer-id>` per
-//! whitespace-separated line; the writer is expected to keep the file
-//! bounded — [`LAST_UNLOCK_LOG_MAX_LINES`] is this reader's defensive
-//! cap.
+//! whitespace-separated line. Presenced CSV audit records may also occur
+//! in the file and are ignored by the successful-unlock reader.
 //!
 //! Roadmap: specs/syauth/ROADMAP.md item S-012.
 //! Journey: specs/journeys/JOURNEY-S-012-day2-cli.md
@@ -84,13 +84,6 @@ const DEFAULT_SOCKET_BASENAME: &str = "syauth/auth.sock";
 /// `syauth-pam` can re-import the same const instead of hard-coding the
 /// path.
 pub const LAST_UNLOCK_LOG_FILENAME: &str = "last.log";
-
-/// Defensive read cap. Even if the on-disk file is unexpectedly
-/// unbounded, we read at most this many lines and only parse the last
-/// one. The PAM writer is expected to keep the file under this cap; the
-/// cap exists so a `cat /dev/random >> last.log` accident does not turn
-/// `syauth status` into an OOM.
-pub const LAST_UNLOCK_LOG_MAX_LINES: usize = 64;
 
 /// In v0.1 the advertising lifecycle lives in S-018. Until then,
 /// `status` reports a constant `false`. The labeled line is still
@@ -286,8 +279,9 @@ pub enum LastUnlockView {
     },
 }
 
-/// Read the last (at most [`LAST_UNLOCK_LOG_MAX_LINES`]) lines from
-/// `path` and reduce them to a [`LastUnlockView`].
+/// Read `path` line-by-line and reduce its final physical line to a
+/// [`LastUnlockView`]. This compatibility field retains its historical
+/// latest-outcome semantics.
 ///
 /// `path` missing → `NoEntries`. `path` empty → `NoEntries`. Last line
 /// non-empty but unparseable → `Unparseable { raw }`. Last line
@@ -306,12 +300,7 @@ pub fn read_last_unlock(path: &std::path::Path) -> Result<LastUnlockView, Status
         Err(e) => return Err(StatusError::Io(e)),
     };
     let mut last_non_empty: Option<String> = None;
-    let mut lines_read: usize = 0;
     for line_res in io::BufReader::new(file).lines() {
-        if lines_read >= LAST_UNLOCK_LOG_MAX_LINES {
-            break;
-        }
-        lines_read = lines_read.saturating_add(1);
         let line = line_res?;
         if !line.trim().is_empty() {
             last_non_empty = Some(line);
@@ -324,6 +313,27 @@ pub fn read_last_unlock(path: &std::path::Path) -> Result<LastUnlockView, Status
             None => Ok(LastUnlockView::Unparseable { raw }),
         },
     }
+}
+
+/// Return the most recent valid successful PAM authentication in `path`.
+/// Unrelated audit lines, malformed lines, and failures are ignored. The
+/// file is streamed line-by-line, so memory remains bounded by one line.
+pub fn read_last_successful_unlock(path: &Path) -> Result<Option<LastUnlockEntry>, StatusError> {
+    let file = match fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(StatusError::Io(e)),
+    };
+    let mut latest = None;
+    for line_res in io::BufReader::new(file).lines() {
+        let line = line_res?;
+        if let Some(entry) = parse_last_log_line(&line)
+            && entry.outcome == "success"
+        {
+            latest = Some(entry);
+        }
+    }
+    Ok(latest)
 }
 
 /// Adapter introspection seam. The production wiring (`bluer::Session`)
@@ -388,6 +398,8 @@ pub struct StatusSnapshot {
     pub bonds_count: usize,
     /// Last unlock outcome, ready for printing.
     pub last_unlock: LastUnlockView,
+    /// Most recent successful DeskUnlock authentication.
+    pub last_successful_unlock: Option<LastUnlockEntry>,
 }
 
 /// Render `snapshot` to `writer` as the five labeled lines documented
@@ -402,6 +414,11 @@ pub fn render_status_to(writer: &mut dyn Write, snapshot: &StatusSnapshot) -> Re
         LastUnlockView::NoEntries => writeln!(writer, "{LAST_UNLOCK_NO_ENTRIES}")?,
         LastUnlockView::Entry(entry) => writeln!(writer, "{}  {}  {}", entry.timestamp, entry.outcome, entry.peer_id)?,
         LastUnlockView::Unparseable { raw } => writeln!(writer, "{LAST_UNLOCK_UNPARSEABLE_PREFIX}{raw})")?,
+    }
+    write!(writer, "last-successful-unlock: ")?;
+    match &snapshot.last_successful_unlock {
+        Some(entry) => writeln!(writer, "{}", entry.timestamp)?,
+        None => writeln!(writer, "{LAST_UNLOCK_NO_ENTRIES}")?,
     }
     Ok(())
 }
@@ -427,13 +444,16 @@ pub fn effective_last_log_path(opts: &StatusOpts) -> PathBuf {
 pub fn gather_status(opts: &StatusOpts, probe: &dyn AdapterProbe) -> Result<StatusSnapshot, StatusError> {
     let path = bonds_path(&opts.bond_dir);
     let store = BondStore::load(&path)?;
-    let last_unlock = read_last_unlock(&effective_last_log_path(opts))?;
+    let log_path = effective_last_log_path(opts);
+    let last_unlock = read_last_unlock(&log_path)?;
+    let last_successful_unlock = read_last_successful_unlock(&log_path)?;
     Ok(StatusSnapshot {
         adapter: opts.adapter.clone(),
         adapter_state: probe.probe(&opts.adapter),
         advertising: ADVERTISING_STATE_V01,
         bonds_count: store.list().len(),
         last_unlock,
+        last_successful_unlock,
     })
 }
 
@@ -447,7 +467,9 @@ pub fn gather_status(opts: &StatusOpts, probe: &dyn AdapterProbe) -> Result<Stat
 pub async fn gather_status_async(opts: &StatusOpts, probe: &dyn AsyncAdapterProbe) -> Result<StatusSnapshot, StatusError> {
     let path = bonds_path(&opts.bond_dir);
     let store = BondStore::load(&path)?;
-    let last_unlock = read_last_unlock(&effective_last_log_path(opts))?;
+    let log_path = effective_last_log_path(opts);
+    let last_unlock = read_last_unlock(&log_path)?;
+    let last_successful_unlock = read_last_successful_unlock(&log_path)?;
     let adapter_state = probe.probe_async(&opts.adapter).await;
     Ok(StatusSnapshot {
         adapter: opts.adapter.clone(),
@@ -455,6 +477,7 @@ pub async fn gather_status_async(opts: &StatusOpts, probe: &dyn AsyncAdapterProb
         advertising: ADVERTISING_STATE_V01,
         bonds_count: store.list().len(),
         last_unlock,
+        last_successful_unlock,
     })
 }
 
@@ -755,6 +778,54 @@ mod tests {
     }
 
     #[test]
+    fn latest_successful_unlock_ignores_failures_and_audit_lines() {
+        let td = TempDir::new().expect("tempdir");
+        let path = td.path().join("last.log");
+        let body = format!(
+            "{SAMPLE_TS} success {SAMPLE_PEER}\naudit,challenge,denied\n2026-05-15T12:01:00Z failure {SAMPLE_PEER}\n2026-05-15T12:02:00Z success {SAMPLE_PEER}\nmalformed final audit record\n"
+        );
+        std::fs::write(&path, body).expect("write");
+        let got = read_last_successful_unlock(&path).expect("read").expect("success");
+        assert_eq!(got.timestamp, "2026-05-15T12:02:00Z");
+        assert_eq!(got.outcome, "success");
+    }
+
+    #[test]
+    fn latest_successful_unlock_scans_past_64_records() {
+        let td = TempDir::new().expect("tempdir");
+        let path = td.path().join("last.log");
+        let mut body = (0..64)
+            .map(|_| format!("{SAMPLE_TS} failure {SAMPLE_PEER}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        body.push_str("\n2026-05-15T12:03:00Z success ");
+        body.push_str(SAMPLE_PEER);
+        std::fs::write(&path, body).expect("write");
+        let got = read_last_successful_unlock(&path).expect("read").expect("success");
+        assert_eq!(got.timestamp, "2026-05-15T12:03:00Z");
+    }
+
+    #[test]
+    fn latest_successful_unlock_returns_none_for_empty_or_failure_only_logs() {
+        let td = TempDir::new().expect("tempdir");
+        let path = td.path().join("last.log");
+        std::fs::write(&path, format!("{SAMPLE_TS} failure {SAMPLE_PEER}\n")).expect("write");
+        assert_eq!(read_last_successful_unlock(&path).expect("read"), None);
+        std::fs::write(&path, "").expect("clear");
+        assert_eq!(read_last_successful_unlock(&path).expect("read"), None);
+    }
+
+    #[test]
+    fn latest_successful_unlock_does_not_modify_log() {
+        let td = TempDir::new().expect("tempdir");
+        let path = td.path().join("last.log");
+        let content = format!("{SAMPLE_TS} success {SAMPLE_PEER}\n");
+        std::fs::write(&path, &content).expect("write");
+        let _ = read_last_successful_unlock(&path).expect("read");
+        assert_eq!(std::fs::read_to_string(&path).expect("read back"), content);
+    }
+
+    #[test]
     fn read_last_unlock_returns_no_entries_for_missing_file() {
         let td = TempDir::new().expect("tempdir");
         let path = td.path().join("last.log");
@@ -807,6 +878,7 @@ mod tests {
             advertising: false,
             bonds_count: 0,
             last_unlock: LastUnlockView::NoEntries,
+            last_successful_unlock: None,
         };
         let mut buf: Vec<u8> = Vec::new();
         let mut cur = Cursor::new(&mut buf);
@@ -827,6 +899,11 @@ mod tests {
             advertising: false,
             bonds_count: 2,
             last_unlock: LastUnlockView::Entry(LastUnlockEntry {
+                timestamp: SAMPLE_TS.to_owned(),
+                outcome: "success".to_owned(),
+                peer_id: SAMPLE_PEER.to_owned(),
+            }),
+            last_successful_unlock: Some(LastUnlockEntry {
                 timestamp: SAMPLE_TS.to_owned(),
                 outcome: "success".to_owned(),
                 peer_id: SAMPLE_PEER.to_owned(),
