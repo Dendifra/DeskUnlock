@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 SYAUTH_BIN="${SYAUTH_BIN:-$(command -v syauth || true)}"
+PROXIMITY_CONTROL="${SYAUTH_PROXIMITY_CONTROL:-$(command -v syauth-proximity || true)}"
 STATE_SETUP="${SYAUTH_STATE_SETUP:-/usr/lib/syauth/syauth-state-setup}"
 USER_SETUP="${SYAUTH_USER_SETUP:-/usr/bin/syauth-user-setup}"
 
@@ -21,6 +22,14 @@ load_active_ids() {
 
 reconcile() {
     systemctl --user start syauth-reconcile.service >/dev/null 2>&1 || true
+}
+
+reset_proximity_baseline() {
+    [[ -n "$PROXIMITY_CONTROL" ]] || return 0
+    "$PROXIMITY_CONTROL" reset || {
+        echo "AVVISO: baseline proximity non resettato automaticamente." >&2
+        return 1
+    }
 }
 
 state_ready() {
@@ -136,6 +145,7 @@ cmd_pair() {
         return 3
     fi
 
+    reset_proximity_baseline || true
     echo "Associazione completata: un solo telefono attivo."
 }
 
@@ -233,6 +243,7 @@ cmd_change() {
         return 7
     fi
 
+    reset_proximity_baseline || true
     echo "Cambio completato: il nuovo telefono è l'unico dispositivo Syauth attivo."
 }
 
@@ -262,6 +273,7 @@ cmd_revoke() {
         return 3
     fi
 
+    reset_proximity_baseline || true
     echo "Telefono dissociato da Syauth."
 }
 

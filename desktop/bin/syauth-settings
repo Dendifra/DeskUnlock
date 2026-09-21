@@ -10,6 +10,9 @@ from PySide6.QtCore import Qt, QTimer, QProcess
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -24,6 +27,7 @@ from PySide6.QtWidgets import (
 HOME = Path.home()
 CONTROL = Path("/usr/bin/syauth-control")
 DEVICE_CONTROL = Path("/usr/bin/syauth-device")
+PROXIMITY_CONTROL = Path("/usr/bin/syauth-proximity")
 PRESENCE_MARKER = Path("/run/syauth/presence.last")
 DESKUNLOCK_LOGO = Path("/usr/share/icons/hicolor/256x256/apps/deskunlock.png")
 
@@ -109,6 +113,40 @@ def get_syauth_state():
         "bonded": bonded,
         "revoked": revoked,
         "last_unlock": last_unlock,
+    }
+
+
+def get_proximity_diagnostics():
+    output = run_command([str(PROXIMITY_CONTROL), "diagnostics"])
+    values = {}
+    for line in output.splitlines():
+        key, separator, value = line.partition(": ")
+        if separator:
+            values[key.lower()] = value
+    return values
+
+
+def get_proximity_state():
+    output = run_command([str(PROXIMITY_CONTROL), "status"])
+    if not output:
+        return {
+            "available": False,
+            "enabled": False,
+            "state": "ABSENT",
+            "profile_id": "balanced",
+        }
+
+    values = {}
+    for line in output.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            values[key] = value
+
+    return {
+        "available": True,
+        "enabled": values.get("enabled") == "1",
+        "state": values.get("state", "ABSENT"),
+        "profile_id": values.get("profile_id", "balanced"),
     }
 
 
@@ -216,6 +254,8 @@ class SettingsWindow(QMainWindow):
 
         self.busy = False
         self.process = None
+        self.command_process = None
+        self.command_title = ""
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -227,6 +267,7 @@ class SettingsWindow(QMainWindow):
         self.build_header(main)
         self.build_master(main)
         self.build_device(main)
+        self.build_proximity(main)
         self.build_features(main)
         self.build_system_status(main)
 
@@ -427,6 +468,139 @@ class SettingsWindow(QMainWindow):
 
         main.addWidget(card)
 
+    def build_proximity(self, main):
+        main.addWidget(self.section_title("PROSSIMITÀ"))
+
+        card = self.card()
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(10)
+
+        header = QHBoxLayout()
+        text = QVBoxLayout()
+        text.setSpacing(2)
+
+        title = QLabel("Proximity Lock")
+        font = title.font()
+        font.setBold(True)
+        font.setPointSize(11)
+        title.setFont(font)
+
+        description = QLabel(
+            "Blocca il PC quando il telefono si allontana"
+        )
+        description.setStyleSheet("color: #aeb4bc;")
+
+        text.addWidget(title)
+        text.addWidget(description)
+        header.addLayout(text)
+        header.addStretch()
+
+        self.proximity_toggle = QCheckBox("Attivo")
+        self.proximity_toggle.toggled.connect(
+            self.set_proximity_enabled
+        )
+        header.addWidget(self.proximity_toggle)
+        layout.addLayout(header)
+
+        state_row = QHBoxLayout()
+        state_row.addWidget(QLabel("Stato"))
+        state_row.addStretch()
+        self.proximity_state = QLabel("Caricamento…")
+        self.proximity_state.setStyleSheet("color: #aeb4bc;")
+        state_row.addWidget(self.proximity_state)
+        layout.addLayout(state_row)
+
+        profile_row = QHBoxLayout()
+        profile_row.addWidget(QLabel("Sensibilità"))
+        profile_row.addStretch()
+        self.proximity_profile = QComboBox()
+        self.proximity_profile.setMinimumWidth(150)
+        self.proximity_profile.addItem("Vicino", "near")
+        self.proximity_profile.addItem("Bilanciato", "balanced")
+        self.proximity_profile.addItem("Ampio", "wide")
+        self.proximity_profile.activated.connect(
+            self.set_proximity_profile
+        )
+        profile_row.addWidget(self.proximity_profile)
+        layout.addLayout(profile_row)
+
+        privacy = QLabel(
+            "Privacy: RSSI, baseline e stato restano locali; "
+            "nessuna telemetria viene inviata."
+        )
+        privacy.setWordWrap(True)
+        privacy.setStyleSheet("color: #aeb4bc;")
+        layout.addWidget(privacy)
+
+        self.proximity_diagnostics = QPushButton(
+            "Diagnostica avanzata"
+        )
+        self.proximity_diagnostics.clicked.connect(
+            self.show_proximity_diagnostics
+        )
+        layout.addWidget(self.proximity_diagnostics)
+
+        main.addWidget(card)
+
+    def set_proximity_enabled(self, enabled):
+        action = "enable" if enabled else "disable"
+        run_command([str(PROXIMITY_CONTROL), action])
+        self.refresh()
+
+    def set_proximity_profile(self, index):
+        profile = self.proximity_profile.itemData(index)
+        if profile:
+            run_command([str(PROXIMITY_CONTROL), "profile", profile])
+        self.refresh()
+
+    def show_proximity_diagnostics(self):
+        values = get_proximity_diagnostics()
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Diagnostica avanzata")
+        dialog.setMinimumWidth(430)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(24, 22, 24, 18)
+        layout.setSpacing(14)
+        layout.addWidget(self.section_title("DIAGNOSTICA AVANZATA"))
+
+        card = self.card()
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(18, 12, 18, 12)
+        card_layout.setSpacing(1)
+
+        fields = (
+            ("RSSI raw", "rssi raw"),
+            ("RSSI filtered", "rssi filtered"),
+            ("Baseline", "baseline"),
+            ("Delta", "delta"),
+            ("Sample age", "sample age"),
+            ("Proximity state", "proximity state"),
+            ("Heartbeat age", "heartbeat age"),
+            ("GATT ready", "challenge-ready"),
+            ("Lock reason", "lock reason"),
+        )
+        for label, key in fields:
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 4, 0, 4)
+            row.addWidget(QLabel(label))
+            row.addStretch()
+            value = QLabel(values.get(key, "n/a"))
+            value.setStyleSheet("color: #aeb4bc;")
+            row.addWidget(value)
+            card_layout.addLayout(row)
+
+        layout.addWidget(card)
+        close_button = QPushButton("Chiudi")
+        close_button.setMinimumWidth(95)
+        close_button.clicked.connect(dialog.accept)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        buttons.addWidget(close_button)
+        layout.addLayout(buttons)
+        dialog.exec()
+
     def build_features(self, main):
         main.addWidget(
             self.section_title(
@@ -494,6 +668,38 @@ class SettingsWindow(QMainWindow):
     def refresh(self):
         master = get_master_state()
         data = get_syauth_state()
+        proximity = get_proximity_state()
+
+        self.proximity_toggle.blockSignals(True)
+        self.proximity_toggle.setChecked(proximity["enabled"])
+        self.proximity_toggle.blockSignals(False)
+
+        self.proximity_profile.blockSignals(True)
+        profile_index = self.proximity_profile.findData(
+            proximity["profile_id"]
+        )
+        if profile_index >= 0:
+            self.proximity_profile.setCurrentIndex(profile_index)
+        self.proximity_profile.blockSignals(False)
+
+        state_labels = {
+            "NEAR": "Vicino",
+            "MID": "Intermedio",
+            "FAR": "Lontano",
+            "ABSENT": "Assente",
+        }
+        if proximity["available"]:
+            self.proximity_state.setText(
+                state_labels.get(proximity["state"], "Sconosciuto")
+            )
+            self.proximity_state.setStyleSheet(
+                "color: #63c174;"
+                if proximity["state"] == "NEAR"
+                else "color: #aeb4bc;"
+            )
+        else:
+            self.proximity_state.setText("Servizio non disponibile")
+            self.proximity_state.setStyleSheet("color: #e06c75;")
 
         if master == "on":
             self.master_state.setText(
@@ -638,6 +844,51 @@ class SettingsWindow(QMainWindow):
         self.toggle_button.setEnabled(
             not self.busy
         )
+        self.device_action.setEnabled(not self.busy)
+        self.device_revoke.setEnabled(not self.busy)
+
+    def run_background_command(self, program, arguments, title):
+        if self.command_process is not None:
+            return
+
+        self.busy = True
+        self.command_title = title
+        self.command_process = QProcess(self)
+        self.command_process.setProcessChannelMode(
+            QProcess.ProcessChannelMode.MergedChannels
+        )
+        self.command_process.finished.connect(
+            self.background_command_finished
+        )
+        self.command_process.start(program, arguments)
+        self.refresh()
+
+    def background_command_finished(self, exit_code, _exit_status):
+        process = self.command_process
+        if process is None:
+            return
+
+        output = bytes(process.readAllStandardOutput()).decode(
+            "utf-8",
+            "replace",
+        ).strip()
+        process.deleteLater()
+        self.command_process = None
+        self.busy = False
+
+        if exit_code == 0:
+            QMessageBox.information(
+                self,
+                self.command_title,
+                output or "Operazione completata.",
+            )
+        else:
+            QMessageBox.critical(
+                self,
+                self.command_title,
+                output or "Operazione non riuscita.",
+            )
+        self.refresh()
 
     def device_action_clicked(self):
         action = self.device_action.property(
@@ -645,25 +896,16 @@ class SettingsWindow(QMainWindow):
         )
 
         if action in ("pair", "change"):
-            QProcess.startDetached(
-                "ghostty",
-                [
-                    "-e",
-                    str(DEVICE_CONTROL),
-                    action,
-                ],
+            self.run_background_command(
+                str(DEVICE_CONTROL),
+                [action],
+                "Associazione telefono",
             )
-
         elif action == "doctor":
-            QProcess.startDetached(
-                "ghostty",
-                [
-                    "-e",
-                    "bash",
-                    "-lc",
-                    "syauth doctor; echo; read -rp "
-                    "\"Premi Invio per chiudere...\"",
-                ],
+            self.run_background_command(
+                "syauth",
+                ["doctor"],
+                "Controllo DeskUnlock",
             )
 
     def revoke_device_clicked(self):

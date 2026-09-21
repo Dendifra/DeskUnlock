@@ -25,6 +25,7 @@ fn arch_package_reapplies_pam_on_install_and_upgrade() {
     assert!(build.contains("/usr/share/applications/syauth.desktop"));
     assert!(build.contains("assets/deskunlock-logo.png"));
     assert!(build.contains("/usr/share/icons/hicolor/256x256/apps/deskunlock.png"));
+    assert!(!build.contains("'ghostty'"));
     assert!(install.contains("post_install()"));
     assert!(install.contains("post_upgrade()"));
     assert!(install.contains("/usr/lib/syauth/syauth-pam-sync install"));
@@ -63,8 +64,10 @@ fn return_auth_is_transport_gated_and_not_retried_automatically() {
     let dms = repo_file("desktop/dms/build-dms-syauth.sh");
 
     assert!(proximity.contains("READY_MARKER"));
-    assert!(proximity.contains("saved_ready_token"));
-    assert!(proximity.contains("readiness_is_new"));
+    assert!(proximity.contains("challenge_ready_valid"));
+    assert!(proximity.contains("AUTO_AUTH_SENT=1"));
+    assert!(proximity.contains("request_auto_auth"));
+    assert!(proximity.contains("LOCK_REASON=PROXIMITY"));
     assert!(dms.contains("syauth.abort()"));
     assert!(dms.contains("root.syauthGeneration"));
     assert!(!dms.contains("syauthStartTimer.restart()"));
@@ -78,5 +81,11 @@ fn settings_gui_uses_deskunlock_branding_and_no_duplicate_phone_status() {
     assert!(settings.contains("title = QLabel(\"DeskUnlock\")"));
     assert!(settings.contains("DESKUNLOCK_LOGO"));
     assert!(settings.contains("Servizio DeskUnlock"));
+    assert!(settings.contains("Proximity Lock"));
+    assert!(settings.contains("get_proximity_state"));
+    assert!(settings.contains("Diagnostica avanzata"));
+    assert!(settings.contains("get_proximity_diagnostics"));
+    assert!(!settings.contains("QProcess.startDetached"));
+    assert!(!settings.contains("ghostty"));
     assert!(!settings.contains("self.presence_row"));
 }

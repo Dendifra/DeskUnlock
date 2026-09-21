@@ -54,6 +54,7 @@ test:
 	$(CARGO) test --workspace --all-targets --all-features
 	bash tests/proximity_readiness.sh
 	bash tests/rssi_status.sh
+	bash tests/proximity_engine.sh
 
 # Run all tests with verbose output.
 .PHONY: testv

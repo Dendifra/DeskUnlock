@@ -1,203 +1,636 @@
 #!/usr/bin/env bash
 set -u
 
+export LC_ALL=C
+
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-MARKER="$RUNTIME_DIR/syauth/presence.last"
-PUBLIC_MARKER="/run/syauth/presence.last"
-READY_MARKER="$RUNTIME_DIR/syauth/challenge-ready.last"
+RUNTIME_SUBDIR="$RUNTIME_DIR/syauth"
+RUNTIME_STATE="$RUNTIME_SUBDIR/proximity.state"
+RSSI_STATE="$RUNTIME_SUBDIR/rssi.last"
+HEARTBEAT_MARKER="$RUNTIME_SUBDIR/presence.last"
+READY_MARKER="$RUNTIME_SUBDIR/challenge-ready.last"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/syauth"
+CONFIG_PATH="$CONFIG_DIR/proximity.conf"
 
-ABSENT_AFTER=60
-LOCK_AFTER=120
-CHECK_INTERVAL=1
-RETURN_DELAY=0.5
+CHECK_INTERVAL_SECONDS=1
+RSSI_STALE_AFTER_MS=5000
+HEARTBEAT_STALE_AFTER_MS=60000
+BASELINE_BOOTSTRAP_SAMPLES=3
+BASELINE_BOOTSTRAP_MAX_RANGE_DB=8
+BASELINE_ALPHA_PERCENT=5
+MID_PERSISTENCE_SECONDS=2
 
-USER_NAME="${USER:-$(id -un)}"
+DEFAULT_PROFILE="balanced"
+DEFAULT_ENABLED=1
+DEFAULT_LOCK_REASON="MANUAL_OR_OTHER"
 
-seen_presence=0
-was_present=0
-locked_by_proximity=0
-last_seen_epoch=0
-biometric_requested=0
-saved_ready_token=""
+PROFILE="$DEFAULT_PROFILE"
+ENABLED="$DEFAULT_ENABLED"
+BASELINE=""
+ALGORITHM_VERSION=1
+
+PROXIMITY_STATE="ABSENT"
+PENDING_STATE=""
+PENDING_SINCE_MS=0
+BOOTSTRAP_COUNT=0
+BOOTSTRAP_SUM=0
+BOOTSTRAP_MIN=0
+BOOTSTRAP_MAX=0
+LAST_SAMPLE_MS=0
+SEEN_PRESENCE=0
+LOCK_REASON="$DEFAULT_LOCK_REASON"
+LOCK_ISSUED=0
+AUTO_AUTH_SENT=0
+
+RSSI_RAW=""
+RSSI_FILTERED=""
+RSSI_SAMPLE_MS=0
+RSSI_AGE_MS=0
+HEARTBEAT_AGE_MS=0
+STATE_CHANGED=0
 
 log() {
     echo "syauth-proximity: $*"
 }
 
-marker_token() {
-    if [[ -s "$READY_MARKER" ]]; then
-        tr -d '[:space:]' < "$READY_MARKER" 2>/dev/null || true
-    else
-        echo 0
+now_ms() {
+    if [[ "${SYAUTH_PROXIMITY_TEST:-0}" == 1 && -n "${SYAUTH_TEST_NOW_MS:-}" ]]; then
+        printf '%s\n' "$SYAUTH_TEST_NOW_MS"
+        return
     fi
+    date +%s%3N
+}
+
+profile_value() {
+    local profile="$1" key="$2"
+    case "$profile:$key" in
+        near:far_delta) printf '%s\n' -5 ;;
+        near:near_delta) printf '%s\n' -3 ;;
+        near:far_persistence) printf '%s\n' 6 ;;
+        near:near_persistence) printf '%s\n' 3 ;;
+        balanced:far_delta) printf '%s\n' -7 ;;
+        balanced:near_delta) printf '%s\n' -4 ;;
+        balanced:far_persistence) printf '%s\n' 8 ;;
+        balanced:near_persistence) printf '%s\n' 4 ;;
+        wide:far_delta) printf '%s\n' -9 ;;
+        wide:near_delta) printf '%s\n' -6 ;;
+        wide:far_persistence) printf '%s\n' 10 ;;
+        wide:near_persistence) printf '%s\n' 5 ;;
+        *) return 1 ;;
+    esac
+}
+
+profile_valid() {
+    case "$1" in
+        near|balanced|wide) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+profile_label() {
+    case "$1" in
+        near) printf '%s\n' "Vicino" ;;
+        balanced) printf '%s\n' "Bilanciato" ;;
+        wide) printf '%s\n' "Ampio" ;;
+        *) printf '%s\n' "Bilanciato" ;;
+    esac
+}
+
+load_config() {
+    PROFILE="$DEFAULT_PROFILE"
+    ENABLED="$DEFAULT_ENABLED"
+    BASELINE=""
+    local legacy_peer=0
+
+    [[ -r "$CONFIG_PATH" ]] || return 0
+    while IFS='=' read -r key value; do
+        case "$key" in
+            profile)
+                profile_valid "$value" && PROFILE="$value"
+                ;;
+            enabled)
+                [[ "$value" == 0 || "$value" == 1 ]] && ENABLED="$value"
+                ;;
+            baseline)
+                [[ "$value" =~ ^-?[0-9]+([.][0-9]+)?$ ]] && BASELINE="$value"
+                ;;
+            baseline_peer)
+                legacy_peer=1
+                ;;
+            algorithm_version)
+                [[ "$value" == "$ALGORITHM_VERSION" ]] || BASELINE=""
+                ;;
+        esac
+    done < "$CONFIG_PATH"
+    if (( legacy_peer == 1 )); then
+        BASELINE=""
+        save_config || true
+    fi
+    return 0
+}
+
+save_config() {
+    mkdir -p "$CONFIG_DIR" 2>/dev/null || return 1
+    chmod 700 "$CONFIG_DIR" 2>/dev/null || true
+    local temp
+    temp=$(mktemp "$CONFIG_DIR/.proximity.XXXXXX") || return 1
+    chmod 600 "$temp" 2>/dev/null || true
+    {
+        printf 'algorithm_version=%s\n' "$ALGORITHM_VERSION"
+        printf 'enabled=%s\n' "$ENABLED"
+        printf 'profile=%s\n' "$PROFILE"
+        printf 'baseline=%s\n' "$BASELINE"
+    } > "$temp" || {
+        rm -f "$temp"
+        return 1
+    }
+    mv -f "$temp" "$CONFIG_PATH"
+}
+
+load_runtime() {
+    PROXIMITY_STATE="ABSENT"
+    PENDING_STATE=""
+    PENDING_SINCE_MS=0
+    BOOTSTRAP_COUNT=0
+    BOOTSTRAP_SUM=0
+    BOOTSTRAP_MIN=0
+    BOOTSTRAP_MAX=0
+    LAST_SAMPLE_MS=0
+    SEEN_PRESENCE=0
+    LOCK_REASON="$DEFAULT_LOCK_REASON"
+    LOCK_ISSUED=0
+    AUTO_AUTH_SENT=0
+
+    [[ -r "$RUNTIME_STATE" ]] || return 0
+    while IFS='=' read -r key value; do
+        case "$key" in
+            state) [[ "$value" =~ ^(NEAR|MID|FAR|ABSENT)$ ]] && PROXIMITY_STATE="$value" ;;
+            pending_state) [[ "$value" =~ ^(NEAR|MID|FAR|ABSENT)?$ ]] && PENDING_STATE="$value" ;;
+            pending_since_ms) [[ "$value" =~ ^[0-9]+$ ]] && PENDING_SINCE_MS="$value" ;;
+            bootstrap_count) [[ "$value" =~ ^[0-9]+$ ]] && BOOTSTRAP_COUNT="$value" ;;
+            last_sample_ms) [[ "$value" =~ ^[0-9]+$ ]] && LAST_SAMPLE_MS="$value" ;;
+            lock_issued) [[ "$value" =~ ^[0-9]+$ ]] && LOCK_ISSUED="$value" ;;
+            auto_auth_sent) [[ "$value" =~ ^[0-9]+$ ]] && AUTO_AUTH_SENT="$value" ;;
+            seen_presence) [[ "$value" =~ ^[0-9]+$ ]] && SEEN_PRESENCE="$value" ;;
+            bootstrap_sum) [[ "$value" =~ ^-?[0-9]+([.][0-9]+)?$ ]] && BOOTSTRAP_SUM="$value" ;;
+            bootstrap_min) [[ "$value" =~ ^-?[0-9]+([.][0-9]+)?$ ]] && BOOTSTRAP_MIN="$value" ;;
+            bootstrap_max) [[ "$value" =~ ^-?[0-9]+([.][0-9]+)?$ ]] && BOOTSTRAP_MAX="$value" ;;
+            lock_reason)
+                [[ "$value" == PROXIMITY || "$value" == MANUAL_OR_OTHER ]] && LOCK_REASON="$value"
+                ;;
+        esac
+    done < "$RUNTIME_STATE"
+    return 0
+}
+
+save_runtime() {
+    mkdir -p "$RUNTIME_SUBDIR" 2>/dev/null || return 1
+    chmod 700 "$RUNTIME_SUBDIR" 2>/dev/null || true
+    local temp
+    temp=$(mktemp "$RUNTIME_SUBDIR/.proximity.state.XXXXXX") || return 1
+    chmod 600 "$temp" 2>/dev/null || true
+    {
+        printf 'state=%s\n' "$PROXIMITY_STATE"
+        printf 'pending_state=%s\n' "$PENDING_STATE"
+        printf 'pending_since_ms=%s\n' "$PENDING_SINCE_MS"
+        printf 'bootstrap_count=%s\n' "$BOOTSTRAP_COUNT"
+        printf 'bootstrap_sum=%s\n' "$BOOTSTRAP_SUM"
+        printf 'bootstrap_min=%s\n' "$BOOTSTRAP_MIN"
+        printf 'bootstrap_max=%s\n' "$BOOTSTRAP_MAX"
+        printf 'last_sample_ms=%s\n' "$LAST_SAMPLE_MS"
+        printf 'seen_presence=%s\n' "$SEEN_PRESENCE"
+        printf 'lock_reason=%s\n' "$LOCK_REASON"
+        printf 'lock_issued=%s\n' "$LOCK_ISSUED"
+        printf 'auto_auth_sent=%s\n' "$AUTO_AUTH_SENT"
+    } > "$temp" || {
+        rm -f "$temp"
+        return 1
+    }
+    mv -f "$temp" "$RUNTIME_STATE"
+}
+
+marker_age_ms() {
+    local path="$1"
+    if [[ "${SYAUTH_PROXIMITY_TEST:-0}" == 1 && "$path" == "$HEARTBEAT_MARKER" && -n "${SYAUTH_TEST_HEARTBEAT_AGE_MS:-}" ]]; then
+        printf '%s\n' "$SYAUTH_TEST_HEARTBEAT_AGE_MS"
+        return
+    fi
+    if [[ -e "$path" ]]; then
+        local seconds now
+        seconds=$(stat -c %Y "$path" 2>/dev/null || echo 0)
+        now=$(( $(now_ms) / 1000 ))
+        (( now >= seconds )) && printf '%s\n' $(( (now - seconds) * 1000 )) || printf '%s\n' 0
+    else
+        printf '%s\n' 999999999
+    fi
+}
+
+heartbeat_valid() {
+    HEARTBEAT_AGE_MS="$(marker_age_ms "$HEARTBEAT_MARKER")"
+    (( HEARTBEAT_AGE_MS <= HEARTBEAT_STALE_AFTER_MS ))
 }
 
 readiness_is_new() {
-    local current="$1" baseline="$2"
-    [[ -n "$current" && "$current" != "$baseline" ]]
+    [[ -n "$1" && "$1" != "$2" ]]
 }
 
-marker_mtime() {
-    if [[ -e "$MARKER" ]]; then
-        stat -c %Y "$MARKER" 2>/dev/null || echo 0
-    else
-        echo 0
+challenge_ready_valid() {
+    if [[ "${SYAUTH_PROXIMITY_TEST:-0}" == 1 && -n "${SYAUTH_TEST_READY:-}" ]]; then
+        [[ "$SYAUTH_TEST_READY" == 1 ]]
+        return
     fi
+    [[ -s "$READY_MARKER" ]]
+}
+
+read_rssi_sample() {
+    RSSI_RAW=""
+    RSSI_FILTERED=""
+    RSSI_SAMPLE_MS=0
+    RSSI_AGE_MS=999999999
+    [[ -r "$RSSI_STATE" ]] || return 1
+    local key value
+    while IFS='=' read -r key value; do
+        case "$key" in
+            raw) RSSI_RAW="$value" ;;
+            filtered) RSSI_FILTERED="$value" ;;
+            sample_epoch_ms) RSSI_SAMPLE_MS="$value" ;;
+        esac
+    done < "$RSSI_STATE"
+    [[ "$RSSI_FILTERED" =~ ^-?[0-9]+([.][0-9]+)?$ ]] || return 1
+    [[ "$RSSI_SAMPLE_MS" =~ ^[0-9]+$ ]] || return 1
+    RSSI_AGE_MS=$(( $(now_ms) - RSSI_SAMPLE_MS ))
+    (( RSSI_AGE_MS < 0 )) && RSSI_AGE_MS=0
+    (( RSSI_AGE_MS <= RSSI_STALE_AFTER_MS ))
+}
+
+float_add() {
+    awk -v left="$1" -v right="$2" 'BEGIN { printf "%.4f\n", left + right }'
+}
+
+float_average() {
+    awk -v sum="$1" -v count="$2" 'BEGIN { printf "%.2f\n", sum / count }'
+}
+
+float_range() {
+    awk -v low="$1" -v high="$2" 'BEGIN { printf "%.2f\n", high - low }'
+}
+
+float_delta() {
+    awk -v filtered="$1" -v baseline="$2" 'BEGIN { printf "%.2f\n", filtered - baseline }'
+}
+
+float_ge() {
+    awk -v left="$1" -v right="$2" 'BEGIN { exit !(left >= right) }'
+}
+
+float_le() {
+    awk -v left="$1" -v right="$2" 'BEGIN { exit !(left <= right) }'
+}
+
+bootstrap_baseline() {
+    local filtered="$1"
+    if (( BOOTSTRAP_COUNT == 0 )); then
+        BOOTSTRAP_MIN="$filtered"
+        BOOTSTRAP_MAX="$filtered"
+    else
+        float_le "$filtered" "$BOOTSTRAP_MIN" && BOOTSTRAP_MIN="$filtered"
+        float_ge "$filtered" "$BOOTSTRAP_MAX" && BOOTSTRAP_MAX="$filtered"
+    fi
+    BOOTSTRAP_SUM="$(float_add "$BOOTSTRAP_SUM" "$filtered")"
+    BOOTSTRAP_COUNT=$((BOOTSTRAP_COUNT + 1))
+
+    if (( BOOTSTRAP_COUNT < BASELINE_BOOTSTRAP_SAMPLES )); then
+        return
+    fi
+
+    local range
+    range="$(float_range "$BOOTSTRAP_MIN" "$BOOTSTRAP_MAX")"
+    if float_le "$range" "$BASELINE_BOOTSTRAP_MAX_RANGE_DB"; then
+        BASELINE="$(float_average "$BOOTSTRAP_SUM" "$BOOTSTRAP_COUNT")"
+        BOOTSTRAP_COUNT=0
+        BOOTSTRAP_SUM=0
+        BOOTSTRAP_MIN=0
+        BOOTSTRAP_MAX=0
+        save_config || true
+    else
+        BOOTSTRAP_COUNT=1
+        BOOTSTRAP_SUM="$filtered"
+        BOOTSTRAP_MIN="$filtered"
+        BOOTSTRAP_MAX="$filtered"
+    fi
+}
+
+update_near_baseline() {
+    local filtered="$1" delta="$2" near_delta
+    near_delta="$(profile_value "$PROFILE" near_delta)"
+    if float_ge "$delta" "$near_delta"; then
+        BASELINE="$(awk -v old="$BASELINE" -v sample="$filtered" -v alpha="$BASELINE_ALPHA_PERCENT" 'BEGIN { printf "%.2f\n", old * (100 - alpha) / 100 + sample * alpha / 100 }')"
+        save_config || true
+    fi
+}
+
+candidate_state() {
+    local delta="$1" far_delta near_delta
+    far_delta="$(profile_value "$PROFILE" far_delta)"
+    near_delta="$(profile_value "$PROFILE" near_delta)"
+    if float_le "$delta" "$far_delta"; then
+        printf '%s\n' FAR
+    elif float_ge "$delta" "$near_delta"; then
+        printf '%s\n' NEAR
+    else
+        printf '%s\n' MID
+    fi
+}
+
+transition_persistence_ms() {
+    case "$1" in
+        FAR) printf '%s\n' "$(( $(profile_value "$PROFILE" far_persistence) * 1000 ))" ;;
+        NEAR) printf '%s\n' "$(( $(profile_value "$PROFILE" near_persistence) * 1000 ))" ;;
+        MID) printf '%s\n' "$(( MID_PERSISTENCE_SECONDS * 1000 ))" ;;
+        *) printf '%s\n' 0 ;;
+    esac
+}
+
+apply_candidate() {
+    local candidate="$1" now="$2" required
+    STATE_CHANGED=0
+    if [[ "$candidate" == "$PROXIMITY_STATE" ]]; then
+        PENDING_STATE=""
+        PENDING_SINCE_MS=0
+        return
+    fi
+    if [[ "$PENDING_STATE" != "$candidate" ]]; then
+        PENDING_STATE="$candidate"
+        PENDING_SINCE_MS="$now"
+        return
+    fi
+    required="$(transition_persistence_ms "$candidate")"
+    if (( now - PENDING_SINCE_MS < required )); then
+        return
+    fi
+    PROXIMITY_STATE="$candidate"
+    PENDING_STATE=""
+    PENDING_SINCE_MS=0
+    STATE_CHANGED=1
+    if [[ "$candidate" == ABSENT && "$LOCK_REASON" == PROXIMITY ]]; then
+        AUTO_AUTH_SENT=0
+    fi
+}
+
+process_rssi() {
+    local now="$1" delta candidate
+    STATE_CHANGED=0
+    read_rssi_sample || return 0
+    (( RSSI_SAMPLE_MS <= LAST_SAMPLE_MS )) && return 0
+    LAST_SAMPLE_MS="$RSSI_SAMPLE_MS"
+
+    if [[ -z "$BASELINE" ]]; then
+        bootstrap_baseline "$RSSI_FILTERED"
+        PROXIMITY_STATE="NEAR"
+        PENDING_STATE=""
+        PENDING_SINCE_MS=0
+        return
+    fi
+
+    delta="$(float_delta "$RSSI_FILTERED" "$BASELINE")"
+    candidate="$(candidate_state "$delta")"
+    [[ "$candidate" == NEAR && "$PROXIMITY_STATE" == NEAR ]] && update_near_baseline "$RSSI_FILTERED" "$delta"
+    apply_candidate "$candidate" "$now"
 }
 
 session_id() {
-    loginctl show-user "$USER_NAME" -p Display --value 2>/dev/null | head -n1
+    local user_name="${USER:-$(id -un)}"
+    loginctl show-user "$user_name" -p Display --value 2>/dev/null | head -n1
 }
 
-is_locked() {
+session_is_locked() {
     local sid="$1"
-    [[ "$(loginctl show-session "$sid" -p LockedHint --value 2>/dev/null)" == "yes" ]]
+    [[ "$(loginctl show-session "$sid" -p LockedHint --value 2>/dev/null)" == yes ]]
 }
 
-publish_marker() {
-    if [[ -e "$MARKER" ]]; then
-        touch -r "$MARKER" "$PUBLIC_MARKER" 2>/dev/null || true
-        chmod 0644 "$PUBLIC_MARKER" 2>/dev/null || true
-    else
-        rm -f "$PUBLIC_MARKER" 2>/dev/null || true
+lock_session() {
+    local sid="$1"
+    if [[ "${SYAUTH_PROXIMITY_TEST:-0}" == 1 ]]; then
+        printf 'LOCK\n' >> "${SYAUTH_TEST_ACTION_LOG:?}"
+        SYAUTH_TEST_LOCKED=1
+        return 0
+    fi
+    loginctl lock-session "$sid"
+}
+
+request_auto_auth() {
+    if [[ "${SYAUTH_PROXIMITY_TEST:-0}" == 1 ]]; then
+        printf 'AUTH\n' >> "${SYAUTH_TEST_ACTION_LOG:?}"
+        return "${SYAUTH_TEST_AUTH_RC:-0}"
+    fi
+    command -v dms >/dev/null 2>&1 || return 1
+    dms ipc call syauth phoneReturned >/dev/null 2>&1
+}
+
+mark_manual_lock() {
+    [[ "$LOCK_REASON" == PROXIMITY ]] && return
+    LOCK_REASON=MANUAL_OR_OTHER
+    LOCK_ISSUED=0
+    AUTO_AUTH_SENT=0
+}
+
+request_proximity_lock() {
+    local sid="$1"
+    (( LOCK_ISSUED == 1 )) && return
+    if lock_session "$sid"; then
+        LOCK_ISSUED=1
+        LOCK_REASON=PROXIMITY
+        AUTO_AUTH_SENT=0
+        log "proximity lock requested state=$PROXIMITY_STATE"
     fi
 }
 
-# Stato iniziale: MAI bloccare finché non abbiamo visto
-# almeno un heartbeat telefono reale.
-now=$(date +%s)
-mtime=$(marker_mtime)
-
-if (( mtime > 0 )); then
-    age=$((now - mtime))
-    (( age < 0 )) && age=0
-
-    if (( age <= ABSENT_AFTER )); then
-        seen_presence=1
-        was_present=1
-        last_seen_epoch=$mtime
-        publish_marker
-        log "startup: telefono presente age=${age}s"
+maybe_auto_auth() {
+    (( STATE_CHANGED == 1 )) || return
+    [[ "$PROXIMITY_STATE" == NEAR ]] || return
+    [[ "$LOCK_REASON" == PROXIMITY ]] || return
+    (( AUTO_AUTH_SENT == 0 )) || return
+    heartbeat_valid || return
+    challenge_ready_valid || return
+    AUTO_AUTH_SENT=1
+    if request_auto_auth; then
+        log "proximity return biometric request sent"
     else
-        log "startup: attendo heartbeat telefono"
+        log "proximity return biometric request failed"
     fi
-else
-    log "startup: attendo heartbeat telefono"
-fi
+}
+
+engine_initialize() {
+    load_config
+    load_runtime
+    if [[ "$PROXIMITY_STATE" == FAR && "$LOCK_ISSUED" == 0 ]]; then
+        PROXIMITY_STATE=MID
+        PENDING_STATE=""
+        PENDING_SINCE_MS=0
+    fi
+    if heartbeat_valid; then
+        SEEN_PRESENCE=1
+    else
+        SEEN_PRESENCE=0
+    fi
+    local sid
+    sid="$(session_id)"
+    if [[ -n "$sid" ]] && session_is_locked "$sid" && [[ "$LOCK_REASON" == PROXIMITY && "$PROXIMITY_STATE" == NEAR ]]; then
+        AUTO_AUTH_SENT=1
+    fi
+    save_runtime || true
+}
+
+engine_tick() {
+    load_config
+    load_runtime
+    local now sid locked
+    now="$(now_ms)"
+    sid="$(session_id)"
+    locked=0
+    if [[ -n "$sid" ]] && session_is_locked "$sid"; then
+        locked=1
+    else
+        LOCK_REASON=MANUAL_OR_OTHER
+        LOCK_ISSUED=0
+        AUTO_AUTH_SENT=0
+    fi
+
+    if (( ENABLED == 0 )); then
+        save_runtime || true
+        return
+    fi
+
+    if ! heartbeat_valid; then
+        if (( SEEN_PRESENCE == 1 )); then
+            if [[ "$PROXIMITY_STATE" != ABSENT ]]; then
+                PROXIMITY_STATE=ABSENT
+                PENDING_STATE=""
+                PENDING_SINCE_MS=0
+                STATE_CHANGED=1
+                [[ "$LOCK_REASON" == PROXIMITY ]] && AUTO_AUTH_SENT=0
+            fi
+            if (( locked == 0 )) && [[ -n "$sid" ]]; then
+                request_proximity_lock "$sid"
+            fi
+        else
+            PROXIMITY_STATE=ABSENT
+        fi
+        save_runtime || true
+        return
+    fi
+
+    SEEN_PRESENCE=1
+    process_rssi "$now"
+
+    if (( locked == 0 )); then
+        if [[ "$PROXIMITY_STATE" == FAR && "$STATE_CHANGED" == 1 && -n "$sid" ]]; then
+            request_proximity_lock "$sid"
+        fi
+    else
+        if [[ "$LOCK_REASON" != PROXIMITY ]]; then
+            mark_manual_lock
+        else
+            maybe_auto_auth || true
+        fi
+    fi
+    save_runtime || true
+}
+
+status_cmd() {
+    load_config
+    load_runtime
+    local baseline_ready=no
+    [[ -n "$BASELINE" ]] && baseline_ready=yes
+    printf 'enabled=%s\n' "$ENABLED"
+    printf 'state=%s\n' "$PROXIMITY_STATE"
+    printf 'profile=%s\n' "$(profile_label "$PROFILE")"
+    printf 'profile_id=%s\n' "$PROFILE"
+    printf 'baseline_ready=%s\n' "$baseline_ready"
+    printf 'lock_reason=%s\n' "$LOCK_REASON"
+}
+
+diagnostics_cmd() {
+    load_config
+    load_runtime
+    read_rssi_sample || true
+    HEARTBEAT_AGE_MS="$(marker_age_ms "$HEARTBEAT_MARKER")"
+    local delta="n/a"
+    if [[ -n "$BASELINE" && -n "$RSSI_FILTERED" ]]; then
+        delta="$(float_delta "$RSSI_FILTERED" "$BASELINE")"
+    fi
+    printf 'RSSI raw: %s dBm\n' "${RSSI_RAW:-n/a}"
+    printf 'RSSI filtered: %s dBm\n' "${RSSI_FILTERED:-n/a}"
+    printf 'baseline: %s\n' "${BASELINE:-n/a}"
+    printf 'delta: %s dB\n' "$delta"
+    printf 'sample age: %s ms\n' "$RSSI_AGE_MS"
+    printf 'proximity state: %s\n' "$PROXIMITY_STATE"
+    printf 'heartbeat age: %s ms\n' "$HEARTBEAT_AGE_MS"
+    printf 'challenge-ready: %s\n' "$(challenge_ready_valid && echo yes || echo no)"
+    printf 'lock reason: %s\n' "$LOCK_REASON"
+}
+
+set_profile_cmd() {
+    local profile="${1:-}"
+    profile_valid "$profile" || {
+        echo "Profilo non valido: $profile" >&2
+        return 2
+    }
+    load_config
+    PROFILE="$profile"
+    save_config
+}
+
+set_enabled_cmd() {
+    local enabled="$1"
+    load_config
+    ENABLED="$enabled"
+    save_config
+}
+
+reset_cmd() {
+    load_config
+    BASELINE=""
+    save_config
+    rm -f "$RUNTIME_STATE"
+}
 
 if [[ "${SYAUTH_PROXIMITY_TEST:-0}" == 1 ]]; then
     return 0 2>/dev/null || exit 0
 fi
 
-while sleep "$CHECK_INTERVAL"; do
-    now=$(date +%s)
-    mtime=$(marker_mtime)
-
-    if (( mtime > 0 )); then
-        age=$((now - mtime))
-        (( age < 0 )) && age=0
-
-        publish_marker
-
-        if (( age <= ABSENT_AFTER )); then
-            last_seen_epoch=$mtime
-
-            if (( seen_presence == 0 )); then
-                seen_presence=1
-                was_present=1
-                log "primo heartbeat acquisito age=${age}s"
-                continue
-            fi
-
-            if (( was_present == 0 )); then
-                was_present=1
-                biometric_requested=0
-                log "telefono tornato age=${age}s readiness_baseline=${saved_ready_token:-none}"
-            fi
-
-            # Qualunque sessione bloccata può richiedere biometria:
-            # sia lock proximity sia lock manuale/scorciatoia.
-            sid=$(session_id)
-
-            if [[ -n "$sid" ]] && is_locked "$sid"; then
-                if (( biometric_requested == 0 )); then
-                    ready_token=$(marker_token)
-                    if ! readiness_is_new "$ready_token" "$saved_ready_token"; then
-                        continue
-                    fi
-                    sleep "$RETURN_DELAY"
-
-                    now2=$(date +%s)
-                    mtime2=$(marker_mtime)
-
-                    if (( mtime2 > 0 )); then
-                        age2=$((now2 - mtime2))
-                        (( age2 < 0 )) && age2=0
-
-                        ready_token=$(marker_token)
-                        if (( age2 <= ABSENT_AFTER )) && is_locked "$sid" && readiness_is_new "$ready_token" "$saved_ready_token"; then
-                            if command -v dms >/dev/null 2>&1; then
-                                if dms ipc call syauth phoneReturned >/dev/null 2>&1; then
-                                    biometric_requested=1
-                                    locked_by_proximity=0
-                                    log "richiesta biometrica inviata: sessione bloccata e telefono presente"
-                                else
-                                    log "ERRORE: richiesta biometrica DMS fallita"
-                                fi
-                            else
-                                log "ERRORE: comando dms non trovato"
-                            fi
-                        fi
-                    fi
-                fi
-            else
-                # Nuovo ciclo di lock: permetti una nuova richiesta biometrica.
-                biometric_requested=0
-            fi
-
-            continue
+case "${1:-run}" in
+    run)
+        engine_initialize
+        while sleep "$CHECK_INTERVAL_SECONDS"; do
+            engine_tick
+        done
+        ;;
+    status)
+        status_cmd
+        ;;
+    diagnostics)
+        diagnostics_cmd
+        ;;
+    profile)
+        if [[ $# -eq 1 ]]; then
+            load_config
+            printf '%s\n' "$PROFILE"
+        else
+            set_profile_cmd "$2"
         fi
-
-        if (( seen_presence == 1 && was_present == 1 )); then
-            was_present=0
-            biometric_requested=0
-            saved_ready_token=$(marker_token)
-            log "heartbeat realmente perso age=${age}s readiness_baseline=${saved_ready_token:-none}"
-        fi
-
-    else
-        rm -f "$PUBLIC_MARKER" 2>/dev/null || true
-
-        # IMPORTANTE:
-        # marker sparito != telefono assente da infinito.
-        # Conserviamo last_seen_epoch.
-        if (( seen_presence == 1 && was_present == 1 )); then
-            was_present=0
-            biometric_requested=0
-            saved_ready_token=$(marker_token)
-            log "marker temporaneamente assente; readiness_baseline=${saved_ready_token:-none}"
-        fi
-    fi
-
-    if (( seen_presence == 1 &&
-          was_present == 0 &&
-          last_seen_epoch > 0 &&
-          locked_by_proximity == 0 )); then
-
-        absent_for=$((now - last_seen_epoch))
-        (( absent_for < 0 )) && absent_for=0
-
-        if (( absent_for >= LOCK_AFTER )); then
-            sid=$(session_id)
-
-            if [[ -n "$sid" ]] && ! is_locked "$sid"; then
-                log "telefono assente da ${absent_for}s: blocco sessione $sid"
-                loginctl lock-session "$sid"
-
-                if [[ $? -eq 0 ]]; then
-                    locked_by_proximity=1
-                fi
-            fi
-        fi
-    fi
-done
+        ;;
+    enable)
+        set_enabled_cmd 1
+        ;;
+    disable)
+        set_enabled_cmd 0
+        ;;
+    reset)
+        reset_cmd
+        ;;
+    *)
+        echo "Uso: syauth-proximity {run|status|diagnostics|profile [near|balanced|wide]|enable|disable|reset}" >&2
+        exit 64
+        ;;
+esac
