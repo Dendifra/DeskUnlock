@@ -142,6 +142,31 @@ test_far_persistence_locks_once() {
     grep -Fx 'lock_reason=PROXIMITY' "$RUNTIME_STATE" >/dev/null || fail "proximity lock reason missing"
 }
 
+test_proximity_lock_reason_starts_proximity() {
+    far_lock
+    assert_eq PROXIMITY "$LOCK_REASON" "proximity lock provenance"
+}
+
+test_proximity_lock_reason_survives_pending_locked_tick() {
+    far_lock
+    LOCK_ISSUED=$LOCK_REQUEST_PENDING
+    LOCK_REASON=PROXIMITY
+    SYAUTH_TEST_LOCKED=0
+    save_runtime
+    engine_tick
+    assert_eq PROXIMITY "$LOCK_REASON" "pending lock provenance"
+    SYAUTH_TEST_LOCKED=1
+    engine_tick
+    assert_eq PROXIMITY "$LOCK_REASON" "observed lock provenance"
+}
+
+test_proximity_lock_reason_survives_multiple_locked_ticks() {
+    far_lock
+    engine_tick
+    engine_tick
+    assert_eq PROXIMITY "$LOCK_REASON" "multiple locked tick provenance"
+}
+
 test_stale_rssi_with_heartbeat_does_not_become_far() {
     bootstrap_near
     rm -f "$RSSI_STATE"
@@ -174,6 +199,18 @@ test_proximity_return_sends_one_auth() {
     tick_sample -53 4000
     assert_eq 2 "$(actions)" "proximity return action count"
     assert_eq 1 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG")" "proximity return auth"
+    assert_eq PROXIMITY "$LOCK_REASON" "return proximity provenance"
+}
+
+test_mid_to_near_return_sends_one_auth() {
+    far_lock
+    tick_sample -58 1000
+    tick_sample -58 2000
+    assert_eq MID "$PROXIMITY_STATE" "return MID state"
+    tick_sample -53 1000
+    tick_sample -53 4000
+    assert_eq NEAR "$PROXIMITY_STATE" "return NEAR state"
+    assert_eq 1 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG")" "MID to NEAR auth"
 }
 
 test_return_waits_for_late_challenge_ready() {
@@ -234,6 +271,16 @@ test_manual_lock_near_does_not_auto_auth() {
     engine_tick
     assert_eq MANUAL_OR_OTHER "$LOCK_REASON" "manual lock reason"
     assert_no_actions "manual lock near"
+}
+
+test_unlock_resets_proximity_provenance() {
+    far_lock
+    engine_tick
+    SYAUTH_TEST_LOCKED=0
+    engine_tick
+    assert_eq MANUAL_OR_OTHER "$LOCK_REASON" "unlock lock reason reset"
+    assert_eq "$LOCK_NOT_ISSUED" "$LOCK_ISSUED" "unlock issued reset"
+    assert_eq 0 "$AUTO_AUTH_SENT" "unlock auth reset"
 }
 
 test_manual_lock_explicit_trigger_remains_dms_owned() {
@@ -367,16 +414,21 @@ tests=(
     test_single_weak_spike_does_not_become_far
     test_mid_hysteresis_avoids_flap
     test_far_persistence_locks_once
+    test_proximity_lock_reason_starts_proximity
+    test_proximity_lock_reason_survives_pending_locked_tick
+    test_proximity_lock_reason_survives_multiple_locked_ticks
     test_stale_rssi_with_heartbeat_does_not_become_far
     test_lost_heartbeat_becomes_absent_and_locks
     test_proximity_lock_reason_is_runtime_only
     test_proximity_return_sends_one_auth
+    test_mid_to_near_return_sends_one_auth
     test_return_waits_for_late_challenge_ready
     test_return_waits_for_late_heartbeat
     test_phone_remaining_near_does_not_spam
     test_denied_auth_has_no_retry
     test_timeout_auth_has_no_retry
     test_manual_lock_near_does_not_auto_auth
+    test_unlock_resets_proximity_provenance
     test_manual_lock_explicit_trigger_remains_dms_owned
     test_auth_cancellation_guards_remain_present
     test_no_late_notification_contract_remains_present
