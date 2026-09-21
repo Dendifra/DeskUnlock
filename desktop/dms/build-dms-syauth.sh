@@ -14,15 +14,15 @@ git -C "$work/DankMaterialShell" submodule update --init --recursive --quiet
 
 pam="$work/DankMaterialShell/quickshell/Modules/Lock/Pam.qml"
 lock_screen="$work/DankMaterialShell/quickshell/Modules/Lock/LockScreenContent.qml"
-lock_qml="$work/DankMaterialShell/quickshell/Modules/Lock/Lock.qml"
+lock_surface="$work/DankMaterialShell/quickshell/Modules/Lock/LockSurface.qml"
 
-python3 - "$pam" "$lock_screen" "$lock_qml" <<'PY'
+python3 - "$pam" "$lock_screen" "$lock_surface" <<'PY'
 from pathlib import Path
 import sys
 
 pam = Path(sys.argv[1])
 lock_screen = Path(sys.argv[2])
-lock_qml = Path(sys.argv[3])
+lock_surface = Path(sys.argv[3])
 s = pam.read_text(encoding="utf-8")
 
 needle_state = "    property bool unlockInProgress: false\n"
@@ -93,6 +93,7 @@ syauth_block = """    function requestSyauthAuth(source: string, explicit: bool)
                 }
                 return;
             }
+            root.syauthAvailable = false;
             console.log(\"DeskUnlock auth generation denied\");
             // A later deliberate local edge may start a new generation.
         }
@@ -106,6 +107,7 @@ syauth_block = """    function requestSyauthAuth(source: string, explicit: bool)
             if (root.syauthAuthState !== \"AUTH_IN_FLIGHT\")
                 return;
             root.syauthAuthState = \"AUTH_CONSUMED\";
+            root.syauthAvailable = false;
             if (syauth.active)
                 syauth.abort();
             console.log(\"DeskUnlock auth generation timeout\");
@@ -139,7 +141,8 @@ needle_lock = """        fprint.checkAvail();
 if needle_lock not in s:
     raise SystemExit("Pam.qml layout mismatch: lock anchor not found")
 
-replacement_lock = """        fprint.checkAvail();
+replacement_lock = """        root.syauthAvailable = true;
+        fprint.checkAvail();
         u2f.checkAvail();
 """
 s = s.replace(needle_lock, replacement_lock, 1)
@@ -167,84 +170,67 @@ s = s.replace(needle_unlock, """        if (!lockSecured) {
 
 pam.write_text(s, encoding="utf-8")
 
-lock = lock_qml.read_text(encoding="utf-8")
-needle_lock_state = "    property bool lockWakeAllowed: false\n"
-if needle_lock_state not in lock:
-    raise SystemExit("Lock.qml layout mismatch: wake state anchor not found")
-lock = lock.replace(needle_lock_state, needle_lock_state + "    property bool localReengagementSent: false\n", 1)
+surface = lock_surface.read_text(encoding="utf-8")
+needle_surface_state = "    required property bool isLocked\n"
+if needle_surface_state not in surface:
+    raise SystemExit("LockSurface.qml layout mismatch: lock state anchor not found")
+surface = surface.replace(needle_surface_state, needle_surface_state + "    property bool pointerReengagementSent: false\n", 1)
 
-needle_secure = """        function onSecureChanged() {
-            notifyLockedHint(sessionLock.secure);
-            if (!sessionLock.secure)
-                return;
+needle_surface_keys = """    Keys.onPressed: event => {
+        if (videoScreensaver.active && videoScreensaver.inputEnabled) {
+            videoScreensaver.dismiss();
+            event.accepted = true;
+        }
+    }
 """
-if needle_secure not in lock:
-    raise SystemExit("Lock.qml layout mismatch: secure edge anchor not found")
-lock = lock.replace(needle_secure, """        function onSecureChanged() {
-            notifyLockedHint(sessionLock.secure);
-            if (!sessionLock.secure)
-                return;
-            localReengagementSent = false;
+if needle_surface_keys not in surface:
+    raise SystemExit("LockSurface.qml layout mismatch: key event anchor not found")
+surface = surface.replace(needle_surface_keys, """    Keys.onPressed: event => {
+        if (videoScreensaver.active && videoScreensaver.inputEnabled) {
+            videoScreensaver.dismiss();
+            event.accepted = true;
+        }
+        if (root.isLocked)
+            root.pam.requestSyauthAuth(\"local-reengagement\", true);
+    }
+""", 1)
+
+needle_surface_locked = """    onIsLockedChanged: {
+        if (isLocked) {
+            forceActiveFocus();
+"""
+if needle_surface_locked not in surface:
+    raise SystemExit("LockSurface.qml layout mismatch: lock transition anchor not found")
+surface = surface.replace(needle_surface_locked, """    onIsLockedChanged: {
+        if (isLocked) {
+            pointerReengagementSent = false;
             console.log("DeskUnlock lock epoch started");
+            forceActiveFocus();
 """, 1)
 
-needle_wake = """    MouseArea {
+needle_surface_rect = """    Rectangle {
         anchors.fill: parent
-        enabled: sessionLock.secure
-        hoverEnabled: enabled
-        onPressed: lockWakeDebounce.restart()
-        onPositionChanged: lockWakeDebounce.restart()
-        onWheel: lockWakeDebounce.restart()
+        color: \"transparent\"
     }
 """
-if needle_wake not in lock:
-    raise SystemExit("Lock.qml layout mismatch: wake input anchor not found")
-lock = lock.replace(needle_wake, """    function notifyLocalReengagement(explicit: bool): void {
-        if (!sessionLock.secure)
-            return;
-        if (!explicit && localReengagementSent)
-            return;
-        if (!explicit)
-            localReengagementSent = true;
-        console.log(\"DeskUnlock local re-engagement\");
-        sharedPam.requestSyauthAuth(\"local-reengagement\", explicit);
+if needle_surface_rect not in surface:
+    raise SystemExit("LockSurface.qml layout mismatch: surface anchor not found")
+surface = surface.replace(needle_surface_rect, """    HoverHandler {
+        enabled: root.isLocked && !videoScreensaver.active
+        onPointChanged: {
+            if (root.pointerReengagementSent)
+                return;
+            root.pointerReengagementSent = true;
+            root.pam.requestSyauthAuth(\"local-reengagement\", false);
+        }
     }
 
-    MouseArea {
+    Rectangle {
         anchors.fill: parent
-        enabled: sessionLock.secure
-        hoverEnabled: enabled
-        onPressed: {
-            lockWakeDebounce.restart();
-            root.notifyLocalReengagement(true);
-        }
-        onPositionChanged: {
-            lockWakeDebounce.restart();
-            root.notifyLocalReengagement(false);
-        }
-        onWheel: {
-            lockWakeDebounce.restart();
-            root.notifyLocalReengagement(true);
-        }
+        color: \"transparent\"
     }
 """, 1)
-
-needle_keys = """        Keys.onPressed: event => {
-            if (!sessionLock.secure)
-                return;
-            lockWakeDebounce.restart();
-        }
-"""
-if needle_keys not in lock:
-    raise SystemExit("Lock.qml layout mismatch: key wake anchor not found")
-lock = lock.replace(needle_keys, """        Keys.onPressed: event => {
-            if (!sessionLock.secure)
-                return;
-            lockWakeDebounce.restart();
-            root.notifyLocalReengagement(true);
-        }
-""", 1)
-lock_qml.write_text(lock, encoding="utf-8")
+lock_surface.write_text(surface, encoding="utf-8")
 
 ui = lock_screen.read_text(encoding="utf-8")
 needle_icon = '''                                if (pam.u2fPending)
@@ -262,6 +248,28 @@ replacement_icon = '''                                if (pam.u2fPending)
 if needle_icon not in ui:
     raise SystemExit("LockScreenContent.qml layout mismatch: lock icon anchor not found")
 ui = ui.replace(needle_icon, replacement_icon, 1)
+
+needle_feedback = """        if (pam.lockMessage && pam.lockMessage.length > 0)
+            return pam.lockMessage;
+"""
+if needle_feedback not in ui:
+    raise SystemExit("LockScreenContent.qml layout mismatch: feedback anchor not found")
+ui = ui.replace(needle_feedback, """        if (!pam.passwd.active && pam.syauthAuthState === \"AUTH_IN_FLIGHT\")
+            return \"Conferma l'impronta sul telefono\";
+        if (!pam.passwd.active && pam.syauthAuthState === \"AUTH_READY\" && pam.syauthAvailable)
+            return \"Muovi il mouse o premi un tasto per sbloccare con DeskUnlock\";
+        if (!pam.passwd.active && pam.syauthAuthState === \"AUTH_CONSUMED\" && !pam.syauthAvailable)
+            return \"Usa la password per accedere\";
+        if (pam.lockMessage && pam.lockMessage.length > 0)
+            return pam.lockMessage;
+""", 1)
+
+needle_hint = """        return pam && (pam.u2fState === \"waiting\" || pam.u2fState === \"insert\") && !pam.u2fPending;
+"""
+if needle_hint not in ui:
+    raise SystemExit("LockScreenContent.qml layout mismatch: hint anchor not found")
+ui = ui.replace(needle_hint, """        return pam && (((pam.u2fState === \"waiting\" || pam.u2fState === \"insert\") && !pam.u2fPending) || pam.syauthAuthState === \"AUTH_IN_FLIGHT\" || (pam.syauthAuthState === \"AUTH_READY\" && pam.syauthAvailable));
+""", 1)
 
 lock_screen.write_text(ui, encoding="utf-8")
 PY

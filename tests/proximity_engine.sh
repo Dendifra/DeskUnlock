@@ -553,7 +553,7 @@ test_unlock_resets_proximity_provenance() {
 test_manual_lock_explicit_trigger_remains_dms_owned() {
     grep -Fq 'function onActiveChanged' desktop/dms/build-dms-syauth.sh || fail "DMS manual trigger missing"
     grep -Fq 'passwd.active' desktop/dms/build-dms-syauth.sh || fail "DMS passwd trigger missing"
-    grep -Fq 'localReengagementSent' desktop/dms/build-dms-syauth.sh || fail "DMS local interaction one-shot missing"
+    grep -Fq 'pointerReengagementSent' desktop/dms/build-dms-syauth.sh || fail "DMS local interaction one-shot missing"
     grep -Fq 'syauth.startSyauthAuth' desktop/dms/build-dms-syauth.sh || fail "DMS explicit syauth path missing"
     grep -Fq 'root.syauthAuthState = "AUTH_READY"' desktop/dms/build-dms-syauth.sh || fail "DMS local interaction rearm missing"
     ! grep -Eiq 'key(text|code)|mouse(position|x|y)|evdev|/dev/input' desktop/dms/build-dms-syauth.sh || fail "DMS input content capture detected"
