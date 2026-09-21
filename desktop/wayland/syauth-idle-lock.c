@@ -169,7 +169,12 @@ int main(int argc, char **argv) {
         fprintf(stderr, "syauth-idle-lock: Wayland event setup failed\n");
         return 1;
     }
-    int result = wl_display_dispatch(client.display) < 0 ? 1 : 0;
+    // ext-idle-notify-v1 notifications are reusable: one object emits an
+    // idled/resumed pair for every idle cycle. Keep dispatching until the
+    // Wayland connection itself fails.
+    while (wl_display_dispatch(client.display) >= 0) {
+    }
+    int result = 1;
     ext_idle_notification_v1_destroy(client.notification);
     ext_idle_notifier_v1_destroy(client.notifier);
     wl_seat_destroy(client.seat);
