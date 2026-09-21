@@ -1,14 +1,14 @@
 pkgname=deskunlock
 pkgver=0.1.0
-pkgrel=11
+pkgrel=12
 provides=('syauth-suite=0.1.0')
 conflicts=('syauth-suite')
 replaces=('syauth-suite')
 pkgdesc='Phone-assisted Linux authentication with PAM fallback'
 arch=('x86_64')
 license=('MIT')
-depends=('bash' 'bluez' 'bluez-utils' 'dbus' 'dms-shell' 'pam' 'polkit' 'pyside6' 'python' 'systemd')
-makedepends=('cargo' 'go' 'git')
+depends=('bash' 'bluez' 'bluez-utils' 'dbus' 'dms-shell' 'pam' 'polkit' 'pyside6' 'python' 'systemd' 'wayland')
+makedepends=('cargo' 'go' 'git' 'wayland')
 source=()
 install=deskunlock.install
 
@@ -16,6 +16,13 @@ build() {
     cd "$startdir/../.."
     RUSTFLAGS="-C debuginfo=0 --remap-path-prefix=${HOME}=/usr/src" cargo build --release --workspace
     desktop/dms/build-dms-syauth.sh "$srcdir/dms-syauth"
+    wayland-scanner client-header desktop/wayland/ext-idle-notify-v1.xml "$srcdir/ext-idle-notify-v1-client-protocol.h"
+    wayland-scanner private-code desktop/wayland/ext-idle-notify-v1.xml "$srcdir/ext-idle-notify-v1-client-protocol.c"
+    cc -std=c11 -O2 -Wall -Wextra -Werror \
+        -I"$srcdir" desktop/libexec/syauth-idle-lock.c \
+        "$srcdir/ext-idle-notify-v1-client-protocol.c" \
+        $(pkg-config --cflags --libs wayland-client) \
+        -o "$srcdir/syauth-idle-lock-bin"
 }
 
 package() {
@@ -25,6 +32,8 @@ package() {
     install -Dm755 target/release/syauth-presenced "$pkgdir/usr/lib/syauth/syauth-presenced"
     install -Dm644 target/release/libpam_syauth.so "$pkgdir/usr/lib/security/pam_syauth.so"
     install -Dm755 "$srcdir/dms-syauth" "$pkgdir/usr/bin/dms-syauth"
+    install -Dm755 "$srcdir/syauth-idle-lock-bin" \
+        "$pkgdir/usr/lib/syauth/syauth-idle-lock-bin"
 
     for file in desktop/bin/*; do
         install -Dm755 "$file" "$pkgdir/usr/bin/$(basename "$file")"

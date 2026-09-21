@@ -55,6 +55,7 @@ test:
 	bash tests/proximity_readiness.sh
 	bash tests/rssi_status.sh
 	bash tests/proximity_engine.sh
+	bash tests/idle_lock.sh
 
 # Run all tests with verbose output.
 .PHONY: testv

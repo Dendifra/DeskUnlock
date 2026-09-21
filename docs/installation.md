@@ -67,6 +67,20 @@ I campioni RSSI e lo stato operativo restano in `XDG_RUNTIME_DIR`; la configuraz
 syauth-proximity reset
 ```
 
+## Blocco per inattività
+
+Il blocco inattività è configurabile dalla scheda **Inattività** della GUI: è attivo di default dopo 10 minuti, con intervallo da 1 a 120 minuti. La configurazione locale è `~/.config/syauth/idle.conf` e non contiene identità del dispositivo o storico RSSI.
+
+Il servizio usa gli eventi Wayland `ext-idle-notify-v1`, senza polling degli input. Questo è il percorso condiviso per compositori compatibili come KDE/KWin e Niri; quando il protocollo non è esposto, il servizio non esegue un blocco alternativo. Il blocco passa dal normale lock di sessione (`loginctl`), quindi lo sblocco conserva il percorso manuale: interazione locale, challenge biometrica, DeskUnlock e PAM.
+
+Per diagnostica/configurazione da terminale:
+
+```bash
+syauth-idle-lock status
+syauth-idle-lock minutes 15
+syauth-idle-lock disable
+```
+
 ## Other distributions
 
 Debian, Fedora, openSUSE and other distributions are contribution targets. They are not yet claimed as supported.

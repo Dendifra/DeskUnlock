@@ -50,12 +50,14 @@ activate_core() {
         syauth-presenced.service \
         syauth-proximity.service \
         syauth-reconcile.path \
+        syauth-idle-lock.service \
         >/dev/null
 
     systemctl --user start --no-block \
         syauth-presenced.service \
         syauth-proximity.service \
-        syauth-reconcile.path
+        syauth-reconcile.path \
+        syauth-idle-lock.service
 
     echo "Servizi core Syauth attivati."
 }

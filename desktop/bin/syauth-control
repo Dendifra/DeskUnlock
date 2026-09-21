@@ -37,6 +37,7 @@ off_cmd() {
     systemctl --user stop syauth-reconcile.service >/dev/null 2>&1 || true
     systemctl --user disable --now syauth-proximity.service >/dev/null 2>&1 || true
     systemctl --user disable --now syauth-presenced.service >/dev/null 2>&1 || true
+    systemctl --user disable --now syauth-idle-lock.service >/dev/null 2>&1 || true
 
     rm -f /run/syauth/gatt.ready /run/syauth/presence.last 2>/dev/null || true
 
@@ -50,6 +51,7 @@ on_cmd() {
     systemctl --user enable syauth-presenced.service >/dev/null
     systemctl --user enable syauth-proximity.service >/dev/null
     systemctl --user enable syauth-reconcile.path >/dev/null
+    systemctl --user enable syauth-idle-lock.service >/dev/null
 
     if ! systemctl --user start syauth-presenced.service; then
         echo "Syauth ON fallito: presenced"
@@ -65,6 +67,7 @@ on_cmd() {
         exit 1
     fi
 
+    systemctl --user start syauth-idle-lock.service >/dev/null 2>&1 || true
     echo "Syauth: ON"
 }
 

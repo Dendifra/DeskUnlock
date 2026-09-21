@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="ext_idle_notify_v1">
+  <interface name="ext_idle_notifier_v1" version="1">
+    <description summary="idle notification">
+      This interface allows clients to get notified when the user is idle.
+    </description>
+    <request name="destroy" type="destructor"/>
+    <request name="get_idle_notification">
+      <arg name="id" type="new_id" interface="ext_idle_notification_v1"/>
+      <arg name="timeout" type="uint"/>
+      <arg name="seat" type="object" interface="wl_seat"/>
+    </request>
+  </interface>
+  <interface name="ext_idle_notification_v1" version="1">
+    <description summary="idle notification object"/>
+    <event name="idled"/>
+    <event name="resumed"/>
+    <request name="destroy" type="destructor"/>
+  </interface>
+</protocol>
