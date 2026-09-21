@@ -161,7 +161,6 @@ s = s.replace(needle_unlock, """        if (!lockSecured) {
             syauthTimeout.stop();
             if (syauth.active) {
                 syauth.abort();
-                console.log("DeskUnlock auth generation cancelled");
             }
             root.resetAuthFlows();
             return;
@@ -174,7 +173,7 @@ surface = lock_surface.read_text(encoding="utf-8")
 needle_surface_state = "    required property bool isLocked\n"
 if needle_surface_state not in surface:
     raise SystemExit("LockSurface.qml layout mismatch: lock state anchor not found")
-surface = surface.replace(needle_surface_state, needle_surface_state + "    property bool pointerReengagementSent: false\n    property bool pointerSurfaceReady: false\n    property bool suppressInitialPointerSync: false\n", 1)
+surface = surface.replace(needle_surface_state, needle_surface_state + "    property bool pointerReengagementSent: false\n    property bool pointerSurfaceReady: false\n    property bool suppressInitialPointerSync: false\n    property bool pointerBaselineValid: false\n    property real pointerBaselineX: 0\n    property real pointerBaselineY: 0\n", 1)
 
 needle_surface_keys = """    Keys.onPressed: event => {
         if (videoScreensaver.active && videoScreensaver.inputEnabled) {
@@ -204,7 +203,7 @@ if needle_surface_locked not in surface:
 surface = surface.replace(needle_surface_locked, """    onIsLockedChanged: {
         if (isLocked) {
             pointerReengagementSent = false;
-            console.log("DeskUnlock lock epoch started");
+            pointerBaselineValid = false;
             forceActiveFocus();
 """, 1)
 
@@ -216,14 +215,27 @@ needle_surface_rect = """    Rectangle {
 if needle_surface_rect not in surface:
     raise SystemExit("LockSurface.qml layout mismatch: surface anchor not found")
 surface = surface.replace(needle_surface_rect, """    HoverHandler {
+        id: pointerHandler
         enabled: root.isLocked && !videoScreensaver.active
         onPointChanged: {
             if (!root.pointerSurfaceReady)
                 return;
-            if (root.suppressInitialPointerSync) {
+            const position = pointerHandler.point.position;
+            if (!root.pointerBaselineValid) {
+                root.pointerBaselineX = position.x;
+                root.pointerBaselineY = position.y;
+                root.pointerBaselineValid = true;
                 root.suppressInitialPointerSync = false;
                 return;
             }
+            const moved = position.x !== root.pointerBaselineX || position.y !== root.pointerBaselineY;
+            root.pointerBaselineX = position.x;
+            root.pointerBaselineY = position.y;
+            if (!moved) {
+                root.suppressInitialPointerSync = false;
+                return;
+            }
+            root.suppressInitialPointerSync = false;
             if (root.pointerReengagementSent)
                 return;
             root.pointerReengagementSent = true;

@@ -9,10 +9,14 @@ contains() { grep -Fq "$1" "$2" || fail "$3"; }
 contains 'pointerReengagementSent' "$script" 'lock-surface pointer one-shot is missing'
 contains 'pointerSurfaceReady' "$script" 'pointer initialization state is missing'
 contains 'suppressInitialPointerSync' "$script" 'synthetic pointer suppression is missing'
+contains 'pointerBaselineValid' "$script" 'pointer baseline state is missing'
+contains 'pointerBaselineX' "$script" 'pointer baseline X is missing'
+contains 'pointerBaselineY' "$script" 'pointer baseline Y is missing'
+contains 'pointerHandler.point.position' "$script" 'stable HandlerPoint coordinate is missing'
+contains 'const moved = position.x !== root.pointerBaselineX || position.y !== root.pointerBaselineY' "$script" 'pointer delta comparison is missing'
 contains 'if (!root.pointerSurfaceReady)' "$script" 'pre-initialization pointer guard is missing'
-contains 'if (root.suppressInitialPointerSync)' "$script" 'initial pointer snapshot guard is missing'
+contains 'if (!moved)' "$script" 'unchanged pointer snapshot guard is missing'
 contains 'LockSurface.qml' "$script" 'runtime lock surface is missing'
-contains 'lock epoch started' "$script" 'lock epoch log is missing'
 contains 'startSyauthAuth' "$script" 'central auth entry point is missing'
 contains 'authGeneration' "$script" 'auth generation is missing'
 contains 'AUTH_IN_FLIGHT' "$script" 'single-flight state is missing'
@@ -24,7 +28,6 @@ contains 'stale generation response ignored' "$script" 'stale response guard is 
 contains 'auth generation success' "$script" 'success lifecycle log is missing'
 contains 'auth generation denied' "$script" 'denied lifecycle log is missing'
 contains 'auth generation timeout' "$script" 'timeout lifecycle log is missing'
-contains 'auth generation cancelled' "$script" 'cancel lifecycle log is missing'
 contains 'onPointChanged' "$script" 'pointer wake edge is missing'
 contains 'Keys.onPressed' "$script" 'keyboard wake edge is missing'
 contains 'syauth.startSyauthAuth' "$script" 'central auth path is not wired'
@@ -41,12 +44,19 @@ from pathlib import Path
 import sys
 s = Path(sys.argv[1]).read_text(encoding="utf-8")
 guard = s.index('if (!root.pointerSurfaceReady)')
-synthetic = s.index('if (root.suppressInitialPointerSync)', guard)
-request = s.index('requestSyauthAuth(\\"local-reengagement\\", false)', synthetic)
-if not guard < synthetic < request:
-    raise SystemExit('pointer initialization guard must precede local auth request')
+synthetic = s.index('const moved = position.x !== root.pointerBaselineX || position.y !== root.pointerBaselineY', guard)
+unchanged = s.index('if (!moved)', synthetic)
+request = s.index('requestSyauthAuth(\\"local-reengagement\\", false)', unchanged)
+if not guard < synthetic < unchanged < request:
+    raise SystemExit('pointer baseline comparison must precede local auth request')
 if 'suppressInitialPointerSync = root.isLocked' not in s:
     raise SystemExit('initial suppression must be scoped to surface creation')
+if 'pointerBaselineValid = false;' not in s:
+    raise SystemExit('lock epochs must invalidate the pointer baseline')
+if 'capturePointerBaseline();' in s:
+    raise SystemExit('baseline must be initialized by the first point callback')
+if s.count('id: pointerHandler') != 1:
+    raise SystemExit('pointer handler must remain per LockSurface instance')
 print('Idle local re-engagement regression checks: ok')
 PY
 contains 'same locked session' "$script" 'single-flight contract is missing'
