@@ -87,7 +87,7 @@ def get_syauth_state():
 
     last_unlock = "Mai"
 
-    match = re.search(r"last-unlock:\s+(.+)", status)
+    match = re.search(r"last-successful-unlock:\s+(.+)", status)
 
     if match:
         raw = match.group(1).strip()
