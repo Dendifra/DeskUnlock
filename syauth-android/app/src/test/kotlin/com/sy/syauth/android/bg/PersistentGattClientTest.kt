@@ -144,6 +144,53 @@ private fun shadowGattAddService(
 class PersistentGattClientTest {
 
     @Test
+    fun rssi_gate_requires_ready_and_allows_only_one_read() {
+        val gate = GattOperationGate()
+        assertEquals(false, gate.tryBeginRssi())
+        gate.markReady()
+        assertEquals(true, gate.tryBeginRssi())
+        assertEquals(false, gate.tryBeginRssi())
+        gate.finishRssi()
+        assertEquals(true, gate.tryBeginRssi())
+    }
+
+    @Test
+    fun rssi_gate_skips_when_write_is_in_flight_and_resets_on_disconnect() {
+        val gate = GattOperationGate()
+        gate.markReady()
+        assertEquals(GattWriteDecision.Start, gate.requestWrite(byteArrayOf(1), diagnostic = true))
+        assertEquals(false, gate.tryBeginRssi())
+        assertEquals(GattWriteDecision.Queued, gate.requestWrite(byteArrayOf(2), diagnostic = false))
+        gate.markNotReady()
+        assertEquals(false, gate.tryBeginRssi())
+        gate.markReady()
+        assertEquals(true, gate.tryBeginRssi())
+    }
+
+    @Test
+    fun auth_waits_for_rssi_completion_and_wins_over_next_rssi_tick() {
+        val gate = GattOperationGate()
+        gate.markReady()
+        assertEquals(true, gate.tryBeginRssi())
+        val auth = byteArrayOf(9)
+        assertEquals(GattWriteDecision.Queued, gate.requestWrite(auth, diagnostic = false))
+        assertEquals(false, gate.tryBeginRssi())
+        assertEquals(auth.toList(), gate.finishRssi()?.toList())
+        assertEquals(null, gate.finishWrite())
+        assertEquals(true, gate.tryBeginRssi())
+    }
+
+    @Test
+    fun second_auth_is_rejected_while_one_auth_is_pending() {
+        val gate = GattOperationGate()
+        gate.markReady()
+        assertEquals(true, gate.tryBeginRssi())
+        assertEquals(GattWriteDecision.Queued, gate.requestWrite(byteArrayOf(1), diagnostic = false))
+        assertEquals(GattWriteDecision.Skip, gate.requestWrite(byteArrayOf(2), diagnostic = false))
+        assertEquals(listOf<Byte>(1), gate.finishRssi()?.toList())
+    }
+
+    @Test
     fun auto_connect_true_passed_to_connectGatt() {
         val handle = newShadowGatt()
         val opener = RecordingOpener(handle)
@@ -264,6 +311,41 @@ class PersistentGattClientTest {
         received = null
         callback.onCharacteristicChanged(handle, resp, byteArrayOf(0x99.toByte()))
         assertEquals(null, received)
+    }
+
+    @Test
+    fun successful_rssi_read_is_sent_as_telemetry_without_changing_heartbeat_protocol() {
+        val handle = newShadowGatt()
+        val opener = RecordingOpener(handle)
+        val service = makeServiceWithBothChars()
+        shadowGattAddService(handle, service)
+        val client = PersistentGattClient(
+            context = ctx(),
+            adapter = BluetoothAdapter.getDefaultAdapter(),
+            peerId = TEST_PEER_ID,
+            deviceMac = TEST_DEVICE_MAC,
+            onChallenge = { _, _ -> },
+            gattOpener = opener,
+        )
+        client.start()
+        val callback = opener.lastCallback!!
+        callback.onServicesDiscovered(handle, BluetoothGatt.GATT_SUCCESS)
+        val challenge = service.getCharacteristic(SYAUTH_CHALLENGE_CHAR_UUID)
+        callback.onDescriptorWrite(handle, challenge.getDescriptor(TEST_CCCD_UUID)!!, BluetoothGatt.GATT_SUCCESS)
+        val response = service.getCharacteristic(SYAUTH_RESPONSE_CHAR_UUID)
+
+        callback.onReadRemoteRssi(handle, -67, BluetoothGatt.GATT_SUCCESS)
+        assertEquals("${PersistentGattClient.RSSI_TELEMETRY_PREFIX}-67", response.value.toString(Charsets.UTF_8))
+
+        val previous = response.value
+        callback.onReadRemoteRssi(handle, -66, BluetoothGatt.GATT_FAILURE)
+        assertSame("failed RSSI reads do not emit telemetry", previous, response.value)
+    }
+
+    @Test
+    fun rssi_sampling_is_diagnostic_only_and_does_not_start_a_scan() {
+        assertEquals(2_000L, PersistentGattClient.RSSI_SAMPLE_INTERVAL_MS)
+        assertEquals("SYAUTH-RSSI-v1:", PersistentGattClient.RSSI_TELEMETRY_PREFIX)
     }
 
     @Test

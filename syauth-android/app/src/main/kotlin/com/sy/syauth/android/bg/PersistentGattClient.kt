@@ -36,6 +36,7 @@
 // reaching into a sibling file.
 package com.sy.syauth.android.bg
 
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
@@ -102,6 +103,71 @@ internal fun interface GattOpener {
  * TRANSPORT_LE)`. Pinned to `TRANSPORT_LE` so the stack never
  * negotiates BR/EDR for our LE-only profile.
  */
+private enum class GattOperation { RSSI_READ, WRITE }
+
+internal sealed interface GattWriteDecision {
+    data object Start : GattWriteDecision
+    data object Queued : GattWriteDecision
+    data object Skip : GattWriteDecision
+}
+
+internal class GattOperationGate {
+    private var ready = false
+    private var current: GattOperation? = null
+    private var pendingAuth: ByteArray? = null
+
+    @Synchronized
+    fun markNotReady() {
+        ready = false
+        current = null
+        pendingAuth = null
+    }
+
+    @Synchronized
+    fun markReady() {
+        ready = true
+    }
+
+    @Synchronized
+    fun tryBeginRssi(): Boolean = ready && current == null && run {
+        current = GattOperation.RSSI_READ
+        true
+    }
+
+    @Synchronized
+    fun finishRssi(): ByteArray? {
+        if (current != GattOperation.RSSI_READ) return null
+        val next = pendingAuth
+        pendingAuth = null
+        current = if (next == null) null else GattOperation.WRITE
+        return next
+    }
+
+    @Synchronized
+    fun requestWrite(frame: ByteArray, diagnostic: Boolean): GattWriteDecision {
+        if (current == null) {
+            current = GattOperation.WRITE
+            return GattWriteDecision.Start
+        }
+        if (diagnostic) return GattWriteDecision.Skip
+        if (pendingAuth != null) return GattWriteDecision.Skip
+        pendingAuth = frame.copyOf()
+        return GattWriteDecision.Queued
+    }
+
+    @Synchronized
+    fun finishWrite(): ByteArray? {
+        if (current != GattOperation.WRITE) return null
+        val next = pendingAuth
+        pendingAuth = null
+        current = if (next == null) null else GattOperation.WRITE
+        return next
+    }
+
+    @Synchronized
+    fun isReady(): Boolean = ready
+}
+
 internal class DefaultGattOpener(private val context: Context) : GattOpener {
     override fun open(
         device: BluetoothDevice,
@@ -173,6 +239,7 @@ public class PersistentGattClient internal constructor(
      * after the service decided to shut it down.
      */
     private val stopped: AtomicBoolean = AtomicBoolean(false)
+    private val gattOperations = GattOperationGate()
 
     /**
      * Handler bound to the main looper, owned by the client. The
@@ -185,6 +252,26 @@ public class PersistentGattClient internal constructor(
     private val reconnectHandler: Handler = Handler(Looper.getMainLooper())
 
     private val presenceHandler: Handler = Handler(Looper.getMainLooper())
+    private val rssiHandler: Handler = Handler(Looper.getMainLooper())
+
+    private val rssiRunnable: Runnable = object : Runnable {
+        override fun run() {
+            if (stopped.get()) return
+            val handle = gatt.get() ?: return
+            if (gattOperations.tryBeginRssi()) {
+                val requested = requestRssiRead(handle)
+                if (!requested) gattOperations.finishRssi()
+                Log.d(PERSISTENT_GATT_LOG_TAG, "RSSI read requested=$requested")
+            } else {
+                Log.d(PERSISTENT_GATT_LOG_TAG, "RSSI sample skipped: GATT busy or not ready")
+            }
+            rssiHandler.postDelayed(this, RSSI_SAMPLE_INTERVAL_MS)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun requestRssiRead(handle: BluetoothGatt): Boolean =
+        runCatching { handle.readRemoteRssi() }.getOrDefault(false)
 
     private val presenceRunnable: Runnable = object : Runnable {
         override fun run() {
@@ -234,10 +321,10 @@ public class PersistentGattClient internal constructor(
         if (gatt.get() != null) return
         val device = runCatching { adapter.getRemoteDevice(deviceMac) }.getOrNull()
         if (device == null) {
-            Log.w(PERSISTENT_GATT_LOG_TAG, "start: getRemoteDevice($deviceMac) null")
+            Log.w(PERSISTENT_GATT_LOG_TAG, "start: bonded device unavailable")
             return
         }
-        Log.i(PERSISTENT_GATT_LOG_TAG, "start: opening autoConnect=true to $deviceMac")
+        Log.i(PERSISTENT_GATT_LOG_TAG, "start: opening autoConnect=true")
         val handle = gattOpener.open(device, AUTO_CONNECT_TRUE, gattCallback)
         if (handle == null) {
             Log.w(PERSISTENT_GATT_LOG_TAG, "start: connectGatt returned null")
@@ -267,6 +354,8 @@ public class PersistentGattClient internal constructor(
         stopped.set(true)
         reconnectHandler.removeCallbacks(reconnectRunnable)
         presenceHandler.removeCallbacks(presenceRunnable)
+        rssiHandler.removeCallbacks(rssiRunnable)
+        gattOperations.markNotReady()
         val handle = gatt.getAndSet(null) ?: return
         runCatching { handle.disconnect() }
         runCatching { handle.close() }
@@ -332,9 +421,29 @@ public class PersistentGattClient internal constructor(
      */
     public fun writeResponse(frameBytes: ByteArray): Boolean {
         val handle = gatt.get() ?: return false
-        val c = findCharacteristic(handle, SYAUTH_RESPONSE_CHAR_UUID) ?: return false
+        val rssiPrefix = RSSI_TELEMETRY_PREFIX.toByteArray(Charsets.UTF_8)
+        val diagnostic = frameBytes.contentEquals(PRESENCE_HEARTBEAT) ||
+            (frameBytes.size >= rssiPrefix.size && frameBytes.copyOf(rssiPrefix.size).contentEquals(rssiPrefix))
+        return when (gattOperations.requestWrite(frameBytes, diagnostic)) {
+            GattWriteDecision.Skip -> false
+            GattWriteDecision.Queued -> true
+            GattWriteDecision.Start -> writeGattFrame(handle, frameBytes)
+        }
+    }
+
+    private fun writeGattFrame(handle: BluetoothGatt, frameBytes: ByteArray): Boolean {
+        val c = findCharacteristic(handle, SYAUTH_RESPONSE_CHAR_UUID) ?: run {
+            val next = gattOperations.finishWrite()
+            if (next != null) writeGattFrame(handle, next)
+            return false
+        }
         c.value = frameBytes
-        return runCatching { handle.writeCharacteristic(c) }.getOrDefault(false)
+        val accepted = runCatching { handle.writeCharacteristic(c) }.getOrDefault(false)
+        if (!accepted) {
+            val next = gattOperations.finishWrite()
+            if (next != null) writeGattFrame(handle, next)
+        }
+        return accepted
     }
 
     private val gattCallback: BluetoothGattCallback = object : BluetoothGattCallback() {
@@ -345,6 +454,8 @@ public class PersistentGattClient internal constructor(
                     // Cancel any pending reconnect watchdog — we are
                     // healthy again. (No-op if none was scheduled.)
                     reconnectHandler.removeCallbacks(reconnectRunnable)
+                    rssiHandler.removeCallbacks(rssiRunnable)
+                    gattOperations.markNotReady()
                     // Always invalidate the on-disk GATT service cache before
                     // re-discovering. The desktop daemon may have re-registered
                     // its GATT app while we held the link alive (e.g. an apt
@@ -360,6 +471,8 @@ public class PersistentGattClient internal constructor(
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     presenceHandler.removeCallbacks(presenceRunnable)
+                    rssiHandler.removeCallbacks(rssiRunnable)
+                    gattOperations.markNotReady()
                     // Arm the watchdog. autoConnect=true alone is too lazy
                     // for field reality (Doze + long out-of-range absences
                     // routinely take minutes to re-acquire). The watchdog
@@ -379,8 +492,25 @@ public class PersistentGattClient internal constructor(
             }
         }
 
+        override fun onReadRemoteRssi(g: BluetoothGatt, rssi: Int, status: Int) {
+            val pendingAuth = gattOperations.finishRssi()
+            if (pendingAuth != null) {
+                writeGattFrame(g, pendingAuth)
+                return
+            }
+            if (status != BluetoothGatt.GATT_SUCCESS || gatt.get() !== g || !gattOperations.isReady()) {
+                Log.d(PERSISTENT_GATT_LOG_TAG, "RSSI read failed status=$status")
+                return
+            }
+            val payload = "$RSSI_TELEMETRY_PREFIX$rssi".toByteArray(Charsets.UTF_8)
+            val sent = writeResponse(payload)
+            Log.d(PERSISTENT_GATT_LOG_TAG, "RSSI sample raw=$rssi sent=$sent")
+        }
+
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            gattOperations.markNotReady()
             Log.i(PERSISTENT_GATT_LOG_TAG, "services discovered status=$status n=${g.services.size}")
+            if (status != BluetoothGatt.GATT_SUCCESS) return
             val challenge = findCharacteristic(g, SYAUTH_CHALLENGE_CHAR_UUID)
             if (challenge == null) {
                 Log.w(PERSISTENT_GATT_LOG_TAG, "challenge characteristic not present")
@@ -424,6 +554,15 @@ public class PersistentGattClient internal constructor(
             onChallenge(peerId, value)
         }
 
+        override fun onCharacteristicWrite(
+            g: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            status: Int,
+        ) {
+            val pendingAuth = gattOperations.finishWrite()
+            if (pendingAuth != null) writeGattFrame(g, pendingAuth)
+        }
+
         override fun onDescriptorWrite(
             g: BluetoothGatt,
             descriptor: BluetoothGattDescriptor,
@@ -431,6 +570,9 @@ public class PersistentGattClient internal constructor(
         ) {
             Log.i(PERSISTENT_GATT_LOG_TAG, "descriptor write status=$status uuid=${descriptor.uuid}")
             if (descriptor.uuid == CCCD_UUID && status == BluetoothGatt.GATT_SUCCESS) {
+                gattOperations.markReady()
+                rssiHandler.removeCallbacks(rssiRunnable)
+                rssiHandler.post(rssiRunnable)
                 presenceHandler.removeCallbacks(presenceRunnable)
                 presenceHandler.post(presenceRunnable)
                 Log.i(PERSISTENT_GATT_LOG_TAG, "presence heartbeat armed")
@@ -473,6 +615,8 @@ public class PersistentGattClient internal constructor(
         internal const val RECONNECT_INTERVAL_MS: Long = 2_000L
 
         private const val PRESENCE_HEARTBEAT_INTERVAL_MS: Long = 10_000L
+        internal const val RSSI_SAMPLE_INTERVAL_MS: Long = 2_000L
+        internal const val RSSI_TELEMETRY_PREFIX: String = "SYAUTH-RSSI-v1:"
         private val PRESENCE_HEARTBEAT: ByteArray =
             "SYAUTH-PRESENCE-v1".toByteArray(Charsets.UTF_8)
 

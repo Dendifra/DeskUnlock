@@ -69,6 +69,45 @@ use crate::{
 /// generous headroom.
 const RESPONSE_READ_BUF_BYTES: usize = 512;
 const PRESENCE_HEARTBEAT: &[u8] = b"SYAUTH-PRESENCE-v1";
+const RSSI_TELEMETRY_PREFIX: &[u8] = b"SYAUTH-RSSI-v1:";
+const RSSI_EWMA_ALPHA: f64 = 0.25;
+
+fn rssi_state_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("XDG_RUNTIME_DIR").map(|runtime| std::path::PathBuf::from(runtime).join("syauth").join("rssi.last"))
+}
+
+fn parse_rssi(bytes: &[u8]) -> Option<i32> {
+    let value = std::str::from_utf8(bytes.strip_prefix(RSSI_TELEMETRY_PREFIX)?)
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    if (-127..=0).contains(&value) { Some(value) } else { None }
+}
+
+fn record_rssi(raw: i32, previous_filtered: Option<f64>) -> f64 {
+    previous_filtered.map_or(raw as f64, |previous| {
+        RSSI_EWMA_ALPHA * raw as f64 + (1.0 - RSSI_EWMA_ALPHA) * previous
+    })
+}
+
+fn write_rssi_state(raw: i32, filtered: f64) {
+    let Some(path) = rssi_state_path() else { return };
+    let Some(parent) = path.parent() else { return };
+    let _ = std::fs::create_dir_all(parent);
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    let contents = format!("raw={raw}\nfiltered={filtered:.2}\nsample_epoch_ms={timestamp_ms}\n");
+    let temp = parent.join(format!(".rssi.last.{}.tmp", std::process::id()));
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).truncate(true).write(true).open(&temp)
+        && std::io::Write::write_all(&mut file, contents.as_bytes()).is_ok()
+        && file.sync_all().is_ok()
+    {
+        let _ = std::fs::rename(temp, path);
+    }
+}
 
 fn challenge_ready_path() -> Option<std::path::PathBuf> {
     std::env::var_os("XDG_RUNTIME_DIR").map(|runtime| std::path::PathBuf::from(runtime).join("syauth").join("challenge-ready.last"))
@@ -754,6 +793,7 @@ impl PersistentPeripheral {
         let response_tx_for_task = response_tx.clone();
         let task = tokio::spawn(async move {
             let mut reader_opt: Option<CharacteristicReader> = None;
+            let mut rssi_filtered: Option<f64> = None;
             loop {
                 tokio::select! {
                     // Phone subscribes / unsubscribes to challenge notifications.
@@ -832,6 +872,17 @@ impl PersistentPeripheral {
                                     tracing::debug!(
                                         target: "syauth_transport",
                                         "presence heartbeat received"
+                                    );
+                                } else if let Some(raw) = parse_rssi(&bytes) {
+                                    let filtered = record_rssi(raw, rssi_filtered);
+                                    rssi_filtered = Some(filtered);
+                                    write_rssi_state(raw, filtered);
+                                    tracing::info!(
+                                        target: "syauth_transport",
+                                        raw,
+                                        filtered = format_args!("{filtered:.2}"),
+                                        age_ms = 0,
+                                        "RSSI telemetry sample"
                                     );
                                 } else {
                                     let _ = response_tx_for_task.send(bytes).await;
@@ -1365,6 +1416,16 @@ const FAKE_RESPONSE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 mod tests {
     // Journey: specs/journeys/JOURNEY-S-003-peripheral-library-api.md
     use super::*;
+
+    #[test]
+    fn rssi_telemetry_parses_signed_values_and_uses_ewma() {
+        assert_eq!(parse_rssi(b"SYAUTH-RSSI-v1:-80"), Some(-80));
+        assert_eq!(parse_rssi(b"SYAUTH-RSSI-v1:+1"), None);
+        assert_eq!(parse_rssi(b"SYAUTH-RSSI-v1:-128"), None);
+        assert_eq!(parse_rssi(b"SYAUTH-PRESENCE-v1"), None);
+        assert_eq!(record_rssi(-80, None), -80.0);
+        assert_eq!(record_rssi(-60, Some(-80.0)), -75.0);
+    }
 
     /// `PersistentPeripheral::build_advertisement` carries the
     /// daemon-side defaults (local name, discoverable, the requested

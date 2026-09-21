@@ -170,7 +170,15 @@ EOF
 # the Kotlin bindings live in `bindings/kotlin/` and the Android app
 # brings them in as source).
 mkdir -p "${AAR_BUILD_DIR}/classes"
-(cd "${AAR_BUILD_DIR}/classes" && jar cf ../classes.jar . 2>/dev/null || zip -q ../classes.jar .)
+if command -v jar >/dev/null 2>&1; then
+    (cd "${AAR_BUILD_DIR}/classes" && jar cf ../classes.jar .)
+else
+    # Some minimal build hosts have zip but no JDK jar tool. Keep the
+    # native-only AAR valid with a harmless empty entry.
+    touch "${AAR_BUILD_DIR}/classes/.empty"
+    (cd "${AAR_BUILD_DIR}/classes" && zip -q ../classes.jar .empty)
+    rm -f "${AAR_BUILD_DIR}/classes/.empty"
+fi
 rm -rf "${AAR_BUILD_DIR}/classes"
 
 # R.txt: empty (no Android resources in this AAR).

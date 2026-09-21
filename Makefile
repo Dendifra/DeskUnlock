@@ -53,6 +53,7 @@ install:
 test:
 	$(CARGO) test --workspace --all-targets --all-features
 	bash tests/proximity_readiness.sh
+	bash tests/rssi_status.sh
 
 # Run all tests with verbose output.
 .PHONY: testv
