@@ -19,7 +19,7 @@ build() {
     wayland-scanner client-header desktop/wayland/ext-idle-notify-v1.xml "$srcdir/ext-idle-notify-v1-client-protocol.h"
     wayland-scanner private-code desktop/wayland/ext-idle-notify-v1.xml "$srcdir/ext-idle-notify-v1-client-protocol.c"
     cc -std=c11 -O2 -Wall -Wextra -Werror \
-        -I"$srcdir" desktop/libexec/syauth-idle-lock.c \
+        -I"$srcdir" desktop/wayland/syauth-idle-lock.c \
         "$srcdir/ext-idle-notify-v1-client-protocol.c" \
         $(pkg-config --cflags --libs wayland-client) \
         -o "$srcdir/syauth-idle-lock-bin"

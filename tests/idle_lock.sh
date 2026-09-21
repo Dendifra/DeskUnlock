@@ -29,9 +29,9 @@ while IFS='=' read -r key _; do
     esac
 done < "$XDG_CONFIG_HOME/syauth/idle.conf"
 
-grep -Fq 'ext_idle_notifier_v1' desktop/libexec/syauth-idle-lock.c || fail "Wayland idle notifier missing"
-grep -Fq 'wl_display_dispatch' desktop/libexec/syauth-idle-lock.c || fail "event dispatch missing"
-! grep -Eiq '(/dev/input|key(code|text)|mouse(x|y|position)|sleep[[:space:]])' desktop/libexec/syauth-idle-lock.c desktop/bin/syauth-idle-lock || fail "raw input or polling found"
+grep -Fq 'ext_idle_notifier_v1' desktop/wayland/syauth-idle-lock.c || fail "Wayland idle notifier missing"
+grep -Fq 'wl_display_dispatch' desktop/wayland/syauth-idle-lock.c || fail "event dispatch missing"
+! grep -Eiq '(/dev/input|key(code|text)|mouse(x|y|position)|sleep[[:space:]])' desktop/wayland/syauth-idle-lock.c desktop/bin/syauth-idle-lock || fail "raw input or polling found"
 grep -Fq 'ExecStart=/usr/bin/syauth-idle-lock run' desktop/systemd/syauth-idle-lock.service || fail "idle service command missing"
 grep -Fq 'syauth-idle-lock.service' desktop/bin/syauth-control || fail "master lifecycle missing"
 grep -Fq 'Blocco per inattività' desktop/bin/syauth-settings || fail "GUI title missing"
