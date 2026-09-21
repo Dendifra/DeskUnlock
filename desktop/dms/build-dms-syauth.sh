@@ -174,7 +174,7 @@ surface = lock_surface.read_text(encoding="utf-8")
 needle_surface_state = "    required property bool isLocked\n"
 if needle_surface_state not in surface:
     raise SystemExit("LockSurface.qml layout mismatch: lock state anchor not found")
-surface = surface.replace(needle_surface_state, needle_surface_state + "    property bool pointerReengagementSent: false\n", 1)
+surface = surface.replace(needle_surface_state, needle_surface_state + "    property bool pointerReengagementSent: false\n    property bool pointerSurfaceReady: false\n    property bool suppressInitialPointerSync: false\n", 1)
 
 needle_surface_keys = """    Keys.onPressed: event => {
         if (videoScreensaver.active && videoScreensaver.inputEnabled) {
@@ -218,6 +218,12 @@ if needle_surface_rect not in surface:
 surface = surface.replace(needle_surface_rect, """    HoverHandler {
         enabled: root.isLocked && !videoScreensaver.active
         onPointChanged: {
+            if (!root.pointerSurfaceReady)
+                return;
+            if (root.suppressInitialPointerSync) {
+                root.suppressInitialPointerSync = false;
+                return;
+            }
             if (root.pointerReengagementSent)
                 return;
             root.pointerReengagementSent = true;
@@ -230,6 +236,11 @@ surface = surface.replace(needle_surface_rect, """    HoverHandler {
         color: \"transparent\"
     }
 """, 1)
+lock_surface = surface.replace("    Component.onCompleted: forceActiveFocus()", """    Component.onCompleted: {
+        pointerSurfaceReady = true;
+        suppressInitialPointerSync = root.isLocked;
+        forceActiveFocus();
+    }""", 1)
 lock_surface.write_text(surface, encoding="utf-8")
 
 ui = lock_screen.read_text(encoding="utf-8")

@@ -7,6 +7,10 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 contains() { grep -Fq "$1" "$2" || fail "$3"; }
 
 contains 'pointerReengagementSent' "$script" 'lock-surface pointer one-shot is missing'
+contains 'pointerSurfaceReady' "$script" 'pointer initialization state is missing'
+contains 'suppressInitialPointerSync' "$script" 'synthetic pointer suppression is missing'
+contains 'if (!root.pointerSurfaceReady)' "$script" 'pre-initialization pointer guard is missing'
+contains 'if (root.suppressInitialPointerSync)' "$script" 'initial pointer snapshot guard is missing'
 contains 'LockSurface.qml' "$script" 'runtime lock surface is missing'
 contains 'lock epoch started' "$script" 'lock epoch log is missing'
 contains 'startSyauthAuth' "$script" 'central auth entry point is missing'
@@ -32,6 +36,19 @@ contains 'requestGeneration !== root.syauthGeneration' "$script" 'completion gen
 contains 'phone-return' "$script" 'return path is not unified'
 contains 'root.resetAuthFlows' "$script" 'auth cancellation cleanup is missing'
 contains '++root.syauthGeneration' "$script" 'lock epoch invalidation is missing'
+python3 - "$script" <<'PY'
+from pathlib import Path
+import sys
+s = Path(sys.argv[1]).read_text(encoding="utf-8")
+guard = s.index('if (!root.pointerSurfaceReady)')
+synthetic = s.index('if (root.suppressInitialPointerSync)', guard)
+request = s.index('requestSyauthAuth(\\"local-reengagement\\", false)', synthetic)
+if not guard < synthetic < request:
+    raise SystemExit('pointer initialization guard must precede local auth request')
+if 'suppressInitialPointerSync = root.isLocked' not in s:
+    raise SystemExit('initial suppression must be scoped to surface creation')
+print('Idle local re-engagement regression checks: ok')
+PY
 contains 'same locked session' "$script" 'single-flight contract is missing'
 contains 'do not retry' "$script" 'failed auth retry policy is missing'
 contains 'syauth-idle-lock' 'desktop/systemd/syauth-idle-lock.service' 'idle lock service is missing'
