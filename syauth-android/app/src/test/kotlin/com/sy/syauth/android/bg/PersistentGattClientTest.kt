@@ -86,6 +86,21 @@ private class RecordingOpener(
     }
 }
 
+private class SequenceOpener(
+    private val handles: ArrayDeque<BluetoothGatt>,
+) : GattOpener {
+    val callbacks = mutableListOf<BluetoothGattCallback>()
+
+    override fun open(
+        device: BluetoothDevice,
+        autoConnect: Boolean,
+        callback: BluetoothGattCallback,
+    ): BluetoothGatt {
+        callbacks += callback
+        return handles.removeFirst()
+    }
+}
+
 private fun ctx(): Context = ApplicationProvider.getApplicationContext()
 
 private fun makeChallengeChar(): BluetoothGattCharacteristic {
@@ -146,6 +161,7 @@ class PersistentGattClientTest {
     @Test
     fun rssi_gate_requires_ready_and_allows_only_one_read() {
         val gate = GattOperationGate()
+        assertEquals(GattWriteDecision.Skip, gate.requestWrite(byteArrayOf(1), diagnostic = true))
         assertEquals(false, gate.tryBeginRssi())
         gate.markReady()
         assertEquals(true, gate.tryBeginRssi())
@@ -298,7 +314,9 @@ class PersistentGattClientTest {
         )
         client.start()
         val callback = opener.lastCallback!!
+        callback.onServicesDiscovered(handle, BluetoothGatt.GATT_SUCCESS)
         val challenge = service.getCharacteristic(SYAUTH_CHALLENGE_CHAR_UUID)
+        callback.onDescriptorWrite(handle, challenge.getDescriptor(TEST_CCCD_UUID)!!, BluetoothGatt.GATT_SUCCESS)
 
         callback.onCharacteristicChanged(handle, challenge, payload)
 
@@ -349,6 +367,88 @@ class PersistentGattClientTest {
     }
 
     @Test
+    fun service_changed_blocks_writes_until_fresh_cccd_resolution() {
+        val handle = newShadowGatt()
+        val opener = RecordingOpener(handle)
+        val service = makeServiceWithBothChars()
+        shadowGattAddService(handle, service)
+        val client = PersistentGattClient(
+            context = ctx(),
+            adapter = BluetoothAdapter.getDefaultAdapter(),
+            peerId = TEST_PEER_ID,
+            deviceMac = TEST_DEVICE_MAC,
+            onChallenge = { _, _ -> },
+            gattOpener = opener,
+        )
+        client.start()
+        val callback = opener.lastCallback!!
+        callback.onServicesDiscovered(handle, BluetoothGatt.GATT_SUCCESS)
+        val challenge = service.getCharacteristic(SYAUTH_CHALLENGE_CHAR_UUID)
+        callback.onDescriptorWrite(handle, challenge.getDescriptor(TEST_CCCD_UUID)!!, BluetoothGatt.GATT_SUCCESS)
+        val response = service.getCharacteristic(SYAUTH_RESPONSE_CHAR_UUID)
+        val first = byteArrayOf(1)
+        val second = byteArrayOf(2)
+        client.writeResponse(first)
+        assertSame(first, response.value)
+
+        callback.onServiceChanged(handle)
+        callback.onServiceChanged(handle)
+        assertEquals(false, client.writeResponse(second))
+        assertSame(first, response.value)
+
+        callback.onServicesDiscovered(handle, BluetoothGatt.GATT_SUCCESS)
+        callback.onDescriptorWrite(handle, challenge.getDescriptor(TEST_CCCD_UUID)!!, BluetoothGatt.GATT_SUCCESS)
+        client.writeResponse(second)
+        assertSame(second, response.value)
+    }
+
+    @Test
+    fun callbacks_from_previous_gatt_generation_are_ignored() {
+        val firstHandle = newShadowGatt()
+        val secondHandle = newShadowGatt()
+        val firstService = makeServiceWithBothChars()
+        val secondService = makeServiceWithBothChars()
+        shadowGattAddService(firstHandle, firstService)
+        shadowGattAddService(secondHandle, secondService)
+        val opener = SequenceOpener(ArrayDeque(listOf(firstHandle, secondHandle)))
+        val client = PersistentGattClient(
+            context = ctx(),
+            adapter = BluetoothAdapter.getDefaultAdapter(),
+            peerId = TEST_PEER_ID,
+            deviceMac = TEST_DEVICE_MAC,
+            onChallenge = { _, _ -> },
+            gattOpener = opener,
+        )
+        client.start()
+        val firstCallback = opener.callbacks[0]
+        firstCallback.onServicesDiscovered(firstHandle, BluetoothGatt.GATT_SUCCESS)
+        val firstChallenge = firstService.getCharacteristic(SYAUTH_CHALLENGE_CHAR_UUID)
+        firstCallback.onDescriptorWrite(
+            firstHandle,
+            firstChallenge.getDescriptor(TEST_CCCD_UUID)!!,
+            BluetoothGatt.GATT_SUCCESS,
+        )
+
+        client.forceReconnect()
+        val secondCallback = opener.callbacks[1]
+        firstCallback.onDescriptorWrite(
+            firstHandle,
+            firstChallenge.getDescriptor(TEST_CCCD_UUID)!!,
+            BluetoothGatt.GATT_SUCCESS,
+        )
+        assertEquals(false, client.writeResponse(byteArrayOf(9)))
+
+        secondCallback.onServicesDiscovered(secondHandle, BluetoothGatt.GATT_SUCCESS)
+        val secondChallenge = secondService.getCharacteristic(SYAUTH_CHALLENGE_CHAR_UUID)
+        secondCallback.onDescriptorWrite(
+            secondHandle,
+            secondChallenge.getDescriptor(TEST_CCCD_UUID)!!,
+            BluetoothGatt.GATT_SUCCESS,
+        )
+        assertEquals(false, client.writeResponse(byteArrayOf(10)))
+    }
+
+    @Test
     fun write_response_targets_response_characteristic() {
         val handle = newShadowGatt()
         val opener = RecordingOpener(handle)
@@ -365,6 +465,10 @@ class PersistentGattClientTest {
             gattOpener = opener,
         )
         client.start()
+        val callback = opener.lastCallback!!
+        callback.onServicesDiscovered(handle, BluetoothGatt.GATT_SUCCESS)
+        val challenge = service.getCharacteristic(SYAUTH_CHALLENGE_CHAR_UUID)
+        callback.onDescriptorWrite(handle, challenge.getDescriptor(TEST_CCCD_UUID)!!, BluetoothGatt.GATT_SUCCESS)
 
         client.writeResponse(payload)
 

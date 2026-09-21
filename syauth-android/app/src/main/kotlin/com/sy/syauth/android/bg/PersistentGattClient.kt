@@ -145,6 +145,7 @@ internal class GattOperationGate {
 
     @Synchronized
     fun requestWrite(frame: ByteArray, diagnostic: Boolean): GattWriteDecision {
+        if (!ready) return GattWriteDecision.Skip
         if (current == null) {
             current = GattOperation.WRITE
             return GattWriteDecision.Start
@@ -231,6 +232,7 @@ public class PersistentGattClient internal constructor(
     )
 
     private val gatt: AtomicReference<BluetoothGatt?> = AtomicReference(null)
+    private val discoveryInFlight = AtomicBoolean(false)
 
     /**
      * Set to `true` while the client is intentionally torn down via
@@ -261,7 +263,7 @@ public class PersistentGattClient internal constructor(
             if (gattOperations.tryBeginRssi()) {
                 val requested = requestRssiRead(handle)
                 if (!requested) gattOperations.finishRssi()
-                Log.d(PERSISTENT_GATT_LOG_TAG, "RSSI read requested=$requested")
+                Log.d(PERSISTENT_GATT_LOG_TAG, "RSSI read queued=$requested")
             } else {
                 Log.d(PERSISTENT_GATT_LOG_TAG, "RSSI sample skipped: GATT busy or not ready")
             }
@@ -277,7 +279,7 @@ public class PersistentGattClient internal constructor(
         override fun run() {
             if (stopped.get()) return
             val ok = writeResponse(PRESENCE_HEARTBEAT)
-            Log.d(PERSISTENT_GATT_LOG_TAG, "presence heartbeat write=$ok")
+            Log.d(PERSISTENT_GATT_LOG_TAG, "presence heartbeat queued=$ok")
             presenceHandler.postDelayed(this, PRESENCE_HEARTBEAT_INTERVAL_MS)
         }
     }
@@ -331,6 +333,7 @@ public class PersistentGattClient internal constructor(
             return
         }
         gatt.set(handle)
+        discoveryInFlight.set(false)
         // BUG-20260528-0130 → BUG-20260528-2334: arm the reconnect
         // watchdog NOW, not only on STATE_DISCONNECTED. A
         // connectGatt(autoConnect=true) that never completes emits NO
@@ -386,6 +389,10 @@ public class PersistentGattClient internal constructor(
             runCatching { handle.disconnect() }
             runCatching { handle.close() }
         }
+        discoveryInFlight.set(false)
+        gattOperations.markNotReady()
+        presenceHandler.removeCallbacks(presenceRunnable)
+        rssiHandler.removeCallbacks(rssiRunnable)
         start()
     }
 
@@ -421,6 +428,7 @@ public class PersistentGattClient internal constructor(
      */
     public fun writeResponse(frameBytes: ByteArray): Boolean {
         val handle = gatt.get() ?: return false
+        if (!gattOperations.isReady()) return false
         val rssiPrefix = RSSI_TELEMETRY_PREFIX.toByteArray(Charsets.UTF_8)
         val diagnostic = frameBytes.contentEquals(PRESENCE_HEARTBEAT) ||
             (frameBytes.size >= rssiPrefix.size && frameBytes.copyOf(rssiPrefix.size).contentEquals(rssiPrefix))
@@ -448,6 +456,7 @@ public class PersistentGattClient internal constructor(
 
     private val gattCallback: BluetoothGattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+            if (gatt.get() !== g) return
             Log.i(PERSISTENT_GATT_LOG_TAG, "conn state status=$status new=$newState")
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
@@ -456,6 +465,7 @@ public class PersistentGattClient internal constructor(
                     reconnectHandler.removeCallbacks(reconnectRunnable)
                     rssiHandler.removeCallbacks(rssiRunnable)
                     gattOperations.markNotReady()
+                    discoveryInFlight.set(true)
                     // Always invalidate the on-disk GATT service cache before
                     // re-discovering. The desktop daemon may have re-registered
                     // its GATT app while we held the link alive (e.g. an apt
@@ -481,6 +491,7 @@ public class PersistentGattClient internal constructor(
                     // deterministic recovery window once the peer is back
                     // in range. Cancelled on STATE_CONNECTED above.
                     if (!stopped.get()) {
+                        gatt.compareAndSet(g, null)
                         Log.i(
                             PERSISTENT_GATT_LOG_TAG,
                             "conn state: disconnected; scheduling watchdog in ${RECONNECT_INTERVAL_MS}ms"
@@ -493,6 +504,7 @@ public class PersistentGattClient internal constructor(
         }
 
         override fun onReadRemoteRssi(g: BluetoothGatt, rssi: Int, status: Int) {
+            if (gatt.get() !== g) return
             val pendingAuth = gattOperations.finishRssi()
             if (pendingAuth != null) {
                 writeGattFrame(g, pendingAuth)
@@ -508,6 +520,8 @@ public class PersistentGattClient internal constructor(
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            if (gatt.get() !== g) return
+            discoveryInFlight.set(false)
             gattOperations.markNotReady()
             Log.i(PERSISTENT_GATT_LOG_TAG, "services discovered status=$status n=${g.services.size}")
             if (status != BluetoothGatt.GATT_SUCCESS) return
@@ -529,11 +543,22 @@ public class PersistentGattClient internal constructor(
             Log.i(PERSISTENT_GATT_LOG_TAG, "subscribed: writeDescriptor=$ok")
         }
 
+        override fun onServiceChanged(g: BluetoothGatt) {
+            if (gatt.get() !== g) return
+            gattOperations.markNotReady()
+            presenceHandler.removeCallbacks(presenceRunnable)
+            rssiHandler.removeCallbacks(rssiRunnable)
+            if (discoveryInFlight.compareAndSet(false, true)) {
+                g.discoverServices()
+            }
+        }
+
         @Deprecated("Pre-API-33 onCharacteristicChanged; we honor both forms.")
         override fun onCharacteristicChanged(
             g: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,
         ) {
+            if (gatt.get() !== g || !gattOperations.isReady()) return
             if (characteristic.uuid != SYAUTH_CHALLENGE_CHAR_UUID) return
             val bytes = characteristic.value ?: return
             Log.i(PERSISTENT_GATT_LOG_TAG, "challenge frame received len=${bytes.size}")
@@ -547,6 +572,7 @@ public class PersistentGattClient internal constructor(
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray,
         ) {
+            if (gatt.get() !== g || !gattOperations.isReady()) return
             if (characteristic.uuid != SYAUTH_CHALLENGE_CHAR_UUID) return
             Log.i(PERSISTENT_GATT_LOG_TAG, "challenge frame received (api33) len=${value.size}")
             presenceHandler.removeCallbacks(presenceRunnable)
@@ -559,6 +585,7 @@ public class PersistentGattClient internal constructor(
             characteristic: BluetoothGattCharacteristic,
             status: Int,
         ) {
+            if (gatt.get() !== g) return
             val pendingAuth = gattOperations.finishWrite()
             if (pendingAuth != null) writeGattFrame(g, pendingAuth)
         }
@@ -568,8 +595,10 @@ public class PersistentGattClient internal constructor(
             descriptor: BluetoothGattDescriptor,
             status: Int,
         ) {
-            Log.i(PERSISTENT_GATT_LOG_TAG, "descriptor write status=$status uuid=${descriptor.uuid}")
+            if (gatt.get() !== g) return
+            Log.i(PERSISTENT_GATT_LOG_TAG, "descriptor write status=$status")
             if (descriptor.uuid == CCCD_UUID && status == BluetoothGatt.GATT_SUCCESS) {
+                discoveryInFlight.set(false)
                 gattOperations.markReady()
                 rssiHandler.removeCallbacks(rssiRunnable)
                 rssiHandler.post(rssiRunnable)
