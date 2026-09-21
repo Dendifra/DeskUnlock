@@ -57,6 +57,7 @@ test:
 	bash tests/proximity_engine.sh
 	bash tests/idle_lock.sh
 	bash tests/auth_lifecycle.sh
+	python3 tests/settings_last_unlock.py
 
 # Run all tests with verbose output.
 .PHONY: testv
