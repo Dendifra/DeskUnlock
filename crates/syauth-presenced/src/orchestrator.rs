@@ -34,7 +34,7 @@ use syauth_core::{
 };
 use syauth_transport::{BOND_KEY_BYTES, Peripheral, PeripheralError, session_uuid_for};
 use tokio::{
-    sync::{Mutex as TokioMutex, Semaphore, mpsc, oneshot},
+    sync::{Mutex as TokioMutex, Semaphore, mpsc, oneshot, watch},
     time::{Duration, Instant, interval_at},
 };
 use uuid::Uuid;
@@ -796,6 +796,16 @@ impl Orchestrator {
     /// last 32 records on power loss; losing one record because the
     /// disk is full is a strictly weaker failure).
     pub async fn issue_challenge(&self, peer_id: &str, deadline: StdDuration) -> ChallengeOutcome {
+        let (_cancel_tx, mut cancel) = watch::channel(false);
+        self.issue_challenge_cancellable(peer_id, deadline, &mut cancel).await
+    }
+
+    pub async fn issue_challenge_cancellable(
+        &self,
+        peer_id: &str,
+        deadline: StdDuration,
+        cancel: &mut watch::Receiver<bool>,
+    ) -> ChallengeOutcome {
         let t_start_ms = epoch_millis(SystemTime::now());
         let peer_state = match self.lookup_peer(peer_id).await {
             Some(s) => s,
@@ -828,7 +838,7 @@ impl Orchestrator {
                 reason: format!("nonce rng: {err}"),
             });
         }
-        let outcome = self.run_challenge(peer_id, nonce, deadline, &peer_state, t_start_ms).await;
+        let outcome = self.run_challenge(peer_id, nonce, deadline, &peer_state, t_start_ms, cancel).await;
         drop(permit);
         outcome
     }
@@ -839,6 +849,18 @@ impl Orchestrator {
     /// [`Self::issue_challenge`].
     #[doc(hidden)]
     pub async fn issue_challenge_with_nonce(&self, peer_id: &str, nonce: [u8; NONCE_BYTES], deadline: StdDuration) -> ChallengeOutcome {
+        let (_cancel_tx, mut cancel) = watch::channel(false);
+        self.issue_challenge_with_nonce_cancellable(peer_id, nonce, deadline, &mut cancel)
+            .await
+    }
+
+    pub async fn issue_challenge_with_nonce_cancellable(
+        &self,
+        peer_id: &str,
+        nonce: [u8; NONCE_BYTES],
+        deadline: StdDuration,
+        cancel: &mut watch::Receiver<bool>,
+    ) -> ChallengeOutcome {
         let t_start_ms = epoch_millis(SystemTime::now());
         let peer_state = match self.lookup_peer(peer_id).await {
             Some(s) => s,
@@ -858,7 +880,7 @@ impl Orchestrator {
             }
         };
         stamp_liveness(&peer_state.liveness, SystemTime::now()).await;
-        let outcome = self.run_challenge(peer_id, nonce, deadline, &peer_state, t_start_ms).await;
+        let outcome = self.run_challenge(peer_id, nonce, deadline, &peer_state, t_start_ms, cancel).await;
         drop(permit);
         outcome
     }
@@ -890,6 +912,7 @@ impl Orchestrator {
         deadline: StdDuration,
         peer_state: &PeerState,
         t_start_ms: u128,
+        cancel: &mut watch::Receiver<bool>,
     ) -> ChallengeOutcome {
         let nonce_hex = hex::encode(nonce);
         let mut challenge = Frame {
@@ -922,13 +945,13 @@ impl Orchestrator {
                 reason: format!("encode challenge frame: {err}"),
             });
         }
-        if let Err(err) = self.peripheral.notify_challenge(peer_id, &encoded).await {
+        if let Err(err) = self.peripheral.notify_challenge_cancellable(peer_id, &encoded, cancel).await {
             let t_end_ms = epoch_millis(SystemTime::now());
             let reason = challenge_outcome_for_transport(&err).reason_str();
             self.audit_at(peer_id, &nonce_hex, t_start_ms, t_end_ms, reason).await;
             return challenge_outcome_for_transport(&err);
         }
-        let response_bytes = match self.peripheral.wait_for_response(peer_id, deadline).await {
+        let response_bytes = match self.peripheral.wait_for_response_cancellable(peer_id, deadline, cancel).await {
             Ok(b) => b,
             Err(PeripheralError::ResponseTimeout { .. }) => {
                 let t_end_ms = epoch_millis(SystemTime::now());

@@ -26,7 +26,7 @@ s = pam.read_text(encoding="utf-8")
 needle_state = "    property bool unlockInProgress: false\n"
 if needle_state not in s:
     raise SystemExit("Pam.qml layout mismatch: root state anchor not found")
-s = s.replace(needle_state, needle_state + "    property bool syauthAvailable: false\n", 1)
+s = s.replace(needle_state, needle_state + "    property bool syauthAvailable: false\n    property int syauthGeneration: 0\n", 1)
 
 needle_fprint = """    PamContext {
         id: fprint
@@ -40,9 +40,19 @@ syauth_block = """    PamContext {
         function startIfAvailable(): void {
             if (!root.lockSecured || root.unlockInProgress || active)
                 return;
+            ++root.syauthGeneration;
+            requestGeneration = root.syauthGeneration;
             if (start())
                 root.syauthAvailable = true;
+            else
+                root.syauthAvailable = false;
         }
+
+        // PamContext.abort() cancels the active PAM conversation and does not
+        // emit completion for the aborted conversation (Quickshell
+        // Services.Pam contract). This generation is a defensive late-signal
+        // guard as well.
+        property int requestGeneration: 0
 
         config: "syauth-dms"
         configDirectory: "/etc/pam.d"
@@ -51,7 +61,7 @@ syauth_block = """    PamContext {
             if (!root.lockSecured)
                 return;
 
-            if (res === PamResult.Success) {
+            if (res === PamResult.Success && root.lockSecured && requestGeneration === root.syauthGeneration) {
                 if (!root.unlockInProgress) {
                     passwd.abort();
                     fprint.abort();
@@ -84,26 +94,6 @@ syauth_block = """    PamContext {
 
 s = s.replace(needle_fprint, syauth_block + needle_fprint, 1)
 
-needle_timer = """    Timer {
-        id: errorRetry
-"""
-if needle_timer not in s:
-    raise SystemExit("Pam.qml layout mismatch: timer anchor not found")
-
-syauth_timer = """    Timer {
-        id: syauthStartTimer
-
-        interval: 1500
-        repeat: false
-        onTriggered: {
-            if (root.lockSecured && !syauth.active)
-                syauth.startIfAvailable();
-        }
-    }
-
-"""
-s = s.replace(needle_timer, syauth_timer + needle_timer, 1)
-
 needle_lock = """        fprint.checkAvail();
         u2f.checkAvail();
 """
@@ -112,7 +102,6 @@ if needle_lock not in s:
 
 replacement_lock = """        fprint.checkAvail();
         u2f.checkAvail();
-        syauthStartTimer.restart();
 """
 s = s.replace(needle_lock, replacement_lock, 1)
 
@@ -124,7 +113,10 @@ needle_unlock = """        if (!lockSecured) {
 if needle_unlock not in s:
     raise SystemExit("Pam.qml layout mismatch: unlock reset anchor not found")
 s = s.replace(needle_unlock, """        if (!lockSecured) {
+            ++root.syauthGeneration;
             root.syauthAvailable = false;
+            if (syauth.active)
+                syauth.abort();
             root.resetAuthFlows();
             return;
         }

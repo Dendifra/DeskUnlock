@@ -52,6 +52,7 @@ install:
 .PHONY: test
 test:
 	$(CARGO) test --workspace --all-targets --all-features
+	bash tests/proximity_readiness.sh
 
 # Run all tests with verbose output.
 .PHONY: testv

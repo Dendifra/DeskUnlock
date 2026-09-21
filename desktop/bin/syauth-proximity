@@ -4,6 +4,7 @@ set -u
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 MARKER="$RUNTIME_DIR/syauth/presence.last"
 PUBLIC_MARKER="/run/syauth/presence.last"
+READY_MARKER="$RUNTIME_DIR/syauth/challenge-ready.last"
 
 ABSENT_AFTER=60
 LOCK_AFTER=120
@@ -17,9 +18,23 @@ was_present=0
 locked_by_proximity=0
 last_seen_epoch=0
 biometric_requested=0
+saved_ready_token=""
 
 log() {
     echo "syauth-proximity: $*"
+}
+
+marker_token() {
+    if [[ -s "$READY_MARKER" ]]; then
+        tr -d '[:space:]' < "$READY_MARKER" 2>/dev/null || true
+    else
+        echo 0
+    fi
+}
+
+readiness_is_new() {
+    local current="$1" baseline="$2"
+    [[ -n "$current" && "$current" != "$baseline" ]]
 }
 
 marker_mtime() {
@@ -70,6 +85,10 @@ else
     log "startup: attendo heartbeat telefono"
 fi
 
+if [[ "${SYAUTH_PROXIMITY_TEST:-0}" == 1 ]]; then
+    return 0 2>/dev/null || exit 0
+fi
+
 while sleep "$CHECK_INTERVAL"; do
     now=$(date +%s)
     mtime=$(marker_mtime)
@@ -93,7 +112,7 @@ while sleep "$CHECK_INTERVAL"; do
             if (( was_present == 0 )); then
                 was_present=1
                 biometric_requested=0
-                log "telefono tornato age=${age}s"
+                log "telefono tornato age=${age}s readiness_baseline=${saved_ready_token:-none}"
             fi
 
             # Qualunque sessione bloccata può richiedere biometria:
@@ -102,6 +121,10 @@ while sleep "$CHECK_INTERVAL"; do
 
             if [[ -n "$sid" ]] && is_locked "$sid"; then
                 if (( biometric_requested == 0 )); then
+                    ready_token=$(marker_token)
+                    if ! readiness_is_new "$ready_token" "$saved_ready_token"; then
+                        continue
+                    fi
                     sleep "$RETURN_DELAY"
 
                     now2=$(date +%s)
@@ -111,7 +134,8 @@ while sleep "$CHECK_INTERVAL"; do
                         age2=$((now2 - mtime2))
                         (( age2 < 0 )) && age2=0
 
-                        if (( age2 <= ABSENT_AFTER )) && is_locked "$sid"; then
+                        ready_token=$(marker_token)
+                        if (( age2 <= ABSENT_AFTER )) && is_locked "$sid" && readiness_is_new "$ready_token" "$saved_ready_token"; then
                             if command -v dms >/dev/null 2>&1; then
                                 if dms ipc call syauth phoneReturned >/dev/null 2>&1; then
                                     biometric_requested=1
@@ -137,7 +161,8 @@ while sleep "$CHECK_INTERVAL"; do
         if (( seen_presence == 1 && was_present == 1 )); then
             was_present=0
             biometric_requested=0
-            log "heartbeat realmente perso age=${age}s"
+            saved_ready_token=$(marker_token)
+            log "heartbeat realmente perso age=${age}s readiness_baseline=${saved_ready_token:-none}"
         fi
 
     else
@@ -149,7 +174,8 @@ while sleep "$CHECK_INTERVAL"; do
         if (( seen_presence == 1 && was_present == 1 )); then
             was_present=0
             biometric_requested=0
-            log "marker temporaneamente assente; uso ultimo heartbeat reale"
+            saved_ready_token=$(marker_token)
+            log "marker temporaneamente assente; readiness_baseline=${saved_ready_token:-none}"
         fi
     fi
 

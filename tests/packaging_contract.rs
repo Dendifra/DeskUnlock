@@ -58,6 +58,19 @@ fn dms_lock_indicator_uses_persistent_syauth_state() {
 }
 
 #[test]
+fn return_auth_is_transport_gated_and_not_retried_automatically() {
+    let proximity = repo_file("desktop/bin/syauth-proximity");
+    let dms = repo_file("desktop/dms/build-dms-syauth.sh");
+
+    assert!(proximity.contains("READY_MARKER"));
+    assert!(proximity.contains("saved_ready_token"));
+    assert!(proximity.contains("readiness_is_new"));
+    assert!(dms.contains("syauth.abort()"));
+    assert!(dms.contains("root.syauthGeneration"));
+    assert!(!dms.contains("syauthStartTimer.restart()"));
+}
+
+#[test]
 fn settings_gui_uses_deskunlock_branding_and_no_duplicate_phone_status() {
     let settings = repo_file("desktop/bin/syauth-settings");
 

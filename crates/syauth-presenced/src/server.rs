@@ -25,8 +25,9 @@ use std::{
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use thiserror::Error;
 use tokio::{
+    io::AsyncReadExt,
     net::{UnixListener, UnixStream},
-    sync::{OwnedSemaphorePermit, Semaphore, mpsc},
+    sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch},
     task::JoinHandle,
 };
 
@@ -278,7 +279,7 @@ fn spawn_connection(
 /// caller does one `connect` + one `Challenge` + one read per PAM
 /// call.
 async fn handle_connection(
-    mut stream: UnixStream,
+    stream: UnixStream,
     expected_uid: u32,
     reload_tx: Option<mpsc::Sender<ReloadCommand>>,
     orchestrator: Option<Arc<Orchestrator>>,
@@ -303,10 +304,41 @@ async fn handle_connection(
             "accepting connection from unexpected uid (filesystem ACL is primary defense)"
         );
     }
-    let request: Request = read_frame(&mut stream).await?;
+    let (mut read_half, mut write_half) = stream.into_split();
+    let request: Request = read_frame(&mut read_half).await?;
     tracing::debug!(?request, "request decoded");
-    let response = dispatch(&request, &reload_tx, orchestrator.as_ref(), test_fixed_nonce, started_at).await;
-    write_frame(&mut stream, &response).await?;
+    let (cancel_tx, mut cancel) = watch::channel(false);
+    let response = if matches!(request, Request::Challenge { .. }) {
+        let dispatch = dispatch(
+            &request,
+            &reload_tx,
+            orchestrator.as_ref(),
+            test_fixed_nonce,
+            started_at,
+            &mut cancel,
+        );
+        tokio::pin!(dispatch);
+        let mut probe = [0u8; 1];
+        tokio::select! {
+            response = &mut dispatch => response,
+            read = read_half.read(&mut probe) => {
+                let _ = cancel_tx.send(true);
+                let _ = read;
+                return Ok(());
+            }
+        }
+    } else {
+        dispatch(
+            &request,
+            &reload_tx,
+            orchestrator.as_ref(),
+            test_fixed_nonce,
+            started_at,
+            &mut cancel,
+        )
+        .await
+    };
+    write_frame(&mut write_half, &response).await?;
     Ok(())
 }
 
@@ -334,13 +366,17 @@ async fn dispatch(
     orchestrator: Option<&Arc<Orchestrator>>,
     test_fixed_nonce: Option<[u8; NONCE_BYTES]>,
     started_at: SystemTime,
+    cancel: &mut watch::Receiver<bool>,
 ) -> Response {
     match request {
         Request::Challenge { peer_id, .. } => match orchestrator {
             Some(o) => {
                 let outcome = match test_fixed_nonce {
-                    Some(nonce) => o.issue_challenge_with_nonce(peer_id, nonce, DEFAULT_AUTH_TIMEOUT).await,
-                    None => o.issue_challenge(peer_id, DEFAULT_AUTH_TIMEOUT).await,
+                    Some(nonce) => {
+                        o.issue_challenge_with_nonce_cancellable(peer_id, nonce, DEFAULT_AUTH_TIMEOUT, cancel)
+                            .await
+                    }
+                    None => o.issue_challenge_cancellable(peer_id, DEFAULT_AUTH_TIMEOUT, cancel).await,
                 };
                 let signature = outcome.signature_bytes();
                 let ok = matches!(outcome, crate::orchestrator::ChallengeOutcome::Ok { .. });

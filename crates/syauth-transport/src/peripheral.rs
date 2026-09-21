@@ -50,7 +50,7 @@ use futures::{FutureExt, StreamExt};
 use thiserror::Error;
 use tokio::{
     io::AsyncReadExt,
-    sync::{Mutex, mpsc},
+    sync::{Mutex, mpsc, watch},
     task::JoinHandle,
 };
 
@@ -69,6 +69,16 @@ use crate::{
 /// generous headroom.
 const RESPONSE_READ_BUF_BYTES: usize = 512;
 const PRESENCE_HEARTBEAT: &[u8] = b"SYAUTH-PRESENCE-v1";
+
+fn challenge_ready_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("XDG_RUNTIME_DIR").map(|runtime| std::path::PathBuf::from(runtime).join("syauth").join("challenge-ready.last"))
+}
+
+fn remove_challenge_ready_marker() {
+    if let Some(path) = challenge_ready_path() {
+        let _ = std::fs::remove_file(path);
+    }
+}
 
 /// Stable service UUID per bond, derived from the bond key at minute=0.
 /// The phone's GATT client discovers characteristics by UUID after the
@@ -137,6 +147,10 @@ pub enum PeripheralError {
         reason: String,
     },
 
+    /// The PAM client cancelled the in-flight challenge.
+    #[error("challenge cancelled")]
+    Cancelled,
+
     /// `wait_for_response(peer_id, deadline)` reached its deadline
     /// without observing a write on the per-peer response
     /// characteristic. Distinct from `Backend` so the orchestrator's
@@ -202,6 +216,19 @@ pub trait Peripheral: Send + Sync {
     /// added.
     async fn notify_challenge(&self, peer_id: &str, frame: &[u8]) -> Result<(), PeripheralError>;
 
+    /// Push a challenge while allowing the owning PAM request to cancel it.
+    async fn notify_challenge_cancellable(
+        &self,
+        peer_id: &str,
+        frame: &[u8],
+        cancel: &mut watch::Receiver<bool>,
+    ) -> Result<(), PeripheralError> {
+        tokio::select! {
+            _ = cancel.wait_for(|cancelled| *cancelled) => Err(PeripheralError::Cancelled),
+            result = self.notify_challenge(peer_id, frame) => result,
+        }
+    }
+
     /// Await a single GATT-write on the per-peer response
     /// characteristic, returning the buffered bytes. Returns
     /// [`PeripheralError::ResponseTimeout`] if `deadline` elapses
@@ -215,6 +242,19 @@ pub trait Peripheral: Send + Sync {
     /// `inject_response(peer_id, bytes)` so tests queue a synthetic
     /// response without touching a radio.
     async fn wait_for_response(&self, peer_id: &str, deadline: Duration) -> Result<Vec<u8>, PeripheralError>;
+
+    /// Await a response while allowing the owning PAM request to cancel it.
+    async fn wait_for_response_cancellable(
+        &self,
+        peer_id: &str,
+        deadline: Duration,
+        cancel: &mut watch::Receiver<bool>,
+    ) -> Result<Vec<u8>, PeripheralError> {
+        tokio::select! {
+            _ = cancel.wait_for(|cancelled| *cancelled) => Err(PeripheralError::Cancelled),
+            result = self.wait_for_response(peer_id, deadline) => result,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -723,18 +763,21 @@ impl PersistentPeripheral {
                                 tracing::info!(target: "syauth_transport", "chal_control: Notify event — phone subscribed");
                                 *notifier_slot_for_task.lock().await = Some(writer);
 
-                                if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
-                                    let path = std::path::PathBuf::from(runtime)
-                                        .join("syauth")
-                                        .join("challenge-ready.last");
-                                    let _ = std::fs::write(path, b"1
-                ");
+                                remove_challenge_ready_marker();
+                                if let Some(path) = challenge_ready_path() {
+                                    let mut token = [0u8; 16];
+                                    if getrandom::fill(&mut token).is_ok() {
+                                        let token = token.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+                                        let _ = std::fs::write(path, format!("{token}\n"));
+                                    }
                                 }
                             }
                             Some(CharacteristicControlEvent::Write(_)) => {
                                 tracing::warn!(target: "syauth_transport", "chal_control: unexpected Write event");
                             }
                             None => {
+                                *notifier_slot_for_task.lock().await = None;
+                                remove_challenge_ready_marker();
                                 tracing::warn!(target: "syauth_transport", "chal_control: stream ended, task exiting");
                                 break;
                             }
@@ -757,6 +800,8 @@ impl PersistentPeripheral {
                                 tracing::warn!(target: "syauth_transport", "resp_control: unexpected Notify event");
                             }
                             None => {
+                                *notifier_slot_for_task.lock().await = None;
+                                remove_challenge_ready_marker();
                                 tracing::warn!(target: "syauth_transport", "resp_control: stream ended, task exiting");
                                 break;
                             }
@@ -830,6 +875,7 @@ impl PersistentPeripheral {
     /// take the `peers` lock briefly to read `bond_key`, drop it,
     /// touch `app_handle`, then take `peers` again to swap the entry.
     async fn rebuild_peer_registration(&self, peer_id: &str) -> Result<(), PeripheralError> {
+        remove_challenge_ready_marker();
         if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
             let path = std::path::PathBuf::from(runtime).join("syauth").join("challenge-ready.last");
             let _ = std::fs::remove_file(path);
@@ -1010,6 +1056,7 @@ impl Peripheral for PersistentPeripheral {
                         return Ok(());
                     }
                     Err(err) if attempt == 0 => {
+                        remove_challenge_ready_marker();
                         tracing::warn!(
                             target: "syauth_transport",
                             peer_id = %peer_id,
@@ -1025,6 +1072,7 @@ impl Peripheral for PersistentPeripheral {
                     }
                 }
             } else if attempt == 0 {
+                remove_challenge_ready_marker();
                 tracing::warn!(
                     target: "syauth_transport",
                     peer_id = %peer_id,
@@ -1404,6 +1452,17 @@ mod tests {
             }
             other => panic!("expected ResponseTimeout, got {other:?}"),
         }
+    }
+
+    /// Closing the owning PAM request cancels its response wait immediately.
+    #[tokio::test]
+    async fn cancellable_response_wait_returns_cancelled() {
+        let fake = FakePeripheral::new();
+        fake.add_peer("a", &[0xAA; BOND_KEY_BYTES]).await.expect("add a");
+        let (cancel_tx, mut cancel) = watch::channel(false);
+        let task = tokio::spawn(async move { fake.wait_for_response_cancellable("a", Duration::from_secs(30), &mut cancel).await });
+        cancel_tx.send(true).expect("cancel");
+        assert!(matches!(task.await.expect("join"), Err(PeripheralError::Cancelled)));
     }
 
     /// FakePeripheral.wait_for_response on an unknown peer returns
