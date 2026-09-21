@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -28,6 +29,7 @@ HOME = Path.home()
 CONTROL = Path("/usr/bin/syauth-control")
 DEVICE_CONTROL = Path("/usr/bin/syauth-device")
 PROXIMITY_CONTROL = Path("/usr/bin/syauth-proximity")
+IDLE_CONTROL = Path("/usr/bin/syauth-idle-lock")
 PRESENCE_MARKER = Path("/run/syauth/presence.last")
 DESKUNLOCK_LOGO = Path("/usr/share/icons/hicolor/256x256/apps/deskunlock.png")
 
@@ -124,6 +126,28 @@ def get_proximity_diagnostics():
         if separator:
             values[key.lower()] = value
     return values
+
+
+def get_idle_settings():
+    output = run_command([str(IDLE_CONTROL), "status"])
+    values = {}
+    for line in output.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            values[key] = value
+    try:
+        minutes = int(values.get("idle_lock_minutes", "10"))
+    except ValueError:
+        minutes = 10
+    return {
+        "available": bool(output),
+        "enabled": values.get("idle_lock_enabled", "1") == "1",
+        "minutes": max(1, min(120, minutes)),
+    }
+
+
+def restart_idle_service():
+    run_command(["systemctl", "--user", "restart", "syauth-idle-lock.service"])
 
 
 def get_proximity_state():
@@ -268,6 +292,7 @@ class SettingsWindow(QMainWindow):
         self.build_master(main)
         self.build_device(main)
         self.build_proximity(main)
+        self.build_idle_lock(main)
         self.build_features(main)
         self.build_system_status(main)
 
@@ -543,6 +568,55 @@ class SettingsWindow(QMainWindow):
 
         main.addWidget(card)
 
+    def build_idle_lock(self, main):
+        main.addWidget(self.section_title("INATTIVITÀ"))
+
+        card = self.card()
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(10)
+
+        header = QHBoxLayout()
+        text = QVBoxLayout()
+        text.setSpacing(2)
+        title = QLabel("Blocco per inattività")
+        font = title.font()
+        font.setBold(True)
+        font.setPointSize(11)
+        title.setFont(font)
+        description = QLabel("Blocca il PC dopo un periodo senza attività")
+        description.setStyleSheet("color: #aeb4bc;")
+        text.addWidget(title)
+        text.addWidget(description)
+        header.addLayout(text)
+        header.addStretch()
+        self.idle_toggle = QCheckBox("Attivo")
+        self.idle_toggle.toggled.connect(self.set_idle_enabled)
+        header.addWidget(self.idle_toggle)
+        layout.addLayout(header)
+
+        timeout_row = QHBoxLayout()
+        timeout_row.addWidget(QLabel("Blocca dopo"))
+        timeout_row.addStretch()
+        self.idle_minutes = QSpinBox()
+        self.idle_minutes.setRange(1, 120)
+        self.idle_minutes.setSuffix(" minuti")
+        self.idle_minutes.valueChanged.connect(self.set_idle_minutes)
+        timeout_row.addWidget(self.idle_minutes)
+        layout.addLayout(timeout_row)
+        main.addWidget(card)
+
+    def set_idle_enabled(self, enabled):
+        run_command([str(IDLE_CONTROL), "enable" if enabled else "disable"])
+        restart_idle_service()
+        self.refresh()
+
+    def set_idle_minutes(self, minutes):
+        if self.idle_minutes.isEnabled():
+            run_command([str(IDLE_CONTROL), "minutes", str(minutes)])
+            restart_idle_service()
+        self.refresh()
+
     def set_proximity_enabled(self, enabled):
         action = "enable" if enabled else "disable"
         run_command([str(PROXIMITY_CONTROL), action])
@@ -669,6 +743,15 @@ class SettingsWindow(QMainWindow):
         master = get_master_state()
         data = get_syauth_state()
         proximity = get_proximity_state()
+        idle = get_idle_settings()
+
+        self.idle_toggle.blockSignals(True)
+        self.idle_toggle.setChecked(idle["enabled"])
+        self.idle_toggle.blockSignals(False)
+        self.idle_minutes.blockSignals(True)
+        self.idle_minutes.setValue(idle["minutes"])
+        self.idle_minutes.setEnabled(idle["enabled"])
+        self.idle_minutes.blockSignals(False)
 
         self.proximity_toggle.blockSignals(True)
         self.proximity_toggle.setChecked(proximity["enabled"])
