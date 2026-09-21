@@ -8,8 +8,8 @@
   shows.
 -->
 <resources>
-    <string name="app_name">syauth</string>
-    <string name="syauth_biometric_prompt_title">Approve syauth challenge</string>
+    <string name="app_name">DeskUnlock</string>
+    <string name="syauth_biometric_prompt_title">DeskUnlock</string>
     <string name="syauth_biometric_prompt_subtitle_fmt">%1$s is requesting sudo (peer_id %2$s)</string>
     <string name="syauth_biometric_prompt_cancel">Cancel</string>
 </resources>

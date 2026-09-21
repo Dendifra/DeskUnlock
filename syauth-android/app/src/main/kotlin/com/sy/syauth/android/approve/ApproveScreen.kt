@@ -29,9 +29,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -91,7 +93,7 @@ private val BUTTON_HEIGHT_DP = 56.dp
 private val BUTTON_HORIZONTAL_PADDING_DP = 24.dp
 
 /** Title surfaced in the TopAppBar. Centralised so tests can assert on it. */
-public const val APPROVE_SCREEN_TITLE: String = "syauth"
+public const val APPROVE_SCREEN_TITLE: String = "DeskUnlock"
 
 /**
  * Dwell time on the `Approved` terminal state before the activity
@@ -173,23 +175,49 @@ public fun ApproveScreen(
             verticalArrangement = Arrangement.Top,
         ) {
             Spacer(modifier = Modifier.height(SECTION_SPACING_DP))
-            Icon(
-                imageVector = Icons.Filled.Lock,
-                contentDescription = null,
-                modifier = Modifier.size(APP_ICON_SIZE_DP),
-                tint = MaterialTheme.colorScheme.primary,
-            )
-            Spacer(modifier = Modifier.height(SECTION_SPACING_DP))
-            Text(
-                text = "Approve unlock for $safeHostname?",
-                style = MaterialTheme.typography.headlineSmall,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.semantics { testTag = ApproveScreenTestTags.HOSTNAME },
-            )
-            Spacer(modifier = Modifier.height(SECTION_SPACING_DP))
-            CountdownRow(state)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                ),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(SCREEN_PADDING_DP),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Fingerprint,
+                        contentDescription = "Autenticazione biometrica",
+                        modifier = Modifier.size(APP_ICON_SIZE_DP),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(modifier = Modifier.height(SECTION_SPACING_DP))
+                    Text(
+                        text = "Sblocca il computer",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = safeHostname,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.semantics { testTag = ApproveScreenTestTags.HOSTNAME },
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Richiesta di sblocco del computer",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.height(SECTION_SPACING_DP))
+                    CountdownRow(state)
+                }
+            }
             Spacer(modifier = Modifier.weight(1f))
             ButtonStack(
                 approveEnabled = approveEnabled,
@@ -206,9 +234,9 @@ public fun ApproveScreen(
 @Composable
 private fun CountdownRow(state: ApproveUiState) {
     val text = when (state) {
-        is ApproveUiState.Counting -> "Approve within ${state.remainingSeconds}s"
-        ApproveUiState.AwaitingBiometric -> "Awaiting biometric…"
-        ApproveUiState.Signing -> "Signing…"
+        is ApproveUiState.Counting -> "Autorizza entro ${state.remainingSeconds}s"
+        ApproveUiState.AwaitingBiometric -> "In attesa della biometria…"
+        ApproveUiState.Signing -> "Firma in corso…"
         else -> ""
     }
     Text(
@@ -243,7 +271,7 @@ private fun ButtonStack(
             ),
         ) {
             Text(
-                text = "Approve",
+                text = "Autorizza",
                 style = MaterialTheme.typography.titleMedium,
             )
         }
@@ -260,7 +288,7 @@ private fun ButtonStack(
             ),
         ) {
             Text(
-                text = "Deny",
+                text = "Rifiuta",
                 style = MaterialTheme.typography.titleMedium,
             )
         }
@@ -270,8 +298,8 @@ private fun ButtonStack(
 @Composable
 private fun TerminalMessage(state: ApproveUiState) {
     val text = when (state) {
-        is ApproveUiState.Approved -> "Unlock approved."
-        is ApproveUiState.Denied -> "Denied: ${denialReasonLabel(state.reason)}"
+        is ApproveUiState.Approved -> "Sblocco autorizzato"
+        is ApproveUiState.Denied -> "Richiesta rifiutata: ${denialReasonLabel(state.reason)}"
         else -> ""
     }
     Text(

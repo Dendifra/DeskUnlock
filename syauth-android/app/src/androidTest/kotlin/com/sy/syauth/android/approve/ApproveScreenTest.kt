@@ -50,11 +50,31 @@ class ApproveScreenTest {
         }
 
         composeTestRule
+            .onNodeWithText("DeskUnlock")
+            .assertIsDisplayed()
+
+        composeTestRule
+            .onNodeWithText("Sblocca il computer")
+            .assertIsDisplayed()
+
+        composeTestRule
+            .onNodeWithText("Richiesta di sblocco del computer")
+            .assertIsDisplayed()
+
+        composeTestRule
             .onNodeWithText(TEST_HOSTNAME, substring = true)
             .assertIsDisplayed()
 
         composeTestRule
             .onNodeWithTag(ApproveScreenTestTags.HOSTNAME)
+            .assertIsDisplayed()
+
+        composeTestRule
+            .onNodeWithText("Autorizza")
+            .assertIsDisplayed()
+
+        composeTestRule
+            .onNodeWithText("Rifiuta")
             .assertIsDisplayed()
 
         composeTestRule

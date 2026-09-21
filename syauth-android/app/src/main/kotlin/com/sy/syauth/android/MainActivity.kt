@@ -696,7 +696,7 @@ private fun SyauthApp(
             // this branch is only reachable via direct navigation in
             // tests.
             if (approvePayload == null) {
-                Text(text = "Approve destination (no payload).")
+                Text(text = "DeskUnlock approval unavailable.")
             } else {
                 ApproveRoute(activity = activity, payload = approvePayload, bondRecord = bondRecord)
             }
@@ -846,7 +846,7 @@ private const val BOND_KEY_BYTES_LEN: Int = 32
 private const val PERMISSION_LOG_TAG: String = "syauth.permission"
 
 /** Surfaced as a toast when no bond is yet present (pair has not run). */
-private const val NO_BOND_TOAST: String = "No syauth bond yet — run `syauth pair` on the desktop and tap Pair in the app"
+private const val NO_BOND_TOAST: String = "Nessun computer associato — avvia il pairing sul computer e tocca Associa nell'app"
 
 /**
  * Runtime BLE permission Android 12+ (API 31+) enforces for the
@@ -913,14 +913,14 @@ private fun HomeRoute(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                text = "Syauth",
+                text = "DeskUnlock",
                 style = MaterialTheme.typography.headlineMedium,
             )
 
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
-                text = "Phone as biometric key",
+                text = "Il telefono è la tua chiave biometrica",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -953,7 +953,7 @@ private fun HomeRoute(
             text = {
                 Text(
                     text =
-                        "This removes the Syauth bond and its Keystore key. " +
+                        "Questo rimuove l'associazione DeskUnlock e la chiave Keystore. " +
                         "The Android Bluetooth bond is not changed.",
                 )
             },
@@ -1053,9 +1053,9 @@ private fun PairedHomeBody(
 
             Text(
                 text = if (serviceRunning)
-                    "● Syauth service active"
+                    "● Servizio DeskUnlock attivo"
                 else
-                    "○ Syauth service inactive",
+                    "○ Servizio DeskUnlock inattivo",
                 style = MaterialTheme.typography.titleMedium,
                 color = if (serviceRunning)
                     MaterialTheme.colorScheme.primary
