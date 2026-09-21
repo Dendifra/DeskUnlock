@@ -14,19 +14,21 @@ git -C "$work/DankMaterialShell" submodule update --init --recursive --quiet
 
 pam="$work/DankMaterialShell/quickshell/Modules/Lock/Pam.qml"
 lock_screen="$work/DankMaterialShell/quickshell/Modules/Lock/LockScreenContent.qml"
+lock_qml="$work/DankMaterialShell/quickshell/Modules/Lock/Lock.qml"
 
-python3 - "$pam" "$lock_screen" <<'PY'
+python3 - "$pam" "$lock_screen" "$lock_qml" <<'PY'
 from pathlib import Path
 import sys
 
 pam = Path(sys.argv[1])
 lock_screen = Path(sys.argv[2])
+lock_qml = Path(sys.argv[3])
 s = pam.read_text(encoding="utf-8")
 
 needle_state = "    property bool unlockInProgress: false\n"
 if needle_state not in s:
     raise SystemExit("Pam.qml layout mismatch: root state anchor not found")
-s = s.replace(needle_state, needle_state + "    property bool syauthAvailable: false\n    property bool localInteractionConsumed: false\n    property int syauthGeneration: 0\n", 1)
+s = s.replace(needle_state, needle_state + "    property bool syauthAvailable: false\n    property string syauthAuthState: \"AUTH_READY\"\n    property int syauthGeneration: 0\n", 1)
 
 needle_fprint = """    PamContext {
         id: fprint
@@ -34,48 +36,87 @@ needle_fprint = """    PamContext {
 if needle_fprint not in s:
     raise SystemExit("Pam.qml layout mismatch: fprint anchor not found")
 
-syauth_block = """    PamContext {
+syauth_block = """    function requestSyauthAuth(source: string, explicit: bool): bool {
+        return syauth.startSyauthAuth(source, explicit);
+    }
+
+    PamContext {
         id: syauth
 
-        function startIfAvailable(): bool {
-            if (!root.lockSecured || root.unlockInProgress || active)
+        property int requestGeneration: 0
+
+        // One single-flight generation per same locked session; do not retry automatically.
+        function startSyauthAuth(source: string, explicit: bool): bool {
+            if (!root.lockSecured || root.unlockInProgress)
                 return false;
+            if (root.syauthAuthState === \"AUTH_IN_FLIGHT\" || active) {
+                console.log(\"DeskUnlock auth generation ignored because already in-flight source=\" + source);
+                return false;
+            }
+            if (root.syauthAuthState === \"AUTH_CONSUMED\" && !explicit)
+                return false;
+
             ++root.syauthGeneration;
             requestGeneration = root.syauthGeneration;
+            root.syauthAuthState = \"AUTH_IN_FLIGHT\";
+            syauthTimeout.restart();
+            console.log(\"DeskUnlock auth generation started source=\" + source);
             root.syauthAvailable = start();
+            if (!root.syauthAvailable) {
+                root.syauthAuthState = \"AUTH_CONSUMED\";
+                console.log(\"DeskUnlock auth generation timeout generation=\" + requestGeneration);
+            }
             return root.syauthAvailable;
         }
 
-        // PamContext.abort() cancels the active PAM conversation and does not
-        // emit completion for the aborted conversation (Quickshell
-        // Services.Pam contract). This generation is a defensive late-signal
-        // guard as well.
-        property int requestGeneration: 0
-
-        config: "syauth-dms"
-        configDirectory: "/etc/pam.d"
+        config: \"syauth-dms\"
+        configDirectory: \"/etc/pam.d\"
 
         onCompleted: res => {
-            if (!root.lockSecured)
+            if (!root.lockSecured || requestGeneration !== root.syauthGeneration) {
+                console.log(\"DeskUnlock stale generation response ignored\");
                 return;
-
-            if (res === PamResult.Success && root.lockSecured && requestGeneration === root.syauthGeneration) {
+            }
+            if (root.syauthAuthState !== \"AUTH_IN_FLIGHT\") {
+                console.log(\"DeskUnlock stale generation response ignored\");
+                return;
+            }
+            root.syauthAuthState = \"AUTH_CONSUMED\";
+            syauthTimeout.stop();
+            if (res === PamResult.Success) {
+                console.log(\"DeskUnlock auth generation success\");
                 if (!root.unlockInProgress) {
                     passwd.abort();
                     fprint.abort();
                     u2f.abort();
                     root.proceedAfterPrimaryAuth();
                 }
+                return;
             }
+            console.log(\"DeskUnlock auth generation denied\");
+            // A later deliberate local edge may start a new generation.
+        }
+    }
+
+    Timer {
+        id: syauthTimeout
+        interval: 20000
+        repeat: false
+        onTriggered: {
+            if (root.syauthAuthState !== \"AUTH_IN_FLIGHT\")
+                return;
+            root.syauthAuthState = \"AUTH_CONSUMED\";
+            if (syauth.active)
+                syauth.abort();
+            console.log(\"DeskUnlock auth generation timeout\");
         }
     }
 
     IpcHandler {
-        target: "syauth"
+        target: \"syauth\"
 
         function phoneReturned(): void {
-            if (root.lockSecured && !root.unlockInProgress && !syauth.active)
-                syauth.startIfAvailable();
+            syauth.startSyauthAuth(\"phone-return\", false);
         }
     }
 
@@ -83,12 +124,8 @@ syauth_block = """    PamContext {
         target: passwd
 
         function onActiveChanged(): void {
-            if (!passwd.active) {
-                root.localInteractionConsumed = false;
-                return;
-            }
-            if (!root.localInteractionConsumed)
-                root.localInteractionConsumed = syauth.startIfAvailable();
+            if (passwd.active)
+                syauth.startSyauthAuth(\"passwd.active\", false);
         }
     }
 
@@ -117,15 +154,97 @@ if needle_unlock not in s:
 s = s.replace(needle_unlock, """        if (!lockSecured) {
             ++root.syauthGeneration;
             root.syauthAvailable = false;
-            root.localInteractionConsumed = false;
-            if (syauth.active)
+            root.syauthAuthState = "AUTH_READY";
+            syauthTimeout.stop();
+            if (syauth.active) {
                 syauth.abort();
+                console.log("DeskUnlock auth generation cancelled");
+            }
             root.resetAuthFlows();
             return;
         }
 """, 1)
 
 pam.write_text(s, encoding="utf-8")
+
+lock = lock_qml.read_text(encoding="utf-8")
+needle_lock_state = "    property bool lockWakeAllowed: false\n"
+if needle_lock_state not in lock:
+    raise SystemExit("Lock.qml layout mismatch: wake state anchor not found")
+lock = lock.replace(needle_lock_state, needle_lock_state + "    property bool localReengagementSent: false\n", 1)
+
+needle_secure = """        function onSecureChanged() {
+            notifyLockedHint(sessionLock.secure);
+            if (!sessionLock.secure)
+                return;
+"""
+if needle_secure not in lock:
+    raise SystemExit("Lock.qml layout mismatch: secure edge anchor not found")
+lock = lock.replace(needle_secure, """        function onSecureChanged() {
+            notifyLockedHint(sessionLock.secure);
+            if (!sessionLock.secure)
+                return;
+            localReengagementSent = false;
+            console.log("DeskUnlock lock epoch started");
+""", 1)
+
+needle_wake = """    MouseArea {
+        anchors.fill: parent
+        enabled: sessionLock.secure
+        hoverEnabled: enabled
+        onPressed: lockWakeDebounce.restart()
+        onPositionChanged: lockWakeDebounce.restart()
+        onWheel: lockWakeDebounce.restart()
+    }
+"""
+if needle_wake not in lock:
+    raise SystemExit("Lock.qml layout mismatch: wake input anchor not found")
+lock = lock.replace(needle_wake, """    function notifyLocalReengagement(explicit: bool): void {
+        if (!sessionLock.secure)
+            return;
+        if (!explicit && localReengagementSent)
+            return;
+        if (!explicit)
+            localReengagementSent = true;
+        console.log(\"DeskUnlock local re-engagement\");
+        sharedPam.requestSyauthAuth(\"local-reengagement\", explicit);
+    }
+
+    MouseArea {
+        anchors.fill: parent
+        enabled: sessionLock.secure
+        hoverEnabled: enabled
+        onPressed: {
+            lockWakeDebounce.restart();
+            root.notifyLocalReengagement(true);
+        }
+        onPositionChanged: {
+            lockWakeDebounce.restart();
+            root.notifyLocalReengagement(false);
+        }
+        onWheel: {
+            lockWakeDebounce.restart();
+            root.notifyLocalReengagement(true);
+        }
+    }
+""", 1)
+
+needle_keys = """        Keys.onPressed: event => {
+            if (!sessionLock.secure)
+                return;
+            lockWakeDebounce.restart();
+        }
+"""
+if needle_keys not in lock:
+    raise SystemExit("Lock.qml layout mismatch: key wake anchor not found")
+lock = lock.replace(needle_keys, """        Keys.onPressed: event => {
+            if (!sessionLock.secure)
+                return;
+            lockWakeDebounce.restart();
+            root.notifyLocalReengagement(true);
+        }
+""", 1)
+lock_qml.write_text(lock, encoding="utf-8")
 
 ui = lock_screen.read_text(encoding="utf-8")
 needle_icon = '''                                if (pam.u2fPending)

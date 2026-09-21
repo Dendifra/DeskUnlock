@@ -56,6 +56,7 @@ test:
 	bash tests/rssi_status.sh
 	bash tests/proximity_engine.sh
 	bash tests/idle_lock.sh
+	bash tests/auth_lifecycle.sh
 
 # Run all tests with verbose output.
 .PHONY: testv
