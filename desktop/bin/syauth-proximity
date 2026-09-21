@@ -19,6 +19,7 @@ BASELINE_BOOTSTRAP_SAMPLES=3
 BASELINE_BOOTSTRAP_MAX_RANGE_DB=8
 BASELINE_ALPHA_PERCENT=5
 MID_PERSISTENCE_SECONDS=2
+FAST_RETURN_CONSECUTIVE_SAMPLES=2
 
 DEFAULT_PROFILE="balanced"
 DEFAULT_ENABLED=1
@@ -44,6 +45,7 @@ SEEN_PRESENCE=0
 LOCK_REASON="$DEFAULT_LOCK_REASON"
 LOCK_ISSUED=$LOCK_NOT_ISSUED
 AUTO_AUTH_SENT=0
+FAST_RETURN_SAMPLE_COUNT=0
 
 RSSI_RAW=""
 RSSI_FILTERED=""
@@ -380,6 +382,31 @@ apply_candidate() {
     fi
 }
 
+fast_return_candidate() {
+    local raw_delta near_delta
+    if [[ "$LOCK_REASON" != PROXIMITY || "$PROXIMITY_STATE" != FAR && "$PROXIMITY_STATE" != MID || -z "$BASELINE" || "$RSSI_SAMPLE_MS" != "$LAST_SAMPLE_MS" || ! "$RSSI_RAW" =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
+        FAST_RETURN_SAMPLE_COUNT=0
+        return
+    fi
+
+    near_delta="$(profile_value "$PROFILE" near_delta)"
+    raw_delta="$(float_delta "$RSSI_RAW" "$BASELINE")"
+    if float_ge "$raw_delta" "$near_delta"; then
+        FAST_RETURN_SAMPLE_COUNT=$((FAST_RETURN_SAMPLE_COUNT + 1))
+    else
+        FAST_RETURN_SAMPLE_COUNT=0
+        return
+    fi
+
+    if (( FAST_RETURN_SAMPLE_COUNT >= FAST_RETURN_CONSECUTIVE_SAMPLES )); then
+        PROXIMITY_STATE=NEAR
+        PENDING_STATE=""
+        PENDING_SINCE_MS=0
+        STATE_CHANGED=1
+        FAST_RETURN_SAMPLE_COUNT=0
+    fi
+}
+
 process_rssi() {
     local now="$1" delta candidate
     STATE_CHANGED=0
@@ -510,6 +537,14 @@ engine_tick() {
     fi
 
     if ! heartbeat_valid; then
+        if [[ "$LOCK_REASON" == PROXIMITY && ( "$PROXIMITY_STATE" == FAR || "$PROXIMITY_STATE" == MID ) ]]; then
+            process_rssi "$now"
+            fast_return_candidate
+            if [[ "$PROXIMITY_STATE" == NEAR || "$FAST_RETURN_SAMPLE_COUNT" -gt 0 ]]; then
+                save_runtime || true
+                return
+            fi
+        fi
         if (( SEEN_PRESENCE == 1 )); then
             if [[ "$PROXIMITY_STATE" != ABSENT ]]; then
                 PROXIMITY_STATE=ABSENT
@@ -530,6 +565,7 @@ engine_tick() {
 
     SEEN_PRESENCE=1
     process_rssi "$now"
+    fast_return_candidate
 
     if (( locked == 0 )); then
         if [[ "$PROXIMITY_STATE" == FAR && "$STATE_CHANGED" == 1 && -n "$sid" ]]; then

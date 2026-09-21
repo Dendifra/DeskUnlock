@@ -67,10 +67,15 @@ reset_case() {
     load_runtime
 }
 
+write_sample_values() {
+    local raw="$1" filtered="$2" timestamp="$3"
+    mkdir -p "$RUNTIME_SUBDIR"
+    printf 'raw=%s\nfiltered=%s\nsample_epoch_ms=%s\n' "$raw" "$filtered" "$timestamp" > "$RSSI_STATE"
+}
+
 write_sample() {
     local filtered="$1" timestamp="$2"
-    mkdir -p "$RUNTIME_SUBDIR"
-    printf 'raw=%s\nfiltered=%s\nsample_epoch_ms=%s\n' "$filtered" "$filtered" "$timestamp" > "$RSSI_STATE"
+    write_sample_values "$filtered" "$filtered" "$timestamp"
 }
 
 tick_sample() {
@@ -142,6 +147,16 @@ test_far_persistence_locks_once() {
     grep -Fx 'lock_reason=PROXIMITY' "$RUNTIME_STATE" >/dev/null || fail "proximity lock reason missing"
 }
 
+test_departure_behavior_remains_conservative() {
+    bootstrap_near
+    tick_sample -61 1000
+    assert_eq NEAR "$PROXIMITY_STATE" "departure single weak sample"
+    tick_sample -61 1000
+    assert_eq NEAR "$PROXIMITY_STATE" "departure persistence start"
+    tick_sample -61 7000
+    assert_eq FAR "$PROXIMITY_STATE" "departure sustained weak samples"
+}
+
 test_proximity_lock_reason_starts_proximity() {
     far_lock
     assert_eq PROXIMITY "$LOCK_REASON" "proximity lock provenance"
@@ -165,6 +180,100 @@ test_proximity_lock_reason_survives_multiple_locked_ticks() {
     engine_tick
     engine_tick
     assert_eq PROXIMITY "$LOCK_REASON" "multiple locked tick provenance"
+}
+
+test_single_strong_raw_spike_does_not_return_near() {
+    far_lock
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq FAR "$PROXIMITY_STATE" "single strong raw spike"
+}
+
+test_sustained_strong_raw_samples_return_quickly() {
+    far_lock
+    local started="$SYAUTH_TEST_NOW_MS"
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq FAR "$PROXIMITY_STATE" "first strong raw sample"
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq NEAR "$PROXIMITY_STATE" "sustained strong raw return"
+    assert_eq 1 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG")" "fast return auth"
+    assert_eq 4000 "$((SYAUTH_TEST_NOW_MS - started))" "fast return latency"
+}
+
+test_sustained_strong_raw_samples_return_from_mid() {
+    far_lock
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 1000))
+    write_sample_values -58 -58 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -58 -58 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq MID "$PROXIMITY_STATE" "MID return starting state"
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq MID "$PROXIMITY_STATE" "MID first strong raw sample"
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq NEAR "$PROXIMITY_STATE" "MID sustained strong raw return"
+    assert_eq 1 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG")" "MID fast return auth"
+}
+
+test_alternating_raw_samples_do_not_flap() {
+    far_lock
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -61 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq FAR "$PROXIMITY_STATE" "alternating raw samples"
+    assert_eq 0 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG" || true)" "alternating raw auth"
+}
+
+test_fast_return_waits_for_late_challenge_ready() {
+    far_lock
+    SYAUTH_TEST_READY=0
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq NEAR "$PROXIMITY_STATE" "fast return without challenge ready"
+    assert_eq 0 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG" || true)" "early fast return auth"
+    SYAUTH_TEST_READY=1
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq 1 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG")" "late challenge-ready auth"
+}
+
+test_fast_return_waits_for_late_heartbeat() {
+    far_lock
+    SYAUTH_TEST_HEARTBEAT_AGE_MS=$((HEARTBEAT_STALE_AFTER_MS + 1))
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq NEAR "$PROXIMITY_STATE" "fast return without heartbeat"
+    assert_eq 0 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG" || true)" "early heartbeat auth"
+    SYAUTH_TEST_HEARTBEAT_AGE_MS=0
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 2000))
+    write_sample_values -56 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
+    assert_eq 1 "$(grep -c '^AUTH$' "$SYAUTH_TEST_ACTION_LOG")" "late heartbeat auth"
 }
 
 test_stale_rssi_with_heartbeat_does_not_become_far() {
@@ -413,10 +522,17 @@ tests=(
     test_near_state_is_stable
     test_single_weak_spike_does_not_become_far
     test_mid_hysteresis_avoids_flap
+    test_departure_behavior_remains_conservative
     test_far_persistence_locks_once
     test_proximity_lock_reason_starts_proximity
     test_proximity_lock_reason_survives_pending_locked_tick
     test_proximity_lock_reason_survives_multiple_locked_ticks
+    test_single_strong_raw_spike_does_not_return_near
+    test_sustained_strong_raw_samples_return_quickly
+    test_sustained_strong_raw_samples_return_from_mid
+    test_alternating_raw_samples_do_not_flap
+    test_fast_return_waits_for_late_challenge_ready
+    test_fast_return_waits_for_late_heartbeat
     test_stale_rssi_with_heartbeat_does_not_become_far
     test_lost_heartbeat_becomes_absent_and_locks
     test_proximity_lock_reason_is_runtime_only
