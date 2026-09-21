@@ -88,7 +88,7 @@ profile_value() {
         balanced:near_delta) printf '%s\n' -4 ;;
         balanced:far_persistence) printf '%s\n' 8 ;;
         balanced:near_persistence) printf '%s\n' 4 ;;
-        balanced:return_delta) printf '%s\n' -2 ;;
+        balanced:return_delta) printf '%s\n' -3 ;;
         wide:far_delta) printf '%s\n' -9 ;;
         wide:near_delta) printf '%s\n' -6 ;;
         wide:far_persistence) printf '%s\n' 10 ;;
