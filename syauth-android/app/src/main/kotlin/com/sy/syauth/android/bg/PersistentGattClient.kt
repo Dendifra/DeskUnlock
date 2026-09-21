@@ -254,6 +254,8 @@ public class PersistentGattClient internal constructor(
      */
     private val reconnectHandler: Handler = Handler(Looper.getMainLooper())
     private val gattGeneration = AtomicLong(0L)
+    private val discoveryRecoveryActive = AtomicBoolean(false)
+    private val discoveryRecoveryReconnectUsed = AtomicBoolean(false)
     private var discoveryRetry: Runnable? = null
     private var discoveryRetryAttempt = 0
 
@@ -308,7 +310,7 @@ public class PersistentGattClient internal constructor(
      */
     private val reconnectRunnable: Runnable = object : Runnable {
         override fun run() {
-            if (stopped.get()) return
+            if (stopped.get() || discoveryRecoveryReconnectUsed.get()) return
             Log.i(
                 PERSISTENT_GATT_LOG_TAG,
                 "watchdog: still disconnected after ${RECONNECT_INTERVAL_MS}ms — forcing reconnect"
@@ -364,6 +366,9 @@ public class PersistentGattClient internal constructor(
         stopped.set(true)
         reconnectHandler.removeCallbacks(reconnectRunnable)
         cancelDiscoveryRetry()
+        discoveryRecoveryActive.set(false)
+        discoveryRecoveryReconnectUsed.set(false)
+        gattGeneration.incrementAndGet()
         presenceHandler.removeCallbacks(presenceRunnable)
         rssiHandler.removeCallbacks(rssiRunnable)
         gattOperations.markNotReady()
@@ -392,17 +397,27 @@ public class PersistentGattClient internal constructor(
      */
     public fun forceReconnect() {
         Log.i(PERSISTENT_GATT_LOG_TAG, "forceReconnect: tearing down stale GATT")
+        reconnectFresh(resetRecovery = true)
+    }
+
+    private fun reconnectFresh(resetRecovery: Boolean) {
+        reconnectHandler.removeCallbacks(reconnectRunnable)
+        cancelDiscoveryRetry()
+        discoveryRetryAttempt = 0
+        discoveryInFlight.set(false)
+        gattOperations.markNotReady()
+        presenceHandler.removeCallbacks(presenceRunnable)
+        rssiHandler.removeCallbacks(rssiRunnable)
+        if (resetRecovery) {
+            discoveryRecoveryActive.set(false)
+            discoveryRecoveryReconnectUsed.set(false)
+        }
         val handle = gatt.getAndSet(null)
+        gattGeneration.incrementAndGet()
         if (handle != null) {
             runCatching { handle.disconnect() }
             runCatching { handle.close() }
         }
-        discoveryInFlight.set(false)
-        gattOperations.markNotReady()
-        cancelDiscoveryRetry()
-        discoveryRetryAttempt = 0
-        presenceHandler.removeCallbacks(presenceRunnable)
-        rssiHandler.removeCallbacks(rssiRunnable)
         start()
     }
 
@@ -439,6 +454,12 @@ public class PersistentGattClient internal constructor(
         val delay = DISCOVERY_RETRY_DELAYS_MS.getOrNull(discoveryRetryAttempt)
         if (delay == null) {
             Log.w(PERSISTENT_GATT_LOG_TAG, "GATT discovery retry exhausted")
+            if (discoveryRecoveryReconnectUsed.compareAndSet(false, true)) {
+                Log.w(PERSISTENT_GATT_LOG_TAG, "escalating incomplete discovery to one fresh GATT")
+                reconnectFresh(resetRecovery = false)
+            } else {
+                Log.w(PERSISTENT_GATT_LOG_TAG, "fresh GATT discovery recovery exhausted")
+            }
             return
         }
         discoveryRetryAttempt += 1
@@ -567,6 +588,7 @@ public class PersistentGattClient internal constructor(
             gattOperations.markNotReady()
             Log.i(PERSISTENT_GATT_LOG_TAG, "services discovered status=$status n=${g.services.size}")
             if (status != BluetoothGatt.GATT_SUCCESS) {
+                discoveryRecoveryActive.set(true)
                 scheduleDiscoveryRetry(g)
                 return
             }
@@ -574,27 +596,35 @@ public class PersistentGattClient internal constructor(
             val response = findCharacteristic(g, SYAUTH_RESPONSE_CHAR_UUID)
             val cccd = challenge?.getDescriptor(CCCD_UUID)
             if (challenge == null || response == null || cccd == null) {
+                discoveryRecoveryActive.set(true)
                 scheduleDiscoveryRetry(g)
                 return
             }
             val notificationsEnabled = g.setCharacteristicNotification(challenge, true)
             cccd.value = CCCD_ENABLE_NOTIFY
             if (!notificationsEnabled) {
+                discoveryRecoveryActive.set(true)
                 scheduleDiscoveryRetry(g)
                 return
             }
             val ok = runCatching { g.writeDescriptor(cccd) }.getOrDefault(false)
-            if (!ok) scheduleDiscoveryRetry(g)
+            if (!ok) {
+                discoveryRecoveryActive.set(true)
+                scheduleDiscoveryRetry(g)
+            }
         }
 
         override fun onServiceChanged(g: BluetoothGatt) {
             if (gatt.get() !== g) return
+            val newRecoveryEpisode = discoveryRecoveryActive.compareAndSet(false, true)
             gattOperations.markNotReady()
-            cancelDiscoveryRetry()
-            discoveryRetryAttempt = 0
-            presenceHandler.removeCallbacks(presenceRunnable)
-            rssiHandler.removeCallbacks(rssiRunnable)
-            if (discoveryInFlight.compareAndSet(false, true)) {
+            if (newRecoveryEpisode) {
+                cancelDiscoveryRetry()
+                discoveryRetryAttempt = 0
+                presenceHandler.removeCallbacks(presenceRunnable)
+                rssiHandler.removeCallbacks(rssiRunnable)
+            }
+            if (newRecoveryEpisode && discoveryInFlight.compareAndSet(false, true)) {
                 g.discoverServices()
             }
         }
@@ -647,6 +677,8 @@ public class PersistentGattClient internal constructor(
                 cancelDiscoveryRetry()
                 discoveryRetryAttempt = 0
                 discoveryInFlight.set(false)
+                discoveryRecoveryActive.set(false)
+                discoveryRecoveryReconnectUsed.set(false)
                 gattOperations.markReady()
                 rssiHandler.removeCallbacks(rssiRunnable)
                 rssiHandler.post(rssiRunnable)

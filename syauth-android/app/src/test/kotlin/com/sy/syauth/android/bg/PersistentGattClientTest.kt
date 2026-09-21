@@ -462,6 +462,137 @@ class PersistentGattClientTest {
     }
 
     @Test
+    fun exhausted_service_changed_recovery_reconnects_once_and_recovers() {
+        val firstHandle = newShadowGatt()
+        val secondHandle = newShadowGatt()
+        shadowGattAddService(firstHandle, makeServiceWithChallengeOnly())
+        val secondService = makeServiceWithBothChars()
+        shadowGattAddService(secondHandle, secondService)
+        val opener = SequenceOpener(ArrayDeque(listOf(firstHandle, secondHandle)))
+        val client = PersistentGattClient(
+            context = ctx(),
+            adapter = BluetoothAdapter.getDefaultAdapter(),
+            peerId = TEST_PEER_ID,
+            deviceMac = TEST_DEVICE_MAC,
+            onChallenge = { _, _ -> },
+            gattOpener = opener,
+        )
+        client.start()
+        val oldCallback = opener.callbacks[0]
+        oldCallback.onConnectionStateChange(
+            firstHandle,
+            BluetoothGatt.GATT_SUCCESS,
+            BluetoothProfile.STATE_CONNECTED,
+        )
+        oldCallback.onServiceChanged(firstHandle)
+        oldCallback.onServiceChanged(firstHandle)
+        oldCallback.onServicesDiscovered(firstHandle, BluetoothGatt.GATT_SUCCESS)
+        for (delay in PersistentGattClient.DISCOVERY_RETRY_DELAYS_MS) {
+            shadowOf(Looper.getMainLooper()).idleFor(delay, TimeUnit.MILLISECONDS)
+            oldCallback.onServicesDiscovered(firstHandle, BluetoothGatt.GATT_SUCCESS)
+        }
+        assertEquals("one initial connection plus one escalation", 2, opener.callbacks.size)
+
+        val newCallback = opener.callbacks[1]
+        newCallback.onConnectionStateChange(
+            secondHandle,
+            BluetoothGatt.GATT_SUCCESS,
+            BluetoothProfile.STATE_CONNECTED,
+        )
+        newCallback.onServicesDiscovered(secondHandle, BluetoothGatt.GATT_SUCCESS)
+        val challenge = secondService.getCharacteristic(SYAUTH_CHALLENGE_CHAR_UUID)
+        newCallback.onDescriptorWrite(
+            secondHandle,
+            challenge.getDescriptor(TEST_CCCD_UUID)!!,
+            BluetoothGatt.GATT_SUCCESS,
+        )
+        val response = secondService.getCharacteristic(SYAUTH_RESPONSE_CHAR_UUID)
+        val payload = byteArrayOf(8, 9)
+        client.writeResponse(payload)
+        assertSame("new GATT generation becomes writable only after CCCD", payload, response.value)
+
+        oldCallback.onDescriptorWrite(
+            firstHandle,
+            challenge.getDescriptor(TEST_CCCD_UUID)!!,
+            BluetoothGatt.GATT_SUCCESS,
+        )
+        shadowOf(Looper.getMainLooper()).idleFor(5_000L, TimeUnit.MILLISECONDS)
+        assertEquals("old retry and recovery do not create another connection", 2, opener.callbacks.size)
+    }
+
+    @Test
+    fun failed_fresh_discovery_does_not_reconnect_again() {
+        val firstHandle = newShadowGatt()
+        val secondHandle = newShadowGatt()
+        shadowGattAddService(firstHandle, makeServiceWithChallengeOnly())
+        shadowGattAddService(secondHandle, makeServiceWithChallengeOnly())
+        val opener = SequenceOpener(ArrayDeque(listOf(firstHandle, secondHandle)))
+        val client = PersistentGattClient(
+            context = ctx(),
+            adapter = BluetoothAdapter.getDefaultAdapter(),
+            peerId = TEST_PEER_ID,
+            deviceMac = TEST_DEVICE_MAC,
+            onChallenge = { _, _ -> },
+            gattOpener = opener,
+        )
+        client.start()
+        val firstCallback = opener.callbacks[0]
+        firstCallback.onConnectionStateChange(
+            firstHandle,
+            BluetoothGatt.GATT_SUCCESS,
+            BluetoothProfile.STATE_CONNECTED,
+        )
+        firstCallback.onServiceChanged(firstHandle)
+        firstCallback.onServicesDiscovered(firstHandle, BluetoothGatt.GATT_SUCCESS)
+        for (delay in PersistentGattClient.DISCOVERY_RETRY_DELAYS_MS) {
+            shadowOf(Looper.getMainLooper()).idleFor(delay, TimeUnit.MILLISECONDS)
+            firstCallback.onServicesDiscovered(firstHandle, BluetoothGatt.GATT_SUCCESS)
+        }
+        val secondCallback = opener.callbacks[1]
+        secondCallback.onConnectionStateChange(
+            secondHandle,
+            BluetoothGatt.GATT_SUCCESS,
+            BluetoothProfile.STATE_CONNECTED,
+        )
+        secondCallback.onServicesDiscovered(secondHandle, BluetoothGatt.GATT_SUCCESS)
+        for (delay in PersistentGattClient.DISCOVERY_RETRY_DELAYS_MS) {
+            shadowOf(Looper.getMainLooper()).idleFor(delay, TimeUnit.MILLISECONDS)
+            secondCallback.onServicesDiscovered(secondHandle, BluetoothGatt.GATT_SUCCESS)
+        }
+        shadowOf(Looper.getMainLooper()).idleFor(5_000L, TimeUnit.MILLISECONDS)
+        assertEquals("fresh recovery is the final reconnect", 2, opener.callbacks.size)
+        assertEquals(false, client.writeResponse(byteArrayOf(4)))
+    }
+
+    @Test
+    fun stop_cancels_pending_discovery_escalation() {
+        val handle = newShadowGatt()
+        shadowGattAddService(handle, makeServiceWithChallengeOnly())
+        val opener = RecordingOpener(handle)
+        val client = PersistentGattClient(
+            context = ctx(),
+            adapter = BluetoothAdapter.getDefaultAdapter(),
+            peerId = TEST_PEER_ID,
+            deviceMac = TEST_DEVICE_MAC,
+            onChallenge = { _, _ -> },
+            gattOpener = opener,
+        )
+        client.start()
+        val callback = opener.lastCallback!!
+        callback.onConnectionStateChange(
+            handle,
+            BluetoothGatt.GATT_SUCCESS,
+            BluetoothProfile.STATE_CONNECTED,
+        )
+        callback.onServiceChanged(handle)
+        callback.onServicesDiscovered(handle, BluetoothGatt.GATT_SUCCESS)
+        client.stop()
+        shadowOf(Looper.getMainLooper()).idleFor(5_000L, TimeUnit.MILLISECONDS)
+        assertEquals("stop prevents recovery reconnect", 1, opener.openCalls)
+        assertEquals(false, client.writeResponse(byteArrayOf(5)))
+    }
+
+    @Test
     fun callbacks_from_previous_gatt_generation_are_ignored() {
         val firstHandle = newShadowGatt()
         val secondHandle = newShadowGatt()
