@@ -51,6 +51,7 @@ import android.util.Log
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -252,6 +253,9 @@ public class PersistentGattClient internal constructor(
      * threads.
      */
     private val reconnectHandler: Handler = Handler(Looper.getMainLooper())
+    private val gattGeneration = AtomicLong(0L)
+    private var discoveryRetry: Runnable? = null
+    private var discoveryRetryAttempt = 0
 
     private val presenceHandler: Handler = Handler(Looper.getMainLooper())
     private val rssiHandler: Handler = Handler(Looper.getMainLooper())
@@ -333,6 +337,9 @@ public class PersistentGattClient internal constructor(
             return
         }
         gatt.set(handle)
+        gattGeneration.incrementAndGet()
+        cancelDiscoveryRetry()
+        discoveryRetryAttempt = 0
         discoveryInFlight.set(false)
         // BUG-20260528-0130 → BUG-20260528-2334: arm the reconnect
         // watchdog NOW, not only on STATE_DISCONNECTED. A
@@ -356,6 +363,7 @@ public class PersistentGattClient internal constructor(
     public fun stop() {
         stopped.set(true)
         reconnectHandler.removeCallbacks(reconnectRunnable)
+        cancelDiscoveryRetry()
         presenceHandler.removeCallbacks(presenceRunnable)
         rssiHandler.removeCallbacks(rssiRunnable)
         gattOperations.markNotReady()
@@ -391,6 +399,8 @@ public class PersistentGattClient internal constructor(
         }
         discoveryInFlight.set(false)
         gattOperations.markNotReady()
+        cancelDiscoveryRetry()
+        discoveryRetryAttempt = 0
         presenceHandler.removeCallbacks(presenceRunnable)
         rssiHandler.removeCallbacks(rssiRunnable)
         start()
@@ -417,6 +427,34 @@ public class PersistentGattClient internal constructor(
             Log.w(PERSISTENT_GATT_LOG_TAG, "gatt.refresh() reflection failed", err)
             false
         }
+    }
+
+    private fun cancelDiscoveryRetry() {
+        discoveryRetry?.let(reconnectHandler::removeCallbacks)
+        discoveryRetry = null
+    }
+
+    private fun scheduleDiscoveryRetry(handle: BluetoothGatt) {
+        if (discoveryRetry != null) return
+        val delay = DISCOVERY_RETRY_DELAYS_MS.getOrNull(discoveryRetryAttempt)
+        if (delay == null) {
+            Log.w(PERSISTENT_GATT_LOG_TAG, "GATT discovery retry exhausted")
+            return
+        }
+        discoveryRetryAttempt += 1
+        val generation = gattGeneration.get()
+        val retry = Runnable {
+            discoveryRetry = null
+            if (stopped.get() || gatt.get() !== handle || gattGeneration.get() != generation) return@Runnable
+            discoveryInFlight.set(true)
+            if (!handle.discoverServices()) {
+                discoveryInFlight.set(false)
+                scheduleDiscoveryRetry(handle)
+            }
+        }
+        discoveryRetry = retry
+        Log.w(PERSISTENT_GATT_LOG_TAG, "required GATT attributes missing; retrying discovery")
+        reconnectHandler.postDelayed(retry, delay)
     }
 
     /**
@@ -463,6 +501,8 @@ public class PersistentGattClient internal constructor(
                     // Cancel any pending reconnect watchdog — we are
                     // healthy again. (No-op if none was scheduled.)
                     reconnectHandler.removeCallbacks(reconnectRunnable)
+                    cancelDiscoveryRetry()
+                    discoveryRetryAttempt = 0
                     rssiHandler.removeCallbacks(rssiRunnable)
                     gattOperations.markNotReady()
                     discoveryInFlight.set(true)
@@ -480,6 +520,8 @@ public class PersistentGattClient internal constructor(
                     g.discoverServices()
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
+                    cancelDiscoveryRetry()
+                    discoveryRetryAttempt = 0
                     presenceHandler.removeCallbacks(presenceRunnable)
                     rssiHandler.removeCallbacks(rssiRunnable)
                     gattOperations.markNotReady()
@@ -524,28 +566,32 @@ public class PersistentGattClient internal constructor(
             discoveryInFlight.set(false)
             gattOperations.markNotReady()
             Log.i(PERSISTENT_GATT_LOG_TAG, "services discovered status=$status n=${g.services.size}")
-            if (status != BluetoothGatt.GATT_SUCCESS) return
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                scheduleDiscoveryRetry(g)
+                return
+            }
             val challenge = findCharacteristic(g, SYAUTH_CHALLENGE_CHAR_UUID)
-            if (challenge == null) {
-                Log.w(PERSISTENT_GATT_LOG_TAG, "challenge characteristic not present")
+            val response = findCharacteristic(g, SYAUTH_RESPONSE_CHAR_UUID)
+            val cccd = challenge?.getDescriptor(CCCD_UUID)
+            if (challenge == null || response == null || cccd == null) {
+                scheduleDiscoveryRetry(g)
                 return
             }
-            val cccd = challenge.getDescriptor(CCCD_UUID)
-            if (cccd == null) {
-                Log.w(PERSISTENT_GATT_LOG_TAG, "challenge characteristic has no CCCD")
-                return
-            }
-            if (!g.setCharacteristicNotification(challenge, true)) {
-                Log.w(PERSISTENT_GATT_LOG_TAG, "setCharacteristicNotification false")
-            }
+            val notificationsEnabled = g.setCharacteristicNotification(challenge, true)
             cccd.value = CCCD_ENABLE_NOTIFY
+            if (!notificationsEnabled) {
+                scheduleDiscoveryRetry(g)
+                return
+            }
             val ok = runCatching { g.writeDescriptor(cccd) }.getOrDefault(false)
-            Log.i(PERSISTENT_GATT_LOG_TAG, "subscribed: writeDescriptor=$ok")
+            if (!ok) scheduleDiscoveryRetry(g)
         }
 
         override fun onServiceChanged(g: BluetoothGatt) {
             if (gatt.get() !== g) return
             gattOperations.markNotReady()
+            cancelDiscoveryRetry()
+            discoveryRetryAttempt = 0
             presenceHandler.removeCallbacks(presenceRunnable)
             rssiHandler.removeCallbacks(rssiRunnable)
             if (discoveryInFlight.compareAndSet(false, true)) {
@@ -598,6 +644,8 @@ public class PersistentGattClient internal constructor(
             if (gatt.get() !== g) return
             Log.i(PERSISTENT_GATT_LOG_TAG, "descriptor write status=$status")
             if (descriptor.uuid == CCCD_UUID && status == BluetoothGatt.GATT_SUCCESS) {
+                cancelDiscoveryRetry()
+                discoveryRetryAttempt = 0
                 discoveryInFlight.set(false)
                 gattOperations.markReady()
                 rssiHandler.removeCallbacks(rssiRunnable)
@@ -642,6 +690,7 @@ public class PersistentGattClient internal constructor(
          * non-zero radio cost).
          */
         internal const val RECONNECT_INTERVAL_MS: Long = 2_000L
+        internal val DISCOVERY_RETRY_DELAYS_MS: LongArray = longArrayOf(500L, 1_000L, 2_000L)
 
         private const val PRESENCE_HEARTBEAT_INTERVAL_MS: Long = 10_000L
         internal const val RSSI_SAMPLE_INTERVAL_MS: Long = 2_000L

@@ -136,6 +136,15 @@ private fun makeServiceWithBothChars(): BluetoothGattService {
     return service
 }
 
+private fun makeServiceWithChallengeOnly(): BluetoothGattService {
+    val service = BluetoothGattService(
+        TEST_SERVICE_UUID,
+        BluetoothGattService.SERVICE_TYPE_PRIMARY,
+    )
+    service.addCharacteristic(makeChallengeChar())
+    return service
+}
+
 private fun newShadowGatt(): BluetoothGatt {
     val device = BluetoothAdapter.getDefaultAdapter()
         .getRemoteDevice(TEST_DEVICE_MAC)
@@ -400,6 +409,56 @@ class PersistentGattClientTest {
         callback.onDescriptorWrite(handle, challenge.getDescriptor(TEST_CCCD_UUID)!!, BluetoothGatt.GATT_SUCCESS)
         client.writeResponse(second)
         assertSame(second, response.value)
+    }
+
+    @Test
+    fun incomplete_discovery_retries_with_bounded_backoff_then_recovers() {
+        val handle = newShadowGatt()
+        val opener = RecordingOpener(handle)
+        val partial = makeServiceWithChallengeOnly()
+        shadowGattAddService(handle, partial)
+        val client = PersistentGattClient(
+            context = ctx(),
+            adapter = BluetoothAdapter.getDefaultAdapter(),
+            peerId = TEST_PEER_ID,
+            deviceMac = TEST_DEVICE_MAC,
+            onChallenge = { _, _ -> },
+            gattOpener = opener,
+        )
+        client.start()
+        val callback = opener.lastCallback!!
+        callback.onServicesDiscovered(handle, BluetoothGatt.GATT_SUCCESS)
+        assertEquals(false, client.writeResponse(byteArrayOf(1)))
+
+        shadowOf(Looper.getMainLooper()).idleFor(500L, TimeUnit.MILLISECONDS)
+        shadowGattAddService(handle, makeServiceWithBothChars())
+        callback.onServicesDiscovered(handle, BluetoothGatt.GATT_SUCCESS)
+        val challenge = makeServiceWithBothChars().getCharacteristic(SYAUTH_CHALLENGE_CHAR_UUID)
+        callback.onDescriptorWrite(handle, challenge.getDescriptor(TEST_CCCD_UUID)!!, BluetoothGatt.GATT_SUCCESS)
+        assertEquals(false, client.writeResponse(byteArrayOf(2)))
+    }
+
+    @Test
+    fun incomplete_discovery_exhaustion_stays_unavailable() {
+        val handle = newShadowGatt()
+        val opener = RecordingOpener(handle)
+        shadowGattAddService(handle, makeServiceWithChallengeOnly())
+        val client = PersistentGattClient(
+            context = ctx(),
+            adapter = BluetoothAdapter.getDefaultAdapter(),
+            peerId = TEST_PEER_ID,
+            deviceMac = TEST_DEVICE_MAC,
+            onChallenge = { _, _ -> },
+            gattOpener = opener,
+        )
+        client.start()
+        val callback = opener.lastCallback!!
+        callback.onServicesDiscovered(handle, BluetoothGatt.GATT_SUCCESS)
+        for (delay in PersistentGattClient.DISCOVERY_RETRY_DELAYS_MS) {
+            shadowOf(Looper.getMainLooper()).idleFor(delay, TimeUnit.MILLISECONDS)
+            callback.onServicesDiscovered(handle, BluetoothGatt.GATT_SUCCESS)
+        }
+        assertEquals(false, client.writeResponse(byteArrayOf(3)))
     }
 
     @Test
