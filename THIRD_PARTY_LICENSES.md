@@ -30,14 +30,15 @@ Evidence used:
 | Jetpack Compose 1.6.1, Material/Material3 1.2.0, Material Icons, Compose BOM 2024.02.00 | Android UI runtime | redistributed/bundled | Apache-2.0 | Preserve Apache-2.0 attribution. |
 | JNA 5.14.0 | Android native library loading/runtime bridge | redistributed/bundled | Apache-2.0 / LGPL-2.1-or-later | DeskUnlock elects the Apache-2.0 option for redistribution; preserve the JNA notice and Apache-2.0 terms. |
 | DankMaterialShell `aa4b99def48637d86a69620c0a8f3cc6aa0c4092` | Source patched and compiled into `dms-syauth` | compiled/linked and redistributed in the Linux package | MIT | Preserve `legal/third_party/DankMaterialShell-LICENSE.txt`. |
+| `github.com/yeqown/reedsolomon` v1.0.0 | Go module compiled into the DMS binary | compiled/linked and redistributed in the Linux package | Expat | Debian source package `golang-github-yeqown-reedsolomon` 1.0.0-2 identifies `Files: *`, copyright `2026 yeqown`, license `Expat`; exact module source files match the Debian 1.0.0 orig tarball. Preserve `legal/third_party/licenses/Expat.txt`. |
 | `assets/deskunlock-logo.png` | Android and Linux application artwork | redistributed/bundled | DeskUnlock project asset; provenance documented in `assets/README.md` | Distributed with the project. No third-party ownership or trademark claim is made. |
 
 The Rust normal-production dependency closure has 297 package records in the
 locked graph. `cargo deny check licenses` passes with the allow-list in
 `deny.toml`; no package in that closure has missing license metadata. The
 closure includes these additional permitted license families where required:
-BSD-1-Clause, BSD-2-Clause, ISC, Unicode-3.0, CC0-1.0, Zlib, Unlicense, and
-Apache-2.0 WITH LLVM-exception.
+BSD-1-Clause, BSD-2-Clause, ISC, Unicode-3.0, CC0-1.0, Expat, Zlib,
+Unlicense, and Apache-2.0 WITH LLVM-exception.
 
 ## External system dependencies
 

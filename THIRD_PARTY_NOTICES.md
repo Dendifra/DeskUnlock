@@ -48,6 +48,13 @@ DankMaterialShell is built at the pinned revision
 `dms-syauth` executable. It is MIT licensed; the exact upstream notice is in
 `legal/third_party/DankMaterialShell-LICENSE.txt`.
 
+The DMS production Go closure also includes
+`github.com/yeqown/reedsolomon` v1.0.0. Debian's version-specific source
+package `golang-github-yeqown-reedsolomon` 1.0.0-2 identifies the upstream
+`Files: *` license as Expat, copyright 2026 yeqown. Its 1.0.0 orig source
+matches the Go module files byte-for-byte. The applicable notice is in
+`legal/third_party/licenses/Expat.txt`.
+
 ## Standalone artwork
 
 `assets/deskunlock-logo.png` is the DeskUnlock project asset. Its documented
