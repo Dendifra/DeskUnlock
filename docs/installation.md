@@ -1,86 +1,97 @@
 # Installation
 
-## Status
+## Beta status
 
-DeskUnlock is currently being prepared for its first public beta.
+DeskUnlock `v0.1.0-beta.1` is beta software. The validated installation scope
+is Arch Linux/CachyOS with the Niri + DankMaterialShell integration and an
+Android companion using BLE / Companion Device APIs.
 
-Do not present the current downstream package as universally portable until the clean-machine audit passes.
+DeskUnlock is an independent downstream fork of `syauth`; internal `syauth`
+command and service names remain for compatibility.
 
-## First target: Arch / CachyOS
+## Install the public beta package
 
-The intended package name is:
+When the beta release is published:
 
-```text
-deskunlock
-```
+1. Download the Arch package and its published SHA-256 checksum.
+2. Verify the checksum with `sha256sum`.
+3. Install it with the normal package manager:
 
-The package should own application code, helpers, PAM module, systemd user units, desktop launcher, and packaging hooks.
+   ```bash
+   sudo pacman -U deskunlock-0.1.0-18-x86_64.pkg.tar.zst
+   ```
 
-Persistent pairing and cryptographic state must remain outside the package payload.
+Do not use `--nodeps`, `--overwrite`, or force options. The package installs
+program files, services, PAM integration, desktop integration, and legal
+notices. Pairing and cryptographic state remain outside the package payload.
 
-## Public release workflow target
+## Install the Android companion
 
-For an initial GitHub release:
+Download the signed beta APK from the same release and open it with Android's
+normal package installer. Sideloading may produce a warning because the APK is
+not distributed through Google Play.
 
-```text
-source tag
-   ↓
-CI build + tests
-   ↓
-Arch package artifact
-   ↓
-GitHub Release
-```
+The public APK is signed with the dedicated DeskUnlock release certificate.
+The private release key is outside the repository and must never be published.
+Verify the SHA-256 checksum published with the APK before installing.
 
-A later AUR package can build from a tagged source release.
+A pre-beta/debug APK and the release APK have different signing identities.
+Existing debug testers may need to uninstall the old app before installing the
+beta release APK, then pair the computer and phone again. Do not bypass Android
+signature checks or disable Play Protect globally.
 
-## Clean-machine test checklist
+## Pair and enable
 
-Test on a fresh environment:
+1. Start the desktop pairing command:
 
-1. install required dependencies;
-2. install DeskUnlock package;
-3. open the GUI;
-4. first-run state provisioning;
-5. pair one phone;
-6. confirm biometric authentication;
-7. confirm password fallback;
-8. reboot;
-9. confirm automatic startup;
-10. upgrade package;
-11. uninstall package;
-12. verify persistent private state is not unexpectedly deleted.
+   ```bash
+   syauth pair --adapter hci0
+   ```
 
-## Proximity Lock
+2. Open DeskUnlock on Android and tap **Pair**.
+3. Confirm the matching operating-system pairing numbers and the app-level
+   confirmation.
+4. Enable the desktop integration:
 
-La GUI DeskUnlock espone Proximity Lock con i profili **Vicino**, **Bilanciato** e **Ampio**. Il profilo Bilanciato è predefinito. Il baseline RSSI viene appreso localmente dopo più campioni e viene invalidato quando cambia il telefono associato.
+   ```bash
+   syauth-control on
+   syauth-control status
+   ```
 
-Lo stato normale mostra solo `Vicino`, `Intermedio`, `Lontano` o `Assente`. Per la diagnostica avanzata, eseguire:
+5. Lock the desktop and interact with the lock screen. The first genuine mouse
+   movement, keyboard input, or Enter causes one authentication request; the
+   Android biometric approval then completes the unlock.
 
-```bash
-syauth-proximity diagnostics
-```
+The lock surface appearing, or synthetic pointer initialization, does not
+start authentication by itself.
 
-I campioni RSSI e lo stato operativo restano in `XDG_RUNTIME_DIR`; la configurazione persistente contiene solo profilo, abilitazione, versione algoritmo e baseline numerico. Pairing, cambio e dissociazione resettano il baseline senza salvare identificatori del telefono. Per richiedere un nuovo apprendimento locale:
+## Source build
 
-```bash
-syauth-proximity reset
-```
+A source build requires the normal Rust, Cargo, Go, Wayland, Android/NDK, and
+system package tooling described by the repository Makefile. The Arch package
+build is the supported Linux packaging path. Source builds do not create or
+require the private Android release key.
 
-## Blocco per inattività
+## Clean-machine checklist
 
-Il blocco inattività è configurabile dalla scheda **Inattività** della GUI: è attivo di default dopo 10 minuti, con intervallo da 1 a 120 minuti. La configurazione locale è `~/.config/syauth/idle.conf` e non contiene identità del dispositivo o storico RSSI.
+Before treating another environment as supported, verify:
 
-Il servizio usa gli eventi Wayland `ext-idle-notify-v1`, senza polling degli input. Questo è il percorso condiviso per compositori compatibili come KDE/KWin e Niri; quando il protocollo non è esposto, il servizio non esegue un blocco alternativo. Il blocco passa dal normale lock di sessione (`loginctl`), quindi lo sblocco conserva il percorso manuale: interazione locale, challenge biometrica, DeskUnlock e PAM.
+1. dependencies install;
+2. the package installs without force flags;
+3. the GUI opens;
+4. one phone pairs;
+5. biometric approval works;
+6. password fallback remains available;
+7. reboot and user services recover;
+8. lock/unlock works after an upgrade;
+9. package removal preserves state unless an explicit cleanup is chosen.
 
-Per diagnostica/configurazione da terminale:
+Other distributions, desktop environments, and Android OEMs are not claimed
+as supported by this beta.
 
-```bash
-syauth-idle-lock status
-syauth-idle-lock minutes 15
-syauth-idle-lock disable
-```
+## Proximity and idle lock
 
-## Other distributions
-
-Debian, Fedora, openSUSE and other distributions are contribution targets. They are not yet claimed as supported.
+The GUI exposes Proximity Lock and idle-lock settings. These are optional
+locking mechanisms; proximity alone never authorizes an unlock. For their
+operator-facing diagnostics, use the installed `syauth-proximity` and
+`syauth-idle-lock` commands. See [troubleshooting.md](troubleshooting.md).

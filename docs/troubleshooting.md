@@ -1,56 +1,114 @@
 # Troubleshooting
 
-DeskUnlock should expose health information that distinguishes application failure from ordinary phone absence.
+Use read-only checks first. Replace example hostnames and peer IDs with your
+own values; do not paste keys, tokens, raw bond files, MAC addresses, or full
+home paths into public reports.
 
-## Basic checks
+## Phone is not paired
 
-Check package installation, user units, Bluetooth, pairing state, and the health command supplied by the current build.
+On the computer:
 
-During the branding migration, some internal commands may still retain `syauth` names. Public documentation should be updated only after the command rename is complete.
+```bash
+syauth list
+syauth-control status
+systemctl --user is-active syauth-presenced.service
+```
 
-## Common categories
+If no bonded phone is listed, start pairing again:
 
-### Phone not detected
+```bash
+syauth pair --adapter hci0
+```
 
-Check:
+Then open DeskUnlock, tap **Pair**, select the computer, and complete both
+confirmation steps. Do not delete system state as a first step.
 
-- Bluetooth is powered;
-- the expected phone is bonded;
-- the presence daemon is active;
-- the phone has connected/subscribed to the GATT service.
+## No unlock request appears
 
-### Authentication falls back to password
+Check that:
 
-This can be normal if:
+- Bluetooth is powered on on both devices;
+- the phone is nearby and unlocked enough to receive the request;
+- `syauth-control status` is healthy;
+- the user services are active:
 
-- the phone is absent;
-- Bluetooth is unavailable;
-- the daemon is unavailable;
-- the phone-side biometric request is not approved.
+  ```bash
+  systemctl --user is-active syauth-presenced.service
+  systemctl --user is-active syauth-proximity.service
+  ```
 
-The fallback itself is an important safety property.
+The lock surface appearing does not itself start authentication. Move the
+mouse, press a key, or press Enter once. A genuine interaction should create
+one request. Do not expect a request from pointer initialization alone.
 
-### GUI says degraded but backend is healthy
+## Biometric prompt does not appear
 
-Compare GUI state parsing with the actual backend status output. A UI parser must not assume a different output format than the control command provides.
+Check that Android notifications are allowed for DeskUnlock and that the app
+is not restricted by the device's battery manager. Confirm that the phone has
+an enrolled biometric or device credential and that the screen is usable.
 
-### Service does not start after reboot
+If the request expired, interact with the lock screen again later. Do not
+repeatedly tap approval buttons or alter Android security settings.
 
-Inspect the systemd user unit source and current-boot journal. Packaged units should come from the package-owned system location rather than stale user-local copies.
+## Bluetooth is disabled or the phone is out of range
 
-### Multiple bonded peers
+Restore Bluetooth and bring the phone into normal range, then wait for the
+companion association to recover. Password/PAM fallback remains available when
+the phone or Bluetooth path is unavailable.
 
-The current downstream policy is single-device. More than one active bonded peer should be treated as degraded until the policy is intentionally changed.
+## Service is not running
+
+Read-only checks:
+
+```bash
+systemctl --user status syauth-presenced.service
+systemctl --user status syauth-proximity.service
+journalctl --user -u syauth-presenced.service -b --no-pager
+syauth-control status
+```
+
+If DeskUnlock was intentionally disabled, re-enable it with:
+
+```bash
+syauth-control on
+```
+
+## Lock integration is unavailable
+
+The validated beta integration is Niri + DankMaterialShell on Arch/CachyOS.
+Check the DMS user service and session before changing anything. Other
+compositors and distributions are not claimed as supported by this beta.
+
+## App was replaced or reinstalled
+
+A pre-beta/debug APK and the release-signed beta APK use different signing
+identities. A one-time uninstall/reinstall may be required. Android app-private
+state can be removed by uninstalling, so pair the computer and phone again
+after reinstalling. Do not use signature-bypass tools or disable Play Protect
+globally.
+
+## Request expired
+
+An approval request has a bounded lifetime. Let it expire, then make a new
+genuine local interaction with the lock screen. The phone must be available
+and the Android app must be allowed to operate in the background.
+
+## Password fallback
+
+Fallback to the normal PAM password path is expected when the phone is absent,
+Bluetooth is unavailable, the service is down, or the request is denied or
+expired. A DeskUnlock failure must not make the configured normal PAM path
+unusable.
 
 ## Bug reports
 
 Include:
 
-- distro and version;
-- desktop/session;
+- Linux distribution and version;
+- desktop/session and whether it is the validated Niri + DMS path;
 - DeskUnlock version;
-- phone OS/version;
-- sanitized service status;
-- sanitized logs.
+- Android version and phone model;
+- sanitized service status and relevant journal excerpts.
 
-Never post keys, tokens, bond secrets, raw private state, full home paths if unnecessary, or hardware addresses unless a maintainer explicitly requests a safely redacted diagnostic.
+Never include keys, tokens, bond secrets, raw private state, hardware
+addresses, signing material, or unnecessary personal paths.

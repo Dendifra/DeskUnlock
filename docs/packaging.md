@@ -1,5 +1,22 @@
 # Packaging principles
 
+## Public beta package
+
+The validated beta package target is Arch Linux/CachyOS:
+
+```bash
+sha256sum deskunlock-0.1.0-18-x86_64.pkg.tar.zst
+sudo pacman -U deskunlock-0.1.0-18-x86_64.pkg.tar.zst
+```
+
+Use normal package-manager dependency resolution. Do not use `--nodeps`,
+`--overwrite`, or force options. The future release package includes legal
+notices under `/usr/share/licenses/deskunlock/` and does not contain private
+pairing state or signing material.
+
+Source builds use the repository Makefile and normal pinned project tooling.
+They are distinct from installing the signed public beta artifacts.
+
 ## Package owns code, not private state
 
 The package manager should own:

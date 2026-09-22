@@ -2,172 +2,198 @@
   <img src="assets/deskunlock-banner.svg" alt="DeskUnlock — smartphone authentication and proximity unlock for Linux" width="100%">
 </p>
 
-<p align="center">
-  <strong>Smartphone authentication and proximity unlock for Linux.</strong>
-</p>
+<p align="center"><strong>Smartphone authentication and proximity unlock for Linux.</strong></p>
 
 <p align="center">
-  <img alt="Status" src="https://img.shields.io/badge/status-pre--release-f59e0b?style=flat-square">
+  <img alt="Status" src="https://img.shields.io/badge/status-public%20beta-f59e0b?style=flat-square">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Linux-0ea5e9?style=flat-square">
   <img alt="Companion" src="https://img.shields.io/badge/companion-Android-22c55e?style=flat-square">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-64748b?style=flat-square">
-  <img alt="PAM" src="https://img.shields.io/badge/auth-PAM-8b5cf6?style=flat-square">
-  <img alt="BLE" src="https://img.shields.io/badge/transport-BLE%20%2F%20GATT-06b6d4?style=flat-square">
 </p>
 
-DeskUnlock is an independent desktop-focused fork of the MIT-licensed [`syauth`](https://github.com/dmytrogajewski/syauth) project. It lets a paired Android smartphone act as a secure authentication factor for Linux desktop login and unlock workflows while keeping a normal PAM fallback available when the phone or Bluetooth path is unavailable.
+# DeskUnlock
 
-> **Project status:** pre-release / portability work in progress. The current downstream implementation has been tested on an Arch-based CachyOS system. Broader distro and desktop support is a contribution target, not yet a compatibility claim.
+DeskUnlock is an independent downstream fork of the MIT-licensed
+[`syauth`](https://github.com/dmytrogajewski/syauth) project. It lets a paired
+Android phone approve a Linux desktop unlock with Android biometric
+confirmation, while the configured PAM password fallback remains available.
 
-## Why DeskUnlock?
+> **Public beta:** this repository documents the `v0.1.0-beta.1` candidate.
+> It is beta software, not a stable release or a security-certified product.
 
-Passive Bluetooth proximity alone should not be enough to unlock a computer. DeskUnlock keeps the cryptographic phone-as-key design from `syauth` and adds the pieces needed for a practical desktop workflow: packaging, health checks, first-run setup, proximity behavior, settings, lock-screen integration, and operational safeguards.
+## What it does
 
-### Current downstream features
+- Linux desktop authentication through PAM;
+- Android biometric approval for an explicit unlock request;
+- local Bluetooth LE / GATT communication between the computer and phone;
+- pairing and cryptographic state kept locally on the participating devices;
+- proximity-aware locking and desktop lock-screen integration;
+- normal PAM fallback when the phone or Bluetooth path is unavailable.
 
-- cryptographic challenge-response with the paired phone;
-- per-unlock biometric confirmation on Android;
-- Bluetooth LE / GATT transport;
-- PAM integration with password fallback;
-- proximity-aware lock behavior;
-- desktop settings GUI;
-- master ON/OFF switch;
-- single-device pairing policy;
-- health and status checks;
-- systemd user services;
-- Arch/CachyOS package management;
-- cryptographic state stored outside the package payload.
+No DeskUnlock cloud account or developer-operated backend is required. The
+Android manifest does not request `INTERNET`; the authentication path is
+BLE/GATT-based. Normal operating-system services and network behavior outside
+DeskUnlock remain outside this project's control.
 
-## Desktop app
+## Supported beta scope
 
-DeskUnlock includes a desktop settings application for managing the paired Android device, controlling proximity authentication, and checking the current system status.
+The validated beta scope is intentionally narrow:
 
-<p align="center">
-  <img src="assets/deskunlock-settings-overview.svg" alt="DeskUnlock desktop settings and configuration overview" width="100%">
-</p>
+- Arch Linux / CachyOS;
+- Wayland session with the validated Niri + DankMaterialShell (DMS)
+  integration;
+- Android companion using Bluetooth LE and Companion Device APIs.
 
-The application provides quick access to activation controls, paired-device management, security features, Bluetooth and service status, and recent unlock information.
+Other distributions, desktop environments, Android devices, and OEM ROMs may
+work, but are not universal compatibility claims. Android BLE behavior,
+battery management, and background-service policy vary by device and ROM.
 
-## How it works
-
-<p align="center">
-  <img src="assets/deskunlock-architecture.svg" alt="DeskUnlock authentication architecture" width="100%">
-</p>
-
-The desktop PAM path requests authentication from the DeskUnlock user daemon. The daemon exchanges a cryptographic challenge with the paired Android device over BLE/GATT. The phone asks for biometric approval, signs the challenge using its protected key material, and returns the response for desktop verification.
-
-If the phone, Bluetooth transport, daemon, or authentication socket is unavailable, DeskUnlock must **fail safely** and return control to the normal configured PAM path rather than grant access.
-
-See [docs/architecture.md](docs/architecture.md) for the technical design.
-
-## Security model
-
-DeskUnlock is security-sensitive software and should be treated accordingly.
-
-- Proximity alone is not sufficient for authentication.
-- The phone performs user-approved biometric confirmation.
-- Authentication uses cryptographic challenge-response.
-- Desktop verification happens before PAM accepts the result.
-- Password and other configured PAM methods remain available as fallback.
-- Keys, pairing state, and runtime state are kept outside the distributable package payload.
-
-The project has **not** received an independent professional security audit. See [docs/security-model.md](docs/security-model.md) and [SECURITY.md](SECURITY.md).
-
-## Current compatibility
-
-The downstream build that became DeskUnlock has been tested with:
-
-| Area | Current status |
-| --- | --- |
-| Linux | Tested on CachyOS / Arch-based environment |
-| Init/session | systemd user services |
-| Bluetooth | BlueZ + BLE/GATT |
-| Authentication | PAM |
-| Phone | Android companion |
-| Desktop | Wayland usage tested |
-| Lock screen | DMS adapter tested in the original environment |
-| Packaging | Arch/CachyOS package groundwork |
-
-DMS-specific integration is currently treated as an adapter layer. The public project does not yet claim universal desktop or distro support.
-
-## Installation
-
-Public installation instructions are intentionally conservative until clean-machine portability testing is complete.
-
-The first public Arch package target is expected to be:
+## Architecture
 
 ```text
-deskunlock
+Linux desktop / PAM / DMS
+          │ local BLE/GATT
+          ▼
+Android companion ── Android biometric approval
 ```
 
-See [docs/installation.md](docs/installation.md) and [docs/packaging.md](docs/packaging.md).
+The desktop creates a fresh authentication request. The phone presents an
+explicit approval action and protects its signing operation with Android
+biometric/device-credential APIs. Proximity may lock the session, but proximity
+alone is not an unlock authorization.
 
-## Project layout
+## Quick start
 
-<table>
-  <tr>
-    <td><b>📦 crates/</b></td>
-    <td>Rust desktop and core authentication components.</td>
-  </tr>
-  <tr>
-    <td><b>📱 syauth-android/</b></td>
-    <td>Android companion app used for approval and biometric confirmation.</td>
-  </tr>
-  <tr>
-    <td><b>🖥️ desktop/</b></td>
-    <td>Desktop integration helpers, session logic and user-facing tooling.</td>
-  </tr>
-  <tr>
-    <td><b>📁 packaging/</b></td>
-    <td>Arch/CachyOS packaging groundwork and distribution-related files.</td>
-  </tr>
-  <tr>
-    <td><b>📚 docs/</b></td>
-    <td>Architecture notes, installation guidance and security documentation.</td>
-  </tr>
-  <tr>
-    <td><b>🎨 assets/</b></td>
-    <td>Branding assets, README graphics and project visuals.</td>
-  </tr>
-  <tr>
-    <td><b>🛠️ scripts/</b></td>
-    <td>Audit, build, sync and development helper scripts.</td>
-  </tr>
-</table>
+The public beta is distributed as a signed Android APK and an Arch/CachyOS
+package when the release is published. Verify the published SHA-256 checksums
+before installing.
 
-## Contributing
+### 1. Install the Linux package
 
-> [!TIP]
-> Contributions are welcome — especially where DeskUnlock becomes more robust, portable and friendly for real desktop use.
+```bash
+sudo pacman -U deskunlock-0.1.0-18-x86_64.pkg.tar.zst
+```
 
-### Good contribution areas
+Use normal package-manager authentication. Do not use `--nodeps`,
+`--overwrite`, or force options.
 
-- **Desktop integrations** — KDE, GNOME, lock-screen bridges and session behavior.
-- **Android compatibility** — device testing, BLE/GATT reliability and biometric approval flow.
-- **Security review** — PAM portability, hardening and authentication logic.
-- **GUI and usability** — settings, onboarding and status reporting.
-- **Packaging** — Arch/CachyOS today, additional Linux distributions later.
-- **Documentation** — guides, diagrams, examples and translations.
+For a source checkout, see [docs/installation.md](docs/installation.md) and
+[docs/packaging.md](docs/packaging.md).
 
-➡️ Please read **[CONTRIBUTING.md](CONTRIBUTING.md)** before opening a pull request.
+### 2. Install the Android companion
 
-## Upstream and license
+Download the signed beta APK from the future release page and sideload it
+through Android's normal package installer. Android may display a warning
+because this beta is not distributed through Google Play. See
+[docs/android-setup.md](docs/android-setup.md).
 
-<table>
-  <tr>
-    <td><b>Upstream</b></td>
-    <td><a href="https://github.com/dmytrogajewski/syauth">dmytrogajewski/syauth</a></td>
-  </tr>
-  <tr>
-    <td><b>DeskUnlock focus</b></td>
-    <td>Linux desktop integration, usability, packaging, proximity behavior and smartphone-assisted authentication.</td>
-  </tr>
-  <tr>
-    <td><b>License</b></td>
-    <td>MIT — original upstream copyright notice preserved.</td>
-  </tr>
-  <tr>
-    <td><b>Legal / third-party notes</b></td>
-    <td><a href="NOTICE.md">NOTICE.md</a> · <a href="THIRD_PARTY_LICENSES.md">THIRD_PARTY_LICENSES.md</a></td>
-  </tr>
-</table>
+The release APK uses the dedicated DeskUnlock release certificate. Release
+signing material is private and is not stored in this repository. Verify the
+published SHA-256 before installation.
+
+### 3. Pair the devices
+
+1. Start the desktop pairing flow:
+
+   ```bash
+   syauth pair --adapter hci0
+   ```
+
+2. Open DeskUnlock on Android and tap **Pair**.
+3. Select the computer, confirm the operating-system pairing numbers match,
+   and complete the app-level confirmation shown by both devices.
+4. Confirm the desktop sees the bond:
+
+   ```bash
+   syauth list
+   ```
+
+The `syauth` command/file names are compatibility identifiers inherited from
+upstream. The product and user-facing name is DeskUnlock.
+
+### 4. Enable DeskUnlock
+
+```bash
+syauth-control on
+syauth-control status
+```
+
+### 5. Unlock normally
+
+The normal flow is:
+
+```text
+lock screen active
+→ no authentication from pointer initialization alone
+→ first real mouse movement, keyboard input, or Enter
+→ one DeskUnlock request
+→ Android biometric approval
+→ desktop unlock
+```
+
+The lock surface appearing does not itself start an approval request. An
+ignored request can expire; a later genuine interaction can produce another
+request.
+
+## Privacy and security
+
+DeskUnlock is designed for local phone-to-computer communication:
+
+- no DeskUnlock cloud service or remote account;
+- no Android `INTERNET` permission in the committed manifest;
+- pairing material and cryptographic state stay on the participating devices;
+- biometric decisions remain inside Android biometric/Keystore APIs;
+- no DeskUnlock analytics or developer telemetry is part of the project.
+
+These statements do not cover behavior of Android, Linux, Bluetooth, DMS, or
+other operating-system components. A compromised desktop, compromised phone,
+physical coercion, or a stolen device with its unlock credential is outside the
+guarantees DeskUnlock can make.
+
+DeskUnlock has not received an independent professional security audit. Report
+security issues through [SECURITY.md](SECURITY.md), not in a public issue with
+keys, tokens, private state, or exploit details.
+
+## Known beta limitations
+
+- Arch Linux/CachyOS and the validated Niri + DMS path are the supported beta
+  scope;
+- Android OEM battery and BLE policies can affect background operation;
+- an ignored approval request can expire and require a later interaction;
+- retry timing and broader desktop/distro portability are not yet polished;
+- replacing an older debug APK with the release-signed APK may require a
+  one-time uninstall/reinstall and pairing again;
+- other distributions and desktop environments are not claimed as supported.
+
+See [docs/troubleshooting.md](docs/troubleshooting.md) for reversible checks.
+
+## Uninstall and rollback
+
+To disable DeskUnlock without removing persistent state:
+
+```bash
+syauth-control off
+```
+
+To remove the Linux package while preserving pairing and cryptographic state:
+
+```bash
+sudo pacman -R deskunlock
+```
+
+To remove the Android companion, use Android Settings → Apps → DeskUnlock.
+Removing the app removes its app-private state; pair the phone again if it is
+installed later. Desktop pairing state is a separate explicit concern: revoke
+an old peer with `syauth revoke <peer-id>` when you intentionally retire it.
+Do not delete system state as a routine troubleshooting step.
+
+## License and notices
+
+DeskUnlock is MIT licensed and preserves upstream attribution. See:
+
+- [LICENSE](LICENSE)
+- [NOTICE.md](NOTICE.md)
+- [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)
+- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+
+The project logo provenance is documented in [assets/README.md](assets/README.md).

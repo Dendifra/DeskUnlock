@@ -1,4 +1,43 @@
-# syauth Android setup
+# DeskUnlock Android setup
+
+## Public beta installation
+
+The `v0.1.0-beta.1` Android companion is distributed as a signed APK from
+the future DeskUnlock release page. Install it with Android's normal package
+installer and verify the published SHA-256 checksum first. Android may warn
+because this is sideloaded rather than distributed through Google Play.
+
+The beta APK uses a dedicated DeskUnlock release certificate. The private
+release key is outside the repository and is never published. Existing users
+of a pre-beta/debug APK may need to uninstall that app before installing the
+release-signed APK; Android can then require pairing again. Do not disable Play
+Protect globally or use signature-bypass tools.
+
+The app uses Bluetooth LE and Companion Device APIs and does not request the
+`INTERNET` permission. Pairing and cryptographic state are local to the phone
+and computer. Android and OEM battery/Bluetooth policies remain outside
+DeskUnlock's control.
+
+## Pairing and daily approval
+
+1. Install and open DeskUnlock.
+2. Start `syauth pair --adapter hci0` on the computer.
+3. Tap **Pair** in the app and select the computer.
+4. Confirm the matching operating-system pairing numbers and the app-level
+   confirmation.
+5. Lock the computer and interact with the lock screen. The first genuine
+   mouse movement, keyboard input, or Enter produces one request; approve it
+   with the Android biometric/device-credential prompt.
+
+The lock surface appearing does not itself trigger authentication. The
+`syauth` names in the pairing command and internal files are compatibility
+identifiers inherited from upstream; the product name is DeskUnlock.
+
+## Privacy boundary
+
+DeskUnlock has no cloud account or developer-operated backend. Its approval
+path uses local BLE/GATT communication and Android biometric/Keystore APIs.
+Normal Android, Linux, Bluetooth, and OEM services may have their own behavior.
 
 Roadmap items that contribute to this document:
 

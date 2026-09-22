@@ -1,12 +1,17 @@
-# Security model
+# DeskUnlock security model
 
-This document summarizes the downstream project's intended security properties. It is not a substitute for an independent audit.
+DeskUnlock `v0.1.0-beta.1` is beta software. This document summarizes the
+downstream project's intended security properties; it is not a substitute for
+an independent professional security audit.
 
 ## Goals
 
 DeskUnlock aims to provide a phone-assisted Linux authentication path where proximity alone is not sufficient.
 
-The design inherited from upstream `syauth` uses cryptographic challenge-response and Android-side biometric authorization for signing.
+The design inherited from upstream `syauth` uses cryptographic challenge-response,
+local BLE/GATT communication, and Android-side biometric/device-credential
+authorization for signing. No DeskUnlock cloud account or developer-operated
+backend is required.
 
 ## Important properties
 
@@ -16,7 +21,9 @@ The design inherited from upstream `syauth` uses cryptographic challenge-respons
 - PAM integration must not silently grant access when DeskUnlock is unavailable.
 - Normal password or another configured PAM fallback remains available.
 - Persistent key/bond state is not shipped inside the application package.
+- The Android manifest does not request `INTERNET`.
 - The desktop implementation should authenticate the PAM user, not assume a fixed UID.
+- The Android biometric decision remains inside Android biometric/Keystore APIs.
 
 ## Failure behavior
 
@@ -37,6 +44,8 @@ The configured normal PAM authentication path should remain usable.
 The project relies on:
 
 - Linux host integrity;
+- the security of the dedicated release certificate; its private key is outside
+  the repository and is not part of DeskUnlock's source distribution;
 - correct PAM configuration;
 - BlueZ behavior;
 - Android device integrity;
