@@ -4,9 +4,9 @@
 // the prrr-android MainScreen pattern so the sibling apps share
 // visual identity:
 //
-//   - `Scaffold` + `TopAppBar` with the app name as title.
-//   - App icon (Material lock icon) centred near the top.
-//   - Hostname header — "Approve unlock for <hostname>?"
+//   - Canonical DeskUnlock logo + app name header.
+//   - Fingerprint icon and approval card with the hostname.
+//   - Safe hostname, truthful request description, countdown, and actions.
 //   - Countdown line — "Approve within Xs" (rendered only while the
 //     state is `Counting`).
 //   - `Approve` — full-width primary button on the theme background
@@ -20,6 +20,7 @@
 // the `ApproveViewModel` injected as a parameter.
 package com.sy.syauth.android.approve
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -34,14 +35,11 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -49,6 +47,7 @@ import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -60,6 +59,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
  * locale- and config-dependent in future iterations).
  */
 public object ApproveScreenTestTags {
+    public const val LOGO: String = "syauth.approve.logo"
+    public const val HEADER: String = "syauth.approve.header"
+    public const val BIOMETRIC_ICON: String = "syauth.approve.biometric_icon"
     public const val HOSTNAME: String = "syauth.approve.hostname"
     public const val APPROVE_BUTTON: String = "syauth.approve.approve_button"
     public const val DENY_BUTTON: String = "syauth.approve.deny_button"
@@ -76,8 +78,11 @@ private val SCREEN_PADDING_DP = 24.dp
 /** Vertical spacing between major sections. */
 private val SECTION_SPACING_DP = 16.dp
 
-/** App-icon size at the top of the screen. */
-private val APP_ICON_SIZE_DP = 72.dp
+/** Brand logo size at the top of the screen. */
+private val BRAND_LOGO_SIZE_DP = 104.dp
+
+/** Biometric icon size inside the approval card. */
+private val BIOMETRIC_ICON_SIZE_DP = 72.dp
 
 /** Vertical spacing between the Approve and Deny buttons. */
 private val BUTTON_SPACING_DP = 12.dp
@@ -117,7 +122,6 @@ public const val DENIED_DISMISS_DELAY_MILLIS: Long = 2_500L
  * invoked after a short confirmation dwell so the host activity can
  * `finish()` itself and return the user to the previous foreground.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 public fun ApproveScreen(
     viewModel: ApproveViewModel,
@@ -155,15 +159,6 @@ public fun ApproveScreen(
     val approveEnabled = state is ApproveUiState.Counting
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(APPROVE_SCREEN_TITLE) },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    titleContentColor = MaterialTheme.colorScheme.onBackground,
-                ),
-            )
-        },
         containerColor = MaterialTheme.colorScheme.background,
     ) { paddingValues ->
         Column(
@@ -174,6 +169,21 @@ public fun ApproveScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Top,
         ) {
+            Spacer(modifier = Modifier.height(SECTION_SPACING_DP))
+            Image(
+                painter = painterResource(com.sy.syauth.android.R.drawable.deskunlock_logo),
+                contentDescription = "Logo DeskUnlock",
+                modifier = Modifier
+                    .size(BRAND_LOGO_SIZE_DP)
+                    .semantics { testTag = ApproveScreenTestTags.LOGO },
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = APPROVE_SCREEN_TITLE,
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.semantics { testTag = ApproveScreenTestTags.HEADER },
+            )
             Spacer(modifier = Modifier.height(SECTION_SPACING_DP))
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -190,7 +200,9 @@ public fun ApproveScreen(
                     Icon(
                         imageVector = Icons.Filled.Fingerprint,
                         contentDescription = "Autenticazione biometrica",
-                        modifier = Modifier.size(APP_ICON_SIZE_DP),
+                        modifier = Modifier
+                            .size(BIOMETRIC_ICON_SIZE_DP)
+                            .semantics { testTag = ApproveScreenTestTags.BIOMETRIC_ICON },
                         tint = MaterialTheme.colorScheme.primary,
                     )
                     Spacer(modifier = Modifier.height(SECTION_SPACING_DP))

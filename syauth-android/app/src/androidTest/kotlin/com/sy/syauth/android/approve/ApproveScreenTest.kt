@@ -50,7 +50,19 @@ class ApproveScreenTest {
         }
 
         composeTestRule
+            .onNodeWithTag(ApproveScreenTestTags.LOGO)
+            .assertIsDisplayed()
+
+        composeTestRule
+            .onNodeWithTag(ApproveScreenTestTags.HEADER)
+            .assertIsDisplayed()
+
+        composeTestRule
             .onNodeWithText("DeskUnlock")
+            .assertIsDisplayed()
+
+        composeTestRule
+            .onNodeWithTag(ApproveScreenTestTags.BIOMETRIC_ICON)
             .assertIsDisplayed()
 
         composeTestRule
