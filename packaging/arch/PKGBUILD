@@ -61,9 +61,9 @@ package() {
         "$pkgdir/usr/share/licenses/$pkgname/THIRD_PARTY_NOTICES.md"
     install -Dm644 legal/third_party/DankMaterialShell-LICENSE.txt \
         "$pkgdir/usr/share/licenses/$pkgname/DankMaterialShell-LICENSE.txt"
-    for license in legal/third_party/licenses/*.txt; do
-        install -Dm644 "$license" \
-            "$pkgdir/usr/share/licenses/$pkgname/licenses/$(basename "$license")"
+    for license_file in legal/third_party/licenses/*.txt; do
+        install -Dm644 "$license_file" \
+            "$pkgdir/usr/share/licenses/$pkgname/licenses/$(basename "$license_file")"
     done
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
     install -Dm644 docs/security.md "$pkgdir/usr/share/doc/$pkgname/security.md"
