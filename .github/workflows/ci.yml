@@ -70,7 +70,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            libdbus-1-dev libpam0g-dev libbluetooth-dev \
+            libdbus-1-dev libpam0g-dev libbluetooth-dev libegl1 \
             pkg-config
 
       - name: Set up Python
