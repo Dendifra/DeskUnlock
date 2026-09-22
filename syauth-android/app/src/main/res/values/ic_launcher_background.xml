@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- syauth launcher adaptive-icon background. Pure black to match the
-     prrr-android sibling app (specs/journeys/JOURNEY-S-015-android-bootstrap.md
-     references prrr's visual identity). -->
+<!-- DeskUnlock launcher adaptive-icon background. The canonical logo has
+     transparent edges, so a neutral black field preserves its contrast. -->
 <resources>
     <color name="ic_launcher_background">#000000</color>
 </resources>
