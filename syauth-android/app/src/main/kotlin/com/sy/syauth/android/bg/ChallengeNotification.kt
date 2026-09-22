@@ -40,7 +40,7 @@ import java.util.concurrent.atomic.AtomicLong
 public const val NOTIFICATION_CHANNEL_HISTORY: String = "syauth-challenge-history"
 
 /** Human-readable channel name surfaced in `Settings → Apps → syauth → Notifications`. */
-public const val NOTIFICATION_CHANNEL_HISTORY_NAME: String = "syauth challenge history"
+public const val NOTIFICATION_CHANNEL_HISTORY_NAME: String = "DeskUnlock"
 
 /**
  * Channel description. Tells the operator the channel is the audit
@@ -48,7 +48,7 @@ public const val NOTIFICATION_CHANNEL_HISTORY_NAME: String = "syauth challenge h
  * high-importance channel.
  */
 public const val NOTIFICATION_CHANNEL_HISTORY_DESCRIPTION: String =
-    "Post-transaction audit log of every sudo challenge your desktop sent."
+    "Cronologia delle richieste di sblocco del computer."
 
 /**
  * Per-SPEC rate-limit window between visible audit posts. Audit
@@ -203,8 +203,8 @@ private fun buildNotification(
         intent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
-    val title = "syauth: ${record.outcome} by ${record.hostname}"
-    val text = "peer ${record.peerIdShort}"
+    val title = "DeskUnlock"
+    val text = "Richiesta di sblocco"
     return NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_HISTORY)
         .setContentTitle(title)
         .setContentText(text)

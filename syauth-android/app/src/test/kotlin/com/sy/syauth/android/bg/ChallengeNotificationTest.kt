@@ -27,7 +27,6 @@ import java.time.ZoneOffset
 
 private const val FIXTURE_HOSTNAME: String = "alex-desktop"
 private const val FIXTURE_PEER_ID: String = "AA:BB:CC:DD:EE:FF"
-private const val FIXTURE_PEER_ID_SHORT: String = "DD:EE:FF"
 
 private class MutableClock(initialInstant: Instant) : Clock() {
     private var current: Instant = initialInstant
@@ -80,9 +79,11 @@ class ChallengeNotificationTest {
         val n = active[0].notification
         val text = "${n.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)} " +
             "${n.extras.getCharSequence(android.app.Notification.EXTRA_TEXT)}"
-        assertTrue("hostname not surfaced: $text", text.contains(FIXTURE_HOSTNAME))
-        assertTrue("short peer id not surfaced: $text", text.contains(FIXTURE_PEER_ID_SHORT))
-        assertTrue("outcome not surfaced: $text", text.contains(HISTORY_OUTCOME_GRANTED))
+        assertTrue("DeskUnlock title missing: $text", text.startsWith("DeskUnlock"))
+        assertTrue("unlock request text missing: $text", text.endsWith("Richiesta di sblocco"))
+        assertTrue("internal wording leaked: $text", !text.contains("syauth"))
+        assertTrue("internal wording leaked: $text", !text.contains("sudo"))
+        assertTrue("peer id leaked: $text", !text.contains("peer_id"))
         // Channel pinned.
         assertEquals(NOTIFICATION_CHANNEL_HISTORY, active[0].notification.channelId)
         // Audit row persisted.
