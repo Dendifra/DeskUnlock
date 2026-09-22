@@ -23,9 +23,9 @@ publication, distribution, sublicensing, and sale, provided that the copyright
 notice and permission notice are preserved in copies or substantial portions
 of the software.
 
-The repository's `LICENSE` also preserves the existing notice:
+The repository's `LICENSE` also carries the downstream contributor notice:
 
-- `Copyright (c) 2026 PhoneLogin contributors`
+- `Copyright (c) 2026 DeskUnlock contributors`
 
 No additional copyright holder or ownership claim is inferred here.
 

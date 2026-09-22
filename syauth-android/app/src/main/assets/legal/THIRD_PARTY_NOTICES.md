@@ -13,7 +13,7 @@ DeskUnlock is an independent downstream project derived from `syauth`:
 - Repository: https://github.com/dmytrogajewski/syauth
 - License: MIT
 - Preserved notices: `Copyright (c) 2026 syauth contributors` and
-  `Copyright (c) 2026 PhoneLogin contributors`
+  `Copyright (c) 2026 DeskUnlock contributors`
 
 See `NOTICE.md` for the project-level attribution statement.
 

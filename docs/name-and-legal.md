@@ -32,7 +32,11 @@ The upstream license states:
 
 The MIT conditions require preservation of the copyright and permission notice in copies or substantial portions.
 
-DeskUnlock therefore keeps the original notice and adds a downstream contributor notice without removing upstream attribution.
+DeskUnlock therefore keeps the original notice and adds:
+
+`Copyright (c) 2026 DeskUnlock contributors`
+
+without removing upstream attribution.
 
 ## Branding rule
 
