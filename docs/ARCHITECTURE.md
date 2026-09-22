@@ -137,39 +137,19 @@ Rules:
 
 ## Target pairing state machine
 
-```text
-Idle
- └─ DiscoveringDeskUnlock
-     │  desktop: syauth-presenced advertises the pair-mode UUID
-     │  phone:   CDM picker / BLE scan
-     ├─ Cancelled → Idle
-     ▼
-   TransportReady
-     ├─ LescPending   (only when no Bluetooth bond exists)
-     │                 BlueZ RequestConfirmation → UI shows the numeric code
-     ├─ LescRejected  → Idle (no DeskUnlock state written)
-     └─ AlreadyBonded (skip LESC; valid entry for a pre-paired phone)
-     ▼
-   DeskUnlockHandshake
-     │  authenticated GATT: host-pubkey ⇄ phone-pubkey, host-name metadata,
-     │  CAPABILITY → keys exchanged
-     ├─ TransportError / Timeout → Idle (provisional CDM association dropped)
-     ▼
-   ConfirmationRequired
-     │  only when a real DeskUnlock decision exists
-     │  OOB words computed from the bond key; user compares both screens
-     ├─ Reject → Aborted (no trust written)
-     ▼
-   CommitPending
-     │  stage → COMMIT → COMMIT_ACK → COMMITTED
-     │  both sides persist and re-read their committed record
-     ├─ Disconnect after commit → Uncertain (reconcile path; no false success)
-     ▼
-   TrustEstablished
-     │  bonds.toml + keys/<peer_id>.bin promoted; peer_id from the public key
-     ▼
-   Completed
-```
+| State | Meaning and entry condition | Exits |
+|---|---|---|
+| `Idle` | Initial state; nothing in flight. | `DiscoveringDeskUnlock` |
+| `DiscoveringDeskUnlock` | Desktop (`syauth-presenced`) advertises the pair-mode UUID; the phone opens the CDM picker / BLE scan. | `TransportReady`; `Cancelled` → `Idle` |
+| `TransportReady` | The transport link is usable. The sub-states below decide whether a Bluetooth bond must be created first. | `DeskUnlockHandshake` |
+| `TransportReady / LescPending` | No Bluetooth bond exists; BlueZ `RequestConfirmation` fires and the UI shows the numeric comparison code. | `TransportReady` |
+| `TransportReady / LescRejected` | The transport confirmation was refused. | `Idle` (no DeskUnlock state written) |
+| `TransportReady / AlreadyBonded` | A Bluetooth bond already exists; LESC is skipped. Valid entry for a pre-paired phone. | `DeskUnlockHandshake` |
+| `DeskUnlockHandshake` | Authenticated GATT: `host-pubkey` ⇄ `phone-pubkey`, host-name metadata, `CAPABILITY` → keys exchanged. | `ConfirmationRequired`; `TransportError` / `Timeout` → `Idle` (provisional CDM association dropped) |
+| `ConfirmationRequired` | Only when a real DeskUnlock decision exists: OOB words computed from the bond key are compared on both screens. | `CommitPending`; `Reject` → `Aborted` (no trust written) |
+| `CommitPending` | `stage` → `COMMIT` → `COMMIT_ACK` → `COMMITTED`; both sides persist and re-read their committed record. | `TrustEstablished`; disconnect after commit → `Uncertain` (reconcile path, no false success) |
+| `TrustEstablished` | `bonds.toml` + `keys/<peer_id>.bin` promoted; `peer_id` from the public key. | `Completed` |
+| `Completed` | Terminal success. | — |
 
 Rules encoded in the state machine:
 
@@ -234,16 +214,15 @@ confirmation must not be shown when there is nothing to decide.
 Program files belong to the package manager. Persistent private state does
 not.
 
-```text
-/usr/bin/...                 packaged executables
-/usr/lib/...                 daemon, PAM module, helpers
-/usr/lib/systemd/user/...    packaged user units
-
-/var/lib/syauth/...          persistent pairing / cryptographic state
-/var/log/syauth/...          persistent audit/log state
-/run/user/<uid>/syauth/...   runtime sockets and markers
-/run/syauth/...              runtime markers
-```
+| Path | Contents |
+|---|---|
+| `/usr/bin/...` | packaged executables |
+| `/usr/lib/...` | daemon, PAM module, helpers |
+| `/usr/lib/systemd/user/...` | packaged user units |
+| `/var/lib/syauth/...` | persistent pairing / cryptographic state |
+| `/var/log/syauth/...` | persistent audit/log state |
+| `/run/user/<uid>/syauth/...` | runtime sockets and markers |
+| `/run/syauth/...` | runtime markers |
 
 The exact rename/migration of existing `syauth` state paths is a compatibility
 decision. Do not blindly rename state directories until migration behavior is
@@ -251,47 +230,30 @@ specified and tested.
 
 ## Boot and session flow
 
-```text
-user session starts
-   │
-   ├─> bootstrap
-   │
-   ├─> presence daemon (syauth-presenced)
-   ├─> proximity watcher
-   ├─> reconcile path/service
-   ├─> health timer
-   └─> lock-screen integration
-```
+1. user session starts;
+2. bootstrap;
+3. presence daemon (`syauth-presenced`);
+4. proximity watcher;
+5. reconcile path/service;
+6. health timer;
+7. lock-screen integration.
 
 The presence daemon registers with BlueZ, exposes the authentication socket,
 and handles the paired phone transport.
 
 ## Authentication flow (Presence / PAM)
 
-```text
-PAM authentication request
-        │
-        ▼
-DeskUnlock PAM module
-        │
-        ▼
-user runtime socket
-        │
-        ▼
-presence daemon
-        │ BLE challenge
-        ▼
-paired phone
-        │ biometric confirmation + signature
-        ▼
-presence daemon verifies response
-        │
-        ▼
-PAM success
+1. PAM authentication request;
+2. DeskUnlock PAM module;
+3. user runtime socket;
+4. presence daemon;
+5. BLE challenge to the paired phone;
+6. phone performs biometric confirmation and signs the challenge;
+7. presence daemon verifies the response;
+8. PAM success.
 
-If DeskUnlock is unavailable:
-PAM returns unavailable/failure as designed → the configured fallback continues.
-```
+If DeskUnlock is unavailable, PAM returns unavailable/failure as designed and
+the configured fallback continues.
 
 ## Compatibility rule
 

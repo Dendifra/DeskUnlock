@@ -42,42 +42,14 @@ DeskUnlock remain outside this project's control.
 ## High-level architecture
 
 DeskUnlock is layered. Each layer has one owner and one responsibility, and
-the layers are deliberately not interchangeable:
+the layers are deliberately not interchangeable: the Bluetooth/BlueZ transport
+carries the Android CDM association, the DeskUnlock protocol and its real
+confirmation establish trust, and presence/PAM consume an already-established
+trust.
 
-```text
-┌──────────────────────────────────────────────┐
-│ Presence / PAM                               │  consumes an established trust
-│ proximity · authentication decision ·        │
-│ pam_syauth.so                                │
-├──────────────────────────────────────────────┤
-│ DeskUnlock Trust                             │  keys · peer identity ·
-│ bonds.toml · keys/<peer_id>.bin · Keystore   │  explicitly authorized phone
-├──────────────────────────────────────────────┤
-│ DeskUnlock Protocol + Confirmation           │  authenticated application
-│ discovery UUIDs · GATT handshake ·           │  handshake and real decision
-│ public-key exchange · bilateral commit       │
-├──────────────────────────────────────────────┤
-│ Android CDM                                  │  OS/app association to a
-│ CompanionDeviceManager association           │  nearby device
-├──────────────────────────────────────────────┤
-│ Bluetooth / BlueZ                            │  radio transport and
-│ adapter · GATT link · optional system bond   │  optional system BT bond
-└──────────────────────────────────────────────┘
-```
-
-The same flow, top-down:
-
-```text
-Bluetooth / BlueZ
-      ↓
-Android CDM
-      ↓
-DeskUnlock protocol + confirmation
-      ↓
-DeskUnlock trust
-      ↓
-Presence / PAM
-```
+<p align="center">
+  <img src="assets/deskunlock-architecture.svg" alt="DeskUnlock layered architecture" width="100%">
+</p>
 
 The full layer contract, the target state machine, and the ownership map are
 frozen in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -137,6 +109,23 @@ Consequences that follow from the invariant:
 Packaged executables live under `/usr/bin` and `/usr/lib/syauth`; persistent
 pairing and cryptographic state lives under `/var/lib/syauth`; runtime
 sockets and markers live under `$XDG_RUNTIME_DIR/syauth` and `/run/syauth`.
+
+## Desktop app and configuration
+
+DeskUnlock includes a desktop settings application for managing the paired
+Android device, controlling proximity authentication, and checking the
+current system status.
+
+<p align="center">
+  <picture>
+    <source srcset="assets/deskunlock-settings-overview.webp" type="image/webp">
+    <img src="assets/deskunlock-settings-overview.svg" alt="DeskUnlock desktop settings and configuration overview" width="100%">
+  </picture>
+</p>
+
+The application provides quick access to activation controls, paired-device
+management, security features, Bluetooth and service status, and recent
+unlock information.
 
 ## Android components
 
@@ -225,14 +214,12 @@ syauth-control status
 
 The normal flow is:
 
-```text
-lock screen active
-→ no authentication from pointer initialization alone
-→ first real mouse movement, keyboard input, or Enter
-→ one DeskUnlock request
-→ Android biometric approval
-→ desktop unlock
-```
+1. lock screen active;
+2. no authentication from pointer initialization alone;
+3. first real mouse movement, keyboard input, or Enter;
+4. one DeskUnlock request;
+5. Android biometric approval;
+6. desktop unlock.
 
 The lock surface appearing does not itself start an approval request. An
 ignored request can expire; a later genuine interaction can produce another
