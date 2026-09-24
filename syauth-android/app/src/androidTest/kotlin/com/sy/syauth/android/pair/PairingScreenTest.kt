@@ -17,8 +17,11 @@ import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import android.content.Context
 import androidx.compose.ui.test.onNodeWithText
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.sy.syauth.android.R
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -28,6 +31,13 @@ class PairingScreenTest {
 
     @get:Rule
     val composeTestRule = createComposeRule()
+
+    /**
+     * Resolve pairing copy the way the device does, so the assertion follows the
+     * locale instead of a hardcoded English literal.
+     */
+    private fun pairingCopy(id: Int): String =
+        ApplicationProvider.getApplicationContext<Context>().getString(id)
 
     private fun renderState(state: PairingState) {
         composeTestRule.setContent {
@@ -52,7 +62,7 @@ class PairingScreenTest {
             .assertIsDisplayed()
             .assertHasClickAction()
         composeTestRule
-            .onNodeWithText(PairingStrings.IDLE_CTA)
+            .onNodeWithText(pairingCopy(R.string.pair_idle_cta))
             .assertIsDisplayed()
     }
 
@@ -101,7 +111,7 @@ class PairingScreenTest {
             .onNodeWithText(code)
             .assertIsDisplayed()
         composeTestRule
-            .onNodeWithText(PairingStrings.OOB_QUESTION)
+            .onNodeWithText(pairingCopy(R.string.pair_oob_question))
             .assertIsDisplayed()
         composeTestRule
             .onNodeWithTag(PairingTestTags.OOB_YES)
@@ -127,7 +137,7 @@ class PairingScreenTest {
             .onNodeWithTag(PairingTestTags.BONDED_LABEL)
             .assertIsDisplayed()
         composeTestRule
-            .onNodeWithText(PairingStrings.BONDED)
+            .onNodeWithText(pairingCopy(R.string.pair_bonded))
             .assertIsDisplayed()
         composeTestRule
             .onNodeWithTag(PairingTestTags.BONDED_DONE)
@@ -145,7 +155,7 @@ class PairingScreenTest {
             .onNodeWithTag(PairingTestTags.FAILED_REASON)
             .assertIsDisplayed()
         composeTestRule
-            .onNodeWithText(PairingStrings.FAILED_PREFIX + reason)
+            .onNodeWithText(pairingCopy(R.string.pair_failed_prefix) + reason)
             .assertIsDisplayed()
         composeTestRule
             .onNodeWithTag(PairingTestTags.FAILED_BACK)

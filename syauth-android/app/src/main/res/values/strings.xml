@@ -28,4 +28,28 @@
     <string name="syauth_notification_unlock_text">Unlock request</string>
     <string name="syauth_notification_history_channel_name">DeskUnlock</string>
     <string name="syauth_notification_history_channel_description">History of computer unlock requests.</string>
+
+    <!--
+      Pairing screen. English is the source and the default; values-it/ carries
+      the Italian copy.
+    -->
+    <string name="pair_idle_title">Pair a computer</string>
+    <string name="pair_idle_description">Link your phone to your computer securely over Bluetooth.</string>
+    <string name="pair_idle_cta">Find computer</string>
+    <string name="pair_searching">Searching for nearby DeskUnlock computers…</string>
+    <string name="pair_lesc_title">Verify Bluetooth</string>
+    <string name="pair_bluetooth_help">Check that the Bluetooth code matches on both devices.</string>
+    <string name="pair_oob_help">Check that this number matches the one shown on the computer.</string>
+    <string name="pair_oob_question">Do the numbers match?</string>
+    <string name="pair_oob_yes">Yes</string>
+    <string name="pair_oob_no">No</string>
+    <string name="pair_finalizing">Finishing pairing…</string>
+    <string name="pair_uncertain_title">Verifying pairing…</string>
+    <string name="pair_uncertain_retry">Try again</string>
+    <string name="pair_bonded">Computer paired</string>
+    <string name="pair_done">Done</string>
+    <string name="pair_cancel">Cancel</string>
+    <string name="pair_back">Back</string>
+    <string name="pair_failed_prefix">Pairing failed: </string>
+    <string name="pair_refused_help">The computer refused the pairing. On the computer, open DeskUnlock and press "Associa telefono", then try again.</string>
 </resources>

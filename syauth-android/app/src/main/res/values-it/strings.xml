@@ -15,4 +15,24 @@
     <string name="syauth_notification_unlock_text">Richiesta di sblocco</string>
     <string name="syauth_notification_history_channel_name">DeskUnlock</string>
     <string name="syauth_notification_history_channel_description">Cronologia delle richieste di sblocco del computer.</string>
+
+    <string name="pair_idle_title">Associa un computer</string>
+    <string name="pair_idle_description">Collega il telefono al computer in modo sicuro via Bluetooth.</string>
+    <string name="pair_idle_cta">Cerca computer</string>
+    <string name="pair_searching">Ricerca dei computer DeskUnlock nelle vicinanze…</string>
+    <string name="pair_lesc_title">Verifica Bluetooth</string>
+    <string name="pair_bluetooth_help">Controlla che il codice Bluetooth coincida su entrambi i dispositivi.</string>
+    <string name="pair_oob_help">Controlla che questo numero coincida con quello mostrato sul computer.</string>
+    <string name="pair_oob_question">I numeri coincidono?</string>
+    <string name="pair_oob_yes">Sì</string>
+    <string name="pair_oob_no">No</string>
+    <string name="pair_finalizing">Completamento dell\'associazione…</string>
+    <string name="pair_uncertain_title">Verifica dell\'associazione…</string>
+    <string name="pair_uncertain_retry">Riprova</string>
+    <string name="pair_bonded">Computer associato</string>
+    <string name="pair_done">Fine</string>
+    <string name="pair_cancel">Annulla</string>
+    <string name="pair_back">Indietro</string>
+    <string name="pair_failed_prefix">Associazione non riuscita: </string>
+    <string name="pair_refused_help">Il computer ha rifiutato l\'associazione. Sul computer apri DeskUnlock, premi "Associa telefono" e riprova.</string>
 </resources>

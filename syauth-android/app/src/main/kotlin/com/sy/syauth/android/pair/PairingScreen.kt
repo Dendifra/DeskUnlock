@@ -31,9 +31,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTag
 import androidx.compose.ui.unit.dp
+import com.sy.syauth.android.R
 import com.sy.syauth.android.pair.api.PEER_REJECTED_REASON
 
 /**
@@ -57,34 +59,9 @@ object PairingTestTags {
     const val FAILED_BACK: String = "pair.failed.back"
 }
 
-/** Static UI strings. Centralised so tests assert on the same constants. */
-object PairingStrings {
-    const val IDLE_CTA: String = "Find computer"
-    const val IDLE_TITLE: String = "Pair a computer"
-    const val IDLE_DESCRIPTION: String = "Link your phone to your computer securely over Bluetooth."
-    const val SEARCHING: String = "Searching for nearby DeskUnlock computers…"
-    const val FOUND_PREFIX: String = "Computer found: "
-    const val BLUETOOTH_HELP: String = "Check that the Bluetooth code matches on both devices."
-    const val OOB_HELP: String = "Check that this number matches the one shown on the computer."
-    const val FINALIZING: String = "Finishing pairing…"
-    const val CANCEL: String = "Cancel"
-    const val OOB_QUESTION: String = "Do the numbers match?"
-    const val OOB_YES: String = "Sì"
-    const val OOB_NO: String = "No"
-    const val BONDED: String = "Computer paired"
-    const val DONE: String = "Done"
-    const val FAILED_PREFIX: String = "Pairing failed: "
-
-    /**
-     * Shown instead of [FAILED_PREFIX] + reason when the computer refused the
-     * transaction: the raw reason carries no action, this one names the arming
-     * step on the computer (SPEC §6 T-004).
-     */
-    const val PEER_REJECTED_HELP: String =
-        "The computer refused the pairing. On the computer, open DeskUnlock " +
-            "and press \"Associa telefono\", then try again."
-    const val BACK: String = "Back"
-}
+// User-visible copy lives in string resources so the screen follows the
+// operator's language: `values/` carries the English source and is the default,
+// `values-it/` the Italian copy.
 
 /**
  * Pairing screen.
@@ -136,11 +113,11 @@ fun PairingScreen(
 
 @Composable
 private fun IdleContent(onStartScan: () -> Unit) {
-    Text(text = "DeskUnlock", style = MaterialTheme.typography.headlineMedium)
+    Text(text = stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium)
     Spacer(modifier = Modifier.height(8.dp))
-    Text(text = PairingStrings.IDLE_TITLE, style = MaterialTheme.typography.titleLarge)
+    Text(text = stringResource(R.string.pair_idle_title), style = MaterialTheme.typography.titleLarge)
     Spacer(modifier = Modifier.height(8.dp))
-    Text(text = PairingStrings.IDLE_DESCRIPTION)
+    Text(text = stringResource(R.string.pair_idle_description))
     Spacer(modifier = Modifier.height(24.dp))
     Button(
         onClick = onStartScan,
@@ -148,13 +125,13 @@ private fun IdleContent(onStartScan: () -> Unit) {
             .fillMaxWidth()
             .semantics { testTag = PairingTestTags.IDLE_CTA },
     ) {
-        Text(text = PairingStrings.IDLE_CTA)
+        Text(text = stringResource(R.string.pair_idle_cta))
     }
 }
 
 @Composable
 private fun ScanningContent(onCancel: () -> Unit) {
-    Text(text = PairingStrings.SEARCHING)
+    Text(text = stringResource(R.string.pair_searching))
     Spacer(modifier = Modifier.height(12.dp))
     CircularProgressIndicator(
         modifier = Modifier.semantics { testTag = PairingTestTags.SCANNING_PROGRESS },
@@ -164,14 +141,14 @@ private fun ScanningContent(onCancel: () -> Unit) {
         onClick = onCancel,
         modifier = Modifier.semantics { testTag = PairingTestTags.SCANNING_CANCEL },
     ) {
-        Text(text = PairingStrings.CANCEL)
+        Text(text = stringResource(R.string.pair_cancel))
     }
 }
 
 @Composable
 private fun LescContent(code: String, onCancel: () -> Unit) {
-    Text(text = "Verify Bluetooth", style = MaterialTheme.typography.titleLarge)
-    Text(text = PairingStrings.BLUETOOTH_HELP)
+    Text(text = stringResource(R.string.pair_lesc_title), style = MaterialTheme.typography.titleLarge)
+    Text(text = stringResource(R.string.pair_bluetooth_help))
     Spacer(modifier = Modifier.height(12.dp))
     Text(
         text = code,
@@ -183,7 +160,7 @@ private fun LescContent(code: String, onCancel: () -> Unit) {
         onClick = onCancel,
         modifier = Modifier.semantics { testTag = PairingTestTags.LESC_CANCEL },
     ) {
-        Text(text = PairingStrings.CANCEL)
+        Text(text = stringResource(R.string.pair_cancel))
     }
 }
 
@@ -200,28 +177,28 @@ private fun OobContent(
         modifier = Modifier.semantics { testTag = PairingTestTags.OOB_CODE },
     )
     Spacer(modifier = Modifier.height(16.dp))
-    Text(text = PairingStrings.OOB_HELP)
+    Text(text = stringResource(R.string.pair_oob_help))
     Spacer(modifier = Modifier.height(8.dp))
-    Text(text = PairingStrings.OOB_QUESTION)
+    Text(text = stringResource(R.string.pair_oob_question))
     Spacer(modifier = Modifier.height(16.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         Button(
             onClick = onCancel,
             modifier = Modifier.semantics { testTag = PairingTestTags.OOB_CANCEL },
         ) {
-            Text(text = PairingStrings.CANCEL)
+            Text(text = stringResource(R.string.pair_cancel))
         }
         Button(
             onClick = onYes,
             modifier = Modifier.semantics { testTag = PairingTestTags.OOB_YES },
         ) {
-            Text(text = PairingStrings.OOB_YES)
+            Text(text = stringResource(R.string.pair_oob_yes))
         }
         Button(
             onClick = onNo,
             modifier = Modifier.semantics { testTag = PairingTestTags.OOB_NO },
         ) {
-            Text(text = PairingStrings.OOB_NO)
+            Text(text = stringResource(R.string.pair_oob_no))
         }
     }
 }
@@ -230,22 +207,22 @@ private fun OobContent(
 private fun FinalizingContent() {
     CircularProgressIndicator(modifier = Modifier.semantics { testTag = PairingTestTags.FINALIZING_PROGRESS })
     Spacer(modifier = Modifier.height(16.dp))
-    Text(text = PairingStrings.FINALIZING)
+    Text(text = stringResource(R.string.pair_finalizing))
 }
 
 @Composable
 private fun UncertainContent(reason: String, onRetry: () -> Unit) {
-    Text(text = "Verifying pairing…", style = MaterialTheme.typography.titleLarge)
+    Text(text = stringResource(R.string.pair_uncertain_title), style = MaterialTheme.typography.titleLarge)
     Spacer(modifier = Modifier.height(8.dp))
     Text(text = reason, modifier = Modifier.semantics { testTag = PairingTestTags.UNCERTAIN_REASON })
     Spacer(modifier = Modifier.height(16.dp))
-    Button(onClick = onRetry) { Text(text = "Riprova") }
+    Button(onClick = onRetry) { Text(text = stringResource(R.string.pair_uncertain_retry)) }
 }
 
 @Composable
 private fun BondedContent(onDone: () -> Unit) {
     Text(
-        text = PairingStrings.BONDED,
+        text = stringResource(R.string.pair_bonded),
         modifier = Modifier.semantics { testTag = PairingTestTags.BONDED_LABEL },
     )
     Spacer(modifier = Modifier.height(24.dp))
@@ -253,14 +230,18 @@ private fun BondedContent(onDone: () -> Unit) {
         onClick = onDone,
         modifier = Modifier.semantics { testTag = PairingTestTags.BONDED_DONE },
     ) {
-        Text(text = PairingStrings.DONE)
+        Text(text = stringResource(R.string.pair_done))
     }
 }
 
 @Composable
 private fun FailedContent(reason: String, onBack: () -> Unit) {
     Text(
-        text = failure_message(reason),
+        text = failure_message(
+            reason,
+            stringResource(R.string.pair_refused_help),
+            stringResource(R.string.pair_failed_prefix),
+        ),
         modifier = Modifier.semantics { testTag = PairingTestTags.FAILED_REASON },
     )
     Spacer(modifier = Modifier.height(24.dp))
@@ -268,7 +249,7 @@ private fun FailedContent(reason: String, onBack: () -> Unit) {
         onClick = onBack,
         modifier = Modifier.semantics { testTag = PairingTestTags.FAILED_BACK },
     ) {
-        Text(text = PairingStrings.BACK)
+        Text(text = stringResource(R.string.pair_back))
     }
 }
 
@@ -279,10 +260,13 @@ private fun FailedContent(reason: String, onBack: () -> Unit) {
  * transaction because nobody armed the pairing there (SPEC §6 T-004). The raw
  * reason says only that the remote confirmation failed, so it is replaced by
  * the next action to take (BUG-20260924: the operator saw nothing to act on).
+ *
+ * The two copy strings arrive already resolved so this stays a pure function a
+ * unit test can pin; the caller reads them from string resources.
  */
-internal fun failure_message(reason: String): String =
+internal fun failure_message(reason: String, help: String, prefix: String): String =
     if (reason == PEER_REJECTED_REASON) {
-        PairingStrings.PEER_REJECTED_HELP
+        help
     } else {
-        PairingStrings.FAILED_PREFIX + reason
+        prefix + reason
     }

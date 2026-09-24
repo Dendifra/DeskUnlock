@@ -34,11 +34,21 @@ class PairRejectionMessageTest {
 
     @Test
     fun a_refusal_is_turned_into_the_next_action_on_screen() {
-        assertEquals(PairingStrings.PEER_REJECTED_HELP, failure_message(PEER_REJECTED_REASON))
+        assertEquals(
+            "open DeskUnlock on the computer and try again",
+            failure_message(
+                PEER_REJECTED_REASON,
+                help = "open DeskUnlock on the computer and try again",
+                prefix = "Pairing failed: ",
+            ),
+        )
     }
 
     @Test
     fun every_other_failure_still_names_itself() {
-        assertEquals(PairingStrings.FAILED_PREFIX + "boom", failure_message("boom"))
+        assertEquals(
+            "Pairing failed: boom",
+            failure_message("boom", help = "help", prefix = "Pairing failed: "),
+        )
     }
 }
