@@ -1757,6 +1757,11 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("DeskUnlock Settings")
     app.setDesktopFileName("syauth")
+    # Install the catalog before any label is built: every widget below captures
+    # its text once, so translating after construction would only affect the
+    # strings refreshed later. This is also why the language selector cannot
+    # apply live.
+    install_translations(resolve_language(read_gui_language(), os.environ))
     apply_theme(app, read_gui_theme())
     window = SettingsWindow()
     window.show()
