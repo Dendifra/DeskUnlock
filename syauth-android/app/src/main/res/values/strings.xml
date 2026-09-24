@@ -52,4 +52,43 @@
     <string name="pair_back">Back</string>
     <string name="pair_failed_prefix">Pairing failed: </string>
     <string name="pair_refused_help">The computer refused the pairing. On the computer, open DeskUnlock and press "Associa telefono", then try again.</string>
+
+    <!--
+      Home card, revoke dialog and history. `%1$s` / `%2$s` are a computer name,
+      a pre-formatted timestamp or an outcome word.
+    -->
+    <string name="home_tagline">Your phone is your biometric key</string>
+    <string name="home_no_bond_title">No computer paired</string>
+    <string name="home_no_bond_body">Pair a computer to use this phone as a biometric key.</string>
+    <string name="home_pair_cta">Pair with computer</string>
+    <string name="home_paired_title">Paired computer</string>
+    <string name="home_service_active">DeskUnlock service active</string>
+    <string name="home_service_inactive">DeskUnlock service inactive</string>
+    <string name="home_paired_at">Paired: %1$s</string>
+    <string name="home_last_auth">Last authentication</string>
+    <string name="home_re_pair">Re-pair</string>
+    <string name="home_revoke">Revoke</string>
+    <string name="home_revoke_dialog_title">Revoke pairing with %1$s?</string>
+    <string name="home_revoke_dialog_body">This removes the DeskUnlock pairing and the Keystore key. The Android Bluetooth bond is not changed.</string>
+    <string name="home_peer_id">peer_id: %1$s</string>
+    <string name="home_revoke_toast_no_bond">No computer paired — start pairing on the computer and tap Pair in the app</string>
+    <string name="home_approval_unavailable">DeskUnlock approval unavailable.</string>
+    <string name="home_cancel">Cancel</string>
+
+    <string name="history_event_line">%1$s by %2$s</string>
+    <string name="history_peer_line">peer %1$s</string>
+    <string name="history_event_short">%1$s • %2$s</string>
+
+    <!--
+      Unlock approval sheet. The two accessibility descriptions are user-facing
+      copy for screen readers, not decoration.
+    -->
+    <string name="approve_title">Unlock the computer</string>
+    <string name="approve_subtitle">Computer unlock request</string>
+    <string name="approve_counting">Approve within %1$s s</string>
+    <string name="approve_waiting">Waiting for biometrics…</string>
+    <string name="approve_signing">Signing…</string>
+    <string name="approve_button">Approve</string>
+    <string name="approve_a11y_biometric">Biometric authentication</string>
+    <string name="approve_a11y_logo">Logo DeskUnlock</string>
 </resources>

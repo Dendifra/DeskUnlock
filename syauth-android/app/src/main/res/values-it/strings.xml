@@ -35,4 +35,35 @@
     <string name="pair_back">Indietro</string>
     <string name="pair_failed_prefix">Associazione non riuscita: </string>
     <string name="pair_refused_help">Il computer ha rifiutato l\'associazione. Sul computer apri DeskUnlock, premi "Associa telefono" e riprova.</string>
+
+    <string name="home_tagline">Il telefono è la tua chiave biometrica</string>
+    <string name="home_no_bond_title">Nessun computer associato</string>
+    <string name="home_no_bond_body">Associa un computer per usare questo telefono come chiave biometrica.</string>
+    <string name="home_pair_cta">Associa al computer</string>
+    <string name="home_paired_title">Computer associato</string>
+    <string name="home_service_active">Servizio DeskUnlock attivo</string>
+    <string name="home_service_inactive">Servizio DeskUnlock inattivo</string>
+    <string name="home_paired_at">Associato: %1$s</string>
+    <string name="home_last_auth">Ultima autenticazione</string>
+    <string name="home_re_pair">Ripeti associazione</string>
+    <string name="home_revoke">Revoca</string>
+    <string name="home_revoke_dialog_title">Revocare l\'associazione con %1$s?</string>
+    <string name="home_revoke_dialog_body">Questo rimuove l\'associazione DeskUnlock e la chiave Keystore. Il bond Bluetooth di Android non viene modificato.</string>
+    <string name="home_peer_id">peer_id: %1$s</string>
+    <string name="home_revoke_toast_no_bond">Nessun computer associato — avvia l\'associazione sul computer e tocca Associa nell\'app</string>
+    <string name="home_approval_unavailable">Approvazione DeskUnlock non disponibile.</string>
+    <string name="home_cancel">Annulla</string>
+
+    <string name="history_event_line">%1$s su %2$s</string>
+    <string name="history_peer_line">peer %1$s</string>
+    <string name="history_event_short">%1$s • %2$s</string>
+
+    <string name="approve_title">Sblocca il computer</string>
+    <string name="approve_subtitle">Richiesta di sblocco del computer</string>
+    <string name="approve_counting">Approva entro %1$s s</string>
+    <string name="approve_waiting">In attesa della biometria…</string>
+    <string name="approve_signing">Firma in corso…</string>
+    <string name="approve_button">Approva</string>
+    <string name="approve_a11y_biometric">Autenticazione biometrica</string>
+    <string name="approve_a11y_logo">Logo DeskUnlock</string>
 </resources>

@@ -172,7 +172,7 @@ public fun ApproveScreen(
             Spacer(modifier = Modifier.height(SECTION_SPACING_DP))
             Image(
                 painter = painterResource(com.sy.syauth.android.R.drawable.deskunlock_logo),
-                contentDescription = "Logo DeskUnlock",
+                contentDescription = androidx.compose.ui.res.stringResource(com.sy.syauth.android.R.string.approve_a11y_logo),
                 modifier = Modifier
                     .size(BRAND_LOGO_SIZE_DP)
                     .semantics { testTag = ApproveScreenTestTags.LOGO },
@@ -199,7 +199,7 @@ public fun ApproveScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Fingerprint,
-                        contentDescription = "Biometric authentication",
+                        contentDescription = androidx.compose.ui.res.stringResource(com.sy.syauth.android.R.string.approve_a11y_biometric),
                         modifier = Modifier
                             .size(BIOMETRIC_ICON_SIZE_DP)
                             .semantics { testTag = ApproveScreenTestTags.BIOMETRIC_ICON },
@@ -207,7 +207,7 @@ public fun ApproveScreen(
                     )
                     Spacer(modifier = Modifier.height(SECTION_SPACING_DP))
                     Text(
-                        text = "Unlock the computer",
+                        text = androidx.compose.ui.res.stringResource(com.sy.syauth.android.R.string.approve_title),
                         style = MaterialTheme.typography.headlineSmall,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
@@ -222,7 +222,7 @@ public fun ApproveScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Computer unlock request",
+                        text = androidx.compose.ui.res.stringResource(com.sy.syauth.android.R.string.approve_subtitle),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -246,9 +246,9 @@ public fun ApproveScreen(
 @Composable
 private fun CountdownRow(state: ApproveUiState) {
     val text = when (state) {
-        is ApproveUiState.Counting -> "Approve within ${state.remainingSeconds}s"
-        ApproveUiState.AwaitingBiometric -> "Waiting for biometrics…"
-        ApproveUiState.Signing -> "Signing…"
+        is ApproveUiState.Counting -> androidx.compose.ui.res.stringResource(com.sy.syauth.android.R.string.approve_counting, state.remainingSeconds)
+        ApproveUiState.AwaitingBiometric -> androidx.compose.ui.res.stringResource(com.sy.syauth.android.R.string.approve_waiting)
+        ApproveUiState.Signing -> androidx.compose.ui.res.stringResource(com.sy.syauth.android.R.string.approve_signing)
         else -> ""
     }
     Text(
@@ -283,7 +283,7 @@ private fun ButtonStack(
             ),
         ) {
             Text(
-                text = "Approve",
+                text = androidx.compose.ui.res.stringResource(com.sy.syauth.android.R.string.approve_button),
                 style = MaterialTheme.typography.titleMedium,
             )
         }

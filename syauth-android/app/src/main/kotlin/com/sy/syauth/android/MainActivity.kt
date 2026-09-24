@@ -575,7 +575,7 @@ class MainActivity : FragmentActivity() {
             bluetoothPermissionLauncher.launch(BLUETOOTH_RUNTIME_PERMISSIONS)
         }
         if (record == null) {
-            Toast.makeText(this, NO_BOND_TOAST, Toast.LENGTH_LONG).show()
+            Toast.makeText(this, getString(R.string.home_revoke_toast_no_bond), Toast.LENGTH_LONG).show()
         } else {
             installCompanionSeams(record)
             installPersistentClientFactory(record)
@@ -812,7 +812,7 @@ private fun SyauthApp(
             // this branch is only reachable via direct navigation in
             // tests.
             if (approvePayload == null) {
-                Text(text = "DeskUnlock approval unavailable.")
+                Text(text = androidx.compose.ui.res.stringResource(R.string.home_approval_unavailable))
             } else {
                 ApproveRoute(activity = activity, payload = approvePayload, bondRecord = bondRecord)
             }
@@ -879,9 +879,9 @@ internal fun HistoryRoute(filesDir: java.io.File) {
 @Composable
 private fun HistoryRowCard(record: ChallengeHistoryRecord) {
     Column(modifier = Modifier.padding(vertical = HISTORY_ROW_VERTICAL_PADDING_DP.dp)) {
-        Text(text = "${record.outcome} by ${record.hostname}")
+        Text(text = androidx.compose.ui.res.stringResource(R.string.history_event_line, record.outcome, record.hostname))
         Text(
-            text = "peer ${record.peerIdShort}",
+            text = androidx.compose.ui.res.stringResource(R.string.history_peer_line, record.peerIdShort),
             style = MaterialTheme.typography.bodySmall,
         )
         Text(
@@ -961,8 +961,6 @@ private const val BOND_KEY_BYTES_LEN: Int = 32
 /** Logcat tag for the runtime-permission flow. */
 private const val PERMISSION_LOG_TAG: String = "syauth.permission"
 
-/** Surfaced as a toast when no bond is yet present (pair has not run). */
-private const val NO_BOND_TOAST: String = "No computer paired — start pairing on the computer and tap Pair in the app"
 
 /**
  * Runtime BLE permission Android 12+ (API 31+) enforces for the
@@ -1030,7 +1028,7 @@ private fun HomeRoute(
         ) {
             Image(
                 painter = painterResource(R.drawable.deskunlock_logo),
-                contentDescription = "Logo DeskUnlock",
+                contentDescription = androidx.compose.ui.res.stringResource(R.string.approve_a11y_logo),
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1047,7 +1045,7 @@ private fun HomeRoute(
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
-                text = "Your phone is your biometric key",
+                text = androidx.compose.ui.res.stringResource(R.string.home_tagline),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1075,14 +1073,10 @@ private fun HomeRoute(
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { revokeDialogState.value = false },
             title = {
-                Text(text = "Revoke pairing with ${bondRecord.hostName}?")
+                Text(text = androidx.compose.ui.res.stringResource(R.string.home_revoke_dialog_title, bondRecord.hostName))
             },
             text = {
-                Text(
-                    text =
-                        "This removes the DeskUnlock pairing and the Keystore key. " +
-                        "The Android Bluetooth bond is not changed.",
-                )
+                Text(text = androidx.compose.ui.res.stringResource(R.string.home_revoke_dialog_body))
             },
             confirmButton = {
                 androidx.compose.material3.TextButton(
@@ -1091,14 +1085,14 @@ private fun HomeRoute(
                         onRevokeTapped()
                     },
                 ) {
-                    Text(text = "Revoke")
+                    Text(text = androidx.compose.ui.res.stringResource(R.string.home_revoke))
                 }
             },
             dismissButton = {
                 androidx.compose.material3.TextButton(
                     onClick = { revokeDialogState.value = false },
                 ) {
-                    Text(text = "Cancel")
+                    Text(text = androidx.compose.ui.res.stringResource(R.string.home_cancel))
                 }
             },
         )
@@ -1117,14 +1111,14 @@ private fun UnpairedHomeBody(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                text = "No computer paired",
+                text = androidx.compose.ui.res.stringResource(R.string.home_no_bond_title),
                 style = MaterialTheme.typography.titleLarge,
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Pair a computer to use this phone as a biometric key.",
+                text = androidx.compose.ui.res.stringResource(R.string.home_no_bond_body),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -1138,7 +1132,7 @@ private fun UnpairedHomeBody(
                     .fillMaxWidth()
                     .semantics { testTag = HOME_PAIR_BUTTON_TAG },
             ) {
-                Text(text = "Pair with computer")
+                Text(text = androidx.compose.ui.res.stringResource(R.string.home_pair_cta))
             }
         }
     }
@@ -1160,7 +1154,7 @@ private fun PairedHomeBody(
             modifier = Modifier.padding(24.dp),
         ) {
             Text(
-                text = "Paired computer",
+                text = androidx.compose.ui.res.stringResource(R.string.home_paired_title),
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1192,9 +1186,9 @@ private fun PairedHomeBody(
                 Spacer(modifier = Modifier.width(HOME_STATUS_DOT_GAP))
                 Text(
                     text = if (serviceRunning)
-                        "DeskUnlock service active"
+                        androidx.compose.ui.res.stringResource(R.string.home_service_active)
                     else
-                        "DeskUnlock service inactive",
+                        androidx.compose.ui.res.stringResource(R.string.home_service_inactive),
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
@@ -1203,13 +1197,13 @@ private fun PairedHomeBody(
             Spacer(modifier = Modifier.height(12.dp))
 
             Text(
-                text = "peer_id: ${truncatedPeerId(bondRecord.peerId)}",
+                text = androidx.compose.ui.res.stringResource(R.string.home_peer_id, truncatedPeerId(bondRecord.peerId)),
                 style = MaterialTheme.typography.bodyMedium,
             )
 
             if (pairedAtMillis > 0L) {
                 Text(
-                    text = "Paired: ${formatPairedAt(pairedAtMillis)}",
+                    text = androidx.compose.ui.res.stringResource(R.string.home_paired_at, formatPairedAt(pairedAtMillis)),
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
@@ -1222,7 +1216,7 @@ private fun PairedHomeBody(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 Text(
-                    text = "Last authentication",
+                    text = androidx.compose.ui.res.stringResource(R.string.home_last_auth),
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1230,7 +1224,11 @@ private fun PairedHomeBody(
                 Spacer(modifier = Modifier.height(4.dp))
 
                 Text(
-                    text = "${event.outcome} • ${formatPairedAt(event.timestampMs)}",
+                    text = androidx.compose.ui.res.stringResource(
+                        R.string.history_event_short,
+                        event.outcome,
+                        formatPairedAt(event.timestampMs),
+                    ),
                     style = MaterialTheme.typography.bodyLarge,
                 )
             }
@@ -1247,7 +1245,7 @@ private fun PairedHomeBody(
                         .weight(1f)
                         .semantics { testTag = HOME_REPAIR_BUTTON_TAG },
                 ) {
-                    Text(text = "Re-pair")
+                    Text(text = androidx.compose.ui.res.stringResource(R.string.home_re_pair))
                 }
 
                 androidx.compose.material3.OutlinedButton(
@@ -1256,7 +1254,7 @@ private fun PairedHomeBody(
                         .weight(1f)
                         .semantics { testTag = HOME_REVOKE_BUTTON_TAG },
                 ) {
-                    Text(text = "Revoke")
+                    Text(text = androidx.compose.ui.res.stringResource(R.string.home_revoke))
                 }
             }
         }
