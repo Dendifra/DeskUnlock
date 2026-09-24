@@ -104,6 +104,10 @@ step "libraries clean"
 
 step "signing the APK — the keystore password prompt follows"
 mkdir -p "$OUT"
+# The artefact name carries the tag, so it matches the release notes and cannot
+# be confused with an older upload of the same release. A stale asset with a
+# different name is invisible to a checksum file, which is how one survived a
+# full release cycle today.
 cp -f "$APK_RAW" "$OUT/deskunlock-$TAG-unsigned.apk"
 bash scripts/sign-release-apk.sh "$OUT/deskunlock-$TAG-unsigned.apk"
 # The signer rewrites the file in place, so the name has to change too or the
@@ -134,6 +138,20 @@ rm -f "$OUT"/*.idsig "$OUT/SHA256SUMS"
 
 
 # --- 7. publish --------------------------------------------------------------
+# An asset whose name is not in SHA256SUMS is one nobody verifies: replace the
+# whole set, and refuse to leave a differently-named APK behind from an earlier
+# run of the same release.
+step "removing stale APK assets from $TAG, if any"
+# Both patterns matter: the first run of this script left an old package behind
+# as well as an old APK, and neither was referenced by SHA256SUMS, so nothing
+# would have told anyone they were stale.
+KEEP_APK="deskunlock-$TAG-signed.apk"
+KEEP_PKG="deskunlock-$(grep -m1 '^pkgver=' packaging/arch/PKGBUILD | cut -d= -f2)-$(grep -m1 '^pkgrel=' packaging/arch/PKGBUILD | cut -d= -f2)-x86_64.pkg.tar.zst"
+for asset in $(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | grep -E '\.apk$|\.pkg\.tar\.zst$' | grep -vxF "$KEEP_APK" | grep -vxF "$KEEP_PKG" || true); do
+    echo "  removing stale asset: $asset"
+    gh release delete-asset "$TAG" --repo "$REPO" "$asset" --yes
+done
+
 step "attaching to the GitHub release $TAG"
 gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 \
     || die "release $TAG does not exist: create it with --notes-file first"
