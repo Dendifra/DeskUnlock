@@ -300,7 +300,7 @@ private fun ButtonStack(
             ),
         ) {
             Text(
-                text = "Deny",
+                text = androidx.compose.ui.res.stringResource(com.sy.syauth.android.R.string.approve_deny),
                 style = MaterialTheme.typography.titleMedium,
             )
         }

@@ -66,4 +66,5 @@
     <string name="approve_button">Approva</string>
     <string name="approve_a11y_biometric">Autenticazione biometrica</string>
     <string name="approve_a11y_logo">Logo DeskUnlock</string>
+    <string name="approve_deny">Rifiuta</string>
 </resources>

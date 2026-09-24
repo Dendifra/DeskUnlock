@@ -91,4 +91,5 @@
     <string name="approve_button">Approve</string>
     <string name="approve_a11y_biometric">Biometric authentication</string>
     <string name="approve_a11y_logo">Logo DeskUnlock</string>
+    <string name="approve_deny">Deny</string>
 </resources>
