@@ -704,6 +704,14 @@ SUPPORTED_LANGUAGES = ("en", "it")
 DEFAULT_LANGUAGE = "en"
 LANGUAGE_AUTO = "auto"
 
+# Language names are shown in their own language, the way every OS does it:
+# someone who reads only Italian has to be able to find "Italiano".
+LANGUAGE_LABELS = (
+    (LANGUAGE_AUTO, "Automatica (lingua di sistema)"),
+    ("en", "English"),
+    ("it", "Italiano"),
+)
+
 
 
 def resolve_language(configured, env):
@@ -882,7 +890,24 @@ class SettingsWindow(QMainWindow):
         self.theme_button.setMinimumWidth(150)
         self.theme_button.clicked.connect(self.toggle_theme)
         self.update_theme_button()
-        footer.addWidget(self.theme_button)
+
+        # The language choice sits directly under the theme choice: both answer
+        # "how should this GUI look to me", and neither belongs in a card that
+        # describes the phone.
+        self.language = read_gui_language()
+        self.language_combo = QComboBox()
+        self.language_combo.setMinimumWidth(150)
+        for code, label in LANGUAGE_LABELS:
+            self.language_combo.addItem(label, code)
+        stored = self.language_combo.findData(self.language)
+        self.language_combo.setCurrentIndex(stored if stored >= 0 else 0)
+        self.language_combo.currentIndexChanged.connect(self.change_language)
+
+        appearance = QVBoxLayout()
+        appearance.setSpacing(6)
+        appearance.addWidget(self.theme_button)
+        appearance.addWidget(self.language_combo)
+        footer.addLayout(appearance)
 
         footer.addStretch()
 
@@ -930,6 +955,21 @@ class SettingsWindow(QMainWindow):
         apply_theme(QApplication.instance(), self.theme)
         write_gui_theme(self.theme)
         self.update_theme_button()
+
+    def change_language(self):
+        """Remember the language choice.
+
+        Unlike the theme this cannot be applied live: every label in this window
+        was built with the translation that was installed at startup, so the new
+        language lands on the next launch. Saying so beats an entry that looks
+        like it did nothing.
+        """
+        code = self.language_combo.currentData()
+        if code == self.language:
+            return
+        self.language = code
+        write_gui_language(code)
+        self.status.setText("Lingua salvata: riavvia DeskUnlock per applicarla.")
 
     def build_header(self, main):
         header = QHBoxLayout()
