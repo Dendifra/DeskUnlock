@@ -957,19 +957,23 @@ class SettingsWindow(QMainWindow):
         self.update_theme_button()
 
     def change_language(self):
-        """Remember the language choice.
+        """Apply the language the moment it is picked — no save button.
 
-        Unlike the theme this cannot be applied live: every label in this window
-        was built with the translation that was installed at startup, so the new
-        language lands on the next launch. Saying so beats an entry that looks
-        like it did nothing.
+        Every label in this window was built with the translation installed at
+        startup, so the new language is applied by restarting the process.
+        Rebuilding every widget in place is the same work with more ways to get
+        it wrong, and this way what the operator sees is exactly what the next
+        launch shows.
         """
         code = self.language_combo.currentData()
         if code == self.language:
             return
         self.language = code
         write_gui_language(code)
-        self.status.setText(_("Lingua salvata: riavvia DeskUnlock per applicarla."))
+        self.status.setText(_("Language saved: restarting DeskUnlock…"))
+        QApplication.processEvents()
+        QProcess.startDetached(sys.executable, [str(Path(sys.argv[0]).resolve())])
+        QApplication.quit()
 
     def build_header(self, main):
         header = QHBoxLayout()
