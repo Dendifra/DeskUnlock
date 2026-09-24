@@ -64,26 +64,10 @@ jobs:
           path: target/syauth-${{ env.PACKAGE_VERSION }}.tar.gz
           if-no-files-found: error
 
-  publish-release:
-    name: publish (attach the source tarball to the GH Release)
-    needs: [build-source]
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download source artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: source-tarball
-          path: dist
-
-      # No checksums here on purpose. The operator's SHA256SUMS covers the Arch
-      # package and the signed APK too, which this workflow never sees; a
-      # second file with the same name would overwrite it and silently drop the
-      # two artefacts that matter from the verification.
-      - name: Publish to the GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: dist/*.tar.gz
-          fail_on_unmatched_files: true
+  # Nothing publishes from here on purpose.
+  #
+  # `softprops/action-gh-release` sets the release body from its inputs, and
+  # this workflow has no body to give: it would blank the release notes that are
+  # written by hand and reviewed. It would also collide with the operator's
+  # SHA256SUMS, which covers the package and the APK. CI builds and verifies;
+  # what ships is attached by the person who built and exercised it.
