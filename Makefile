@@ -85,7 +85,7 @@ bench:
 #   3. cargo audit  (non-fatal in lint; sibling `audit` target is fatal)
 #   4. cargo deny check  (fatal)
 .PHONY: lint
-lint: scope-discipline
+lint: scope-discipline privacy-check
 	@echo "Running clippy..."
 	$(CARGO) clippy --workspace --all-targets --all-features -- -D warnings
 	@echo "Checking formatting..."
@@ -103,6 +103,11 @@ lint: scope-discipline
 # `// SPEC-DEVIATION:` marker + a row in docs/known-gaps.md; if a
 # reviewer needs the list of incomplete work, it's `git grep "// GAP:"`.
 .PHONY: scope-discipline
+## privacy-check: Refuse to commit a real device address, a personal home path or a private key.
+.PHONY: privacy-check
+privacy-check:
+	@bash scripts/privacy-check.sh
+
 scope-discipline:
 	@echo "Running scope-discipline grep..."
 	@if git grep -nE \
