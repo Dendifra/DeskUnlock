@@ -2,9 +2,10 @@
 """Localisation plumbing for the settings GUI.
 
 The mechanism is deliberately *not* "two builds": one package ships one binary
-and both catalogs, and the language is chosen at run time. These tests pin the
-two places where a wrong answer would be silent — the choice order, and the
-config merge.
+and both catalogs, and the language follows the desktop locale at run time —
+exactly as the phone's locale decides for the app. There is no in-GUI override
+to keep in sync, so these tests pin two things: where the language comes from,
+and that the config merge cannot erase a neighbouring setting.
 """
 
 import importlib.machinery
@@ -26,37 +27,34 @@ loader.exec_module(settings)
 
 
 class LanguageChoiceTests(unittest.TestCase):
-    """Order: the operator's choice, then the desktop locale, then English."""
+    """The desktop locale decides; English is the fallback, never a half screen."""
 
-    def test_an_explicit_choice_beats_the_desktop_locale(self):
-        self.assertEqual("it", settings.resolve_language("it", {"LANG": "en_US.UTF-8"}))
-        self.assertEqual("en", settings.resolve_language("en", {"LANG": "it_IT.UTF-8"}))
+    def test_an_italian_desktop_gets_italian(self):
+        self.assertEqual("it", settings.resolve_language({"LANG": "it_IT.UTF-8"}))
 
-    def test_auto_follows_the_desktop_locale(self):
-        self.assertEqual("it", settings.resolve_language("auto", {"LANG": "it_IT.UTF-8"}))
-        self.assertEqual("en", settings.resolve_language("auto", {"LANG": "en_US.UTF-8"}))
+    def test_an_english_desktop_gets_english(self):
+        self.assertEqual("en", settings.resolve_language({"LANG": "en_US.UTF-8"}))
 
-    def test_an_unknown_locale_falls_back_to_english(self):
-        """Never to a half-translated screen: the source is English."""
-        self.assertEqual("en", settings.resolve_language("auto", {"LANG": "de_DE.UTF-8"}))
-        self.assertEqual("en", settings.resolve_language("auto", {}))
-        self.assertEqual("en", settings.resolve_language(None, {}))
+    def test_a_locale_we_have_no_catalog_for_gets_english(self):
+        self.assertEqual("en", settings.resolve_language({"LANG": "de_DE.UTF-8"}))
+        self.assertEqual("en", settings.resolve_language({}))
+        self.assertEqual("en", settings.resolve_language({"LANG": ""}))
 
     def test_language_outranks_lc_all_outranks_lang(self):
         self.assertEqual(
             "it",
             settings.resolve_language(
-                "auto", {"LANGUAGE": "it:en", "LC_ALL": "en_US.UTF-8", "LANG": "en_US.UTF-8"}
+                {"LANGUAGE": "it:en", "LC_ALL": "en_US.UTF-8", "LANG": "en_US.UTF-8"}
             ),
         )
 
-    def test_a_stored_garbage_value_does_not_win(self):
-        self.assertEqual("en", settings.resolve_language("klingon", {}))
+    def test_a_locale_without_an_encoding_suffix_is_understood(self):
+        self.assertEqual("it", settings.resolve_language({"LANG": "it"}))
 
 
 class ConfigMergeTests(unittest.TestCase):
     """Saving one setting must not erase the other: the old writer rewrote the
-    whole file, so storing the theme dropped every other key."""
+    whole file, so storing any key dropped every other key."""
 
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -67,19 +65,15 @@ class ConfigMergeTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_saving_the_language_keeps_the_theme(self):
+    def test_the_theme_round_trips(self):
         settings.write_gui_theme("light")
-        settings.write_gui_language("it")
         self.assertEqual("light", settings.read_gui_theme())
-        self.assertEqual("it", settings.read_gui_language())
 
-    def test_saving_the_theme_keeps_the_language(self):
-        settings.write_gui_language("it")
-        settings.write_gui_theme("light")
-        self.assertEqual("it", settings.read_gui_language())
+    def test_an_unknown_value_falls_back_to_the_default(self):
+        settings.GUI_THEME_CONFIG.write_text("theme=chartreuse\n", encoding="utf-8")
+        self.assertEqual(settings.THEME_DARK, settings.read_gui_theme())
 
-    def test_defaults_when_the_file_is_absent(self):
-        self.assertEqual("auto", settings.read_gui_language())
+    def test_default_when_the_file_is_absent(self):
         self.assertEqual(settings.THEME_DARK, settings.read_gui_theme())
 
     def test_an_unknown_key_in_the_file_is_ignored(self):

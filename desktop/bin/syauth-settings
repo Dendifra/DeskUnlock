@@ -702,29 +702,16 @@ LOCALE_DIR = Path(os.environ.get("SYAUTH_LOCALE_DIR", "/usr/share/locale"))
 TEXT_DOMAIN = "deskunlock"
 SUPPORTED_LANGUAGES = ("en", "it")
 DEFAULT_LANGUAGE = "en"
-LANGUAGE_AUTO = "auto"
-
-# Language names are shown in their own language, the way every OS does it:
-# someone who reads only Italian has to be able to find "Italiano".
-LANGUAGE_LABELS = (
-    (LANGUAGE_AUTO, "Automatica (lingua di sistema)"),
-    ("en", "English"),
-    ("it", "Italiano"),
-)
 
 
 
-def resolve_language(configured, env):
-    """Return the language to use.
+def resolve_language(env):
+    """Return the language for this process, from the environment.
 
-    `configured` is the operator's choice ("auto" or a supported code); `env`
-    is the process environment. An unsupported or empty answer falls back to
-    [DEFAULT_LANGUAGE] instead of to the desktop's locale, so a `de_DE` desktop
-    reads a coherent English GUI rather than whatever mixed catalog happens to
-    exist.
+    The desktop locale decides, exactly as Android's locale decides for the app:
+    there is no in-GUI override to keep in sync. A locale we have no catalog for
+    falls back to [DEFAULT_LANGUAGE] rather than to a half-translated screen.
     """
-    if configured in SUPPORTED_LANGUAGES:
-        return configured
     for key in ("LANGUAGE", "LC_ALL", "LANG"):
         raw = (env.get(key) or "").strip()
         if not raw:
@@ -757,7 +744,7 @@ def install_translations(language):
 _ = lambda message: message  # replaced by install_translations() at startup
 
 
-GUI_CONFIG_KEYS = ("theme", "language")
+GUI_CONFIG_KEYS = ("theme",)
 
 GUI_THEME_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "syauth" / "gui.conf"
 
@@ -811,16 +798,6 @@ def read_gui_theme():
 def write_gui_theme(theme):
     """Persist the theme without disturbing the other settings."""
     write_gui_config(theme=theme)
-
-
-def read_gui_language():
-    """Return the persisted language choice, defaulting to auto."""
-    return read_gui_config().get("language", LANGUAGE_AUTO)
-
-
-def write_gui_language(language):
-    """Persist the language choice."""
-    write_gui_config(language=language)
 
 
 def apply_theme(app, theme):
@@ -891,23 +868,7 @@ class SettingsWindow(QMainWindow):
         self.theme_button.clicked.connect(self.toggle_theme)
         self.update_theme_button()
 
-        # The language choice sits directly under the theme choice: both answer
-        # "how should this GUI look to me", and neither belongs in a card that
-        # describes the phone.
-        self.language = read_gui_language()
-        self.language_combo = QComboBox()
-        self.language_combo.setMinimumWidth(150)
-        for code, label in LANGUAGE_LABELS:
-            self.language_combo.addItem(label, code)
-        stored = self.language_combo.findData(self.language)
-        self.language_combo.setCurrentIndex(stored if stored >= 0 else 0)
-        self.language_combo.currentIndexChanged.connect(self.change_language)
-
-        appearance = QVBoxLayout()
-        appearance.setSpacing(6)
-        appearance.addWidget(self.theme_button)
-        appearance.addWidget(self.language_combo)
-        footer.addLayout(appearance)
+        footer.addWidget(self.theme_button)
 
         footer.addStretch()
 
@@ -955,25 +916,6 @@ class SettingsWindow(QMainWindow):
         apply_theme(QApplication.instance(), self.theme)
         write_gui_theme(self.theme)
         self.update_theme_button()
-
-    def change_language(self):
-        """Apply the language the moment it is picked — no save button.
-
-        Every label in this window was built with the translation installed at
-        startup, so the new language is applied by restarting the process.
-        Rebuilding every widget in place is the same work with more ways to get
-        it wrong, and this way what the operator sees is exactly what the next
-        launch shows.
-        """
-        code = self.language_combo.currentData()
-        if code == self.language:
-            return
-        self.language = code
-        write_gui_language(code)
-        self.status.setText(_("Language saved: restarting DeskUnlock…"))
-        QApplication.processEvents()
-        QProcess.startDetached(sys.executable, [str(Path(sys.argv[0]).resolve())])
-        QApplication.quit()
 
     def build_header(self, main):
         header = QHBoxLayout()
@@ -1765,7 +1707,7 @@ def main():
     # its text once, so translating after construction would only affect the
     # strings refreshed later. This is also why the language selector cannot
     # apply live.
-    install_translations(resolve_language(read_gui_language(), os.environ))
+    install_translations(resolve_language(os.environ))
     apply_theme(app, read_gui_theme())
     window = SettingsWindow()
     window.show()
