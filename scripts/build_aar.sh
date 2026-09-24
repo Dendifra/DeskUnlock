@@ -120,7 +120,14 @@ for target in "${!ANDROID_TARGETS[@]}"; do
     echo "  -> ${target}"
     (
         cd "${PROJECT_ROOT}"
-        cargo ndk -t "${target}" build -p syauth-mobile ${PROFILE_FLAG}
+        # Strip the build machine's home directory out of the compiled objects.
+        # Without this the .so embeds paths like /home/<builder>/.cargo/registry
+        # and anyone who downloads the APK can read the builder's username with
+        # `strings`. The Arch PKGBUILD already remaps for the desktop binaries;
+        # this is the same fix for the Android ones, which cargo-ndk builds here
+        # and nothing was remapping.
+        RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=${HOME}=/usr/src" \
+            cargo ndk -t "${target}" build -p syauth-mobile ${PROFILE_FLAG}
     )
 done
 
