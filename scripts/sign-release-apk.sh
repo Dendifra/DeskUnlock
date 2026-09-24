@@ -27,7 +27,16 @@ fi
 [[ -f "$UNSIGNED" ]] || { echo "unsigned release APK not found: $UNSIGNED" >&2; exit 1; }
 [[ -f "$KEYSTORE" ]] || { echo "keystore not found: $KEYSTORE" >&2; exit 1; }
 
-read -rsp "Password keystore release: " KSPASS
+# The password can come from an askpass helper instead of the terminal. Piping
+# it in keeps it out of argv and out of the shell history, which is the whole
+# reason to prefer this over a command-line argument. Falls back to the
+# terminal prompt when no helper is configured.
+if [[ -n "${SYAUTH_KS_ASKPASS:-}" ]]; then
+    KSPASS="$("$SYAUTH_KS_ASKPASS")" || { echo "keystore password prompt cancelled" >&2; exit 1; }
+    [[ -n "$KSPASS" ]] || { echo "empty keystore password" >&2; exit 1; }
+else
+    read -rsp "Password keystore release: " KSPASS
+fi
 echo
 KSPASS="$KSPASS" "$APKSIGNER" sign \
     --ks "$KEYSTORE" \
