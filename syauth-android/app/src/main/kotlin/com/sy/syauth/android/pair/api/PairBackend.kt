@@ -11,6 +11,18 @@
 package com.sy.syauth.android.pair.api
 
 /**
+ * Failure reason emitted when the *peer* refused the pairing transaction.
+ *
+ * The desktop only accepts an inbound bond request while the operator has armed
+ * pairing there (SPEC §6 T-004), so a refusal is the normal outcome of an
+ * un-armed computer — not a crash. Kept as a stable identifier rather than
+ * prose so the screen can turn it into an actionable instruction
+ * (BUG-20260924: the operator saw "remote confirmation failed" and had nothing
+ * to act on).
+ */
+public const val PEER_REJECTED_REASON: String = "peer rejected the pairing transaction"
+
+/**
  * Identity record for a peer surfaced by [PairBackend.startScan]. The
  * fields are the minimum the screen needs to render a list row and the
  * minimum the ViewModel needs to drive the pick → LESC → bond pipeline.

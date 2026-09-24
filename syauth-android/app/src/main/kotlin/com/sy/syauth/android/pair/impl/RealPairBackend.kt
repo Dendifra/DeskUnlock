@@ -65,6 +65,7 @@ import uniffi.syauth_mobile.pairTransactionStatusQuery
 import com.sy.syauth.android.pair.api.BondPersister
 import com.sy.syauth.android.pair.api.BondRecord
 import com.sy.syauth.android.pair.api.LescResult
+import com.sy.syauth.android.pair.api.PEER_REJECTED_REASON
 import com.sy.syauth.android.pair.api.PairBackend
 import com.sy.syauth.android.pair.api.PeerHandle
 import com.sy.syauth.android.pair.api.PickPeerResult
@@ -184,6 +185,18 @@ private const val MACHINE_WAIT_STEPS: Int = 600
  * machine-paced ([MACHINE_WAIT_STEPS]) and the commit sequence stays tight.
  */
 private const val OOB_WAIT_STEPS: Int = 3600
+
+/**
+ * Failure reason for an OOB round the peer ended early.
+ *
+ * [waitFor] collapses every terminal operation into `null`, which is enough to
+ * fail but erases *why*. A `Reject` is the computer refusing an inbound bond
+ * request nobody armed it for (SPEC §6 T-004) and must stay distinguishable
+ * from a timeout so the screen can tell the operator what to do
+ * (BUG-20260924: the operator saw "remote confirmation failed").
+ */
+internal fun confirmationFailureReason(lastPeerOperation: Byte?): String =
+    if (lastPeerOperation == OP_REJECT) PEER_REJECTED_REASON else "remote confirmation failed"
 
 // ---------------------------------------------------------------------------
 // Seam interfaces — every Android platform dependency lives behind one of
@@ -713,10 +726,18 @@ onPairingCodeCallback.get().invoke(code)
             if (bytes == null || bytes.size != TRANSACTION_MESSAGE_LEN || bytes[0] != TRANSACTION_VERSION || !bytes.copyOfRange(1, 17).contentEquals(id)) return null
             return bytes[17].takeIf { it in OP_CAPABILITY..OP_ERROR }
         }
+        // The last operation the peer actually sent. `waitFor` collapses every
+        // terminal operation into `null`, which is enough to fail but erases
+        // *why*: the operator must be told the computer refused the pairing
+        // (SPEC §6 T-004 arming) instead of reading "remote confirmation
+        // failed" (BUG-20260924).
+        var lastPeerOperation: Byte? = null
         fun waitFor(expected: Byte, steps: Int = MACHINE_WAIT_STEPS): ByteArray? {
             repeat(steps) {
                 val bytes = exchange.readTransactionMessage()
-                when (operation(bytes)) {
+                val seen = operation(bytes)
+                if (seen != null) lastPeerOperation = seen
+                when (seen) {
                     expected -> return bytes
                     OP_REJECT, OP_CANCEL, OP_TIMEOUT, OP_ERROR -> return null
                     null -> return null
@@ -759,7 +780,9 @@ onPairingCodeCallback.get().invoke(code)
         // `Preparing` once BOTH sides have confirmed, and it waits for exactly
         // this message; skipping it aborts the attempt on its side.
         if (!exchange.writeTransactionMessage(message(OP_CONFIRM))) return failure("DeskUnlock confirmation rejected", false)
-        if (!waitFor(OP_CONFIRM, OOB_WAIT_STEPS).let { it != null && remote(it) }) return failure("remote confirmation failed", false)
+        if (!waitFor(OP_CONFIRM, OOB_WAIT_STEPS).let { it != null && remote(it) }) {
+            return failure(confirmationFailureReason(lastPeerOperation), false)
+        }
         if (!local(EVENT_PREPARED) || !exchange.writeTransactionMessage(message(OP_PREPARED))) return failure("local prepare failed", false)
         if (!waitFor(OP_PREPARED).let { it != null && remote(it) }) return failure("remote prepare failed", false)
         if (!waitFor(OP_COMMIT).let { it != null && remote(it) }) return failure("remote commit unavailable", false)
@@ -883,7 +906,7 @@ onPairingCodeCallback.get().invoke(code)
         }
         val capability = exchange.readTransactionMessage()
         if (capability == null || capability.size != TRANSACTION_MESSAGE_LEN || capability[0] != TRANSACTION_VERSION || capability[17] != OP_CAPABILITY) {
-            lescResultDeferred.complete(LescResult.Failed("Questa versione di DeskUnlock deve essere aggiornata prima dell'associazione."))
+            lescResultDeferred.complete(LescResult.Failed("This version of DeskUnlock must be updated before pairing."))
             return
         }
         transactionId = capability.copyOfRange(1, 17)

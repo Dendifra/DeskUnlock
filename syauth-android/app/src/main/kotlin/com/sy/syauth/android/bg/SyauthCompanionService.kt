@@ -432,9 +432,12 @@ public class SyauthCompanionService : Service() {
             Log.w(SYAUTH_BG_LOG_TAG, "revoke requested with no client to send it on")
             return
         }
-        val record = runCatching { loadPersistedBond(filesDir) }.getOrNull()
+        // The UI deletes the bond file as part of the same tap that asks for
+        // this revoke, so reading it back here can never win the race. Use the
+        // record the service already holds for the live client instead.
+        val record = clientBonds[clientKey]
         if (record == null) {
-            Log.w(SYAUTH_BG_LOG_TAG, "revoke requested without a persisted bond record")
+            Log.w(SYAUTH_BG_LOG_TAG, "revoke requested without an in-memory bond record")
             return
         }
         // The frame must carry the id the desktop's bond store actually

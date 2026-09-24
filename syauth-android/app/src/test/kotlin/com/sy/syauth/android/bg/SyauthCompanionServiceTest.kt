@@ -351,6 +351,49 @@ class SyauthCompanionServiceTest {
     }
 
     /**
+     * The revoke must survive the caller's own local cleanup.
+     * `onBondRevokeTapped` hands the service a fire-and-forget
+     * `startService` intent and then synchronously deletes the bond file, so by
+     * the time the service reads it the file is always gone (observed
+     * 2026-09-24: every in-app revoke logged "revoke requested without a
+     * persisted bond record" and the desktop kept serving the bond). The record
+     * the service already holds for the live client must be enough.
+     */
+    @Test
+    fun a_revoke_still_sends_when_the_bond_file_was_already_deleted() {
+        val bond = bondFor(FIXTURE_PEER_A)
+        val appContext = RuntimeEnvironment.getApplication()
+        val store = BondStore(appContext.filesDir)
+        store.save(bond)
+        val derivedId = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+        SyauthCompanionService.peerIdComputer = PeerIdComputer { derivedId }
+
+        val factory = RecordingGattClientFactory()
+        SyauthCompanionService.bondListProvider = BondListProvider { listOf(bond) }
+        SyauthCompanionService.gattClientFactory = factory
+
+        val controller = Robolectric.buildService(SyauthCompanionService::class.java).create()
+        val service = controller.get()
+
+        // The UI's own cleanup, landing before the fire-and-forget intent does.
+        assertTrue("fixture bond file must exist", store.storePath.delete())
+
+        service.onStartCommand(
+            Intent(SyauthCompanionService.ACTION_REVOKE_BOND)
+                .putExtra(SyauthCompanionService.EXTRA_PEER_ID, bond.peerId),
+            0,
+            0,
+        )
+
+        val client = factory.created.single().second
+        val frame = client.sent.singleOrNull()
+        assertNotNull("the revoke must not depend on the deleted file, got ${client.sent.size}", frame)
+        assertEquals(OP_REVOKE, frame!![17])
+        assertArrayEquals(revokeFrame(derivedId), frame)
+        controller.destroy()
+    }
+
+    /**
      * The frame builder is the only place that turns a `peer_id` into wire
      * bytes: a malformed record must never put a bogus frame on the radio.
      */

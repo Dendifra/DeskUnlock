@@ -34,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTag
 import androidx.compose.ui.unit.dp
+import com.sy.syauth.android.pair.api.PEER_REJECTED_REASON
 
 /**
  * Test tags. Public so [PairingScreenTest] can use the same constants.
@@ -58,21 +59,30 @@ object PairingTestTags {
 
 /** Static UI strings. Centralised so tests assert on the same constants. */
 object PairingStrings {
-    const val IDLE_CTA: String = "Trova computer"
-    const val IDLE_TITLE: String = "Associa un computer"
-    const val IDLE_DESCRIPTION: String = "Collega il telefono al tuo computer in modo sicuro tramite Bluetooth."
-    const val SEARCHING: String = "Cerco computer DeskUnlock nelle vicinanze…"
-    const val FOUND_PREFIX: String = "Computer trovato: "
-    const val BLUETOOTH_HELP: String = "Controlla che il codice Bluetooth coincida sui due dispositivi."
-    const val OOB_HELP: String = "Controlla che questo numero sia identico a quello mostrato sul computer."
-    const val FINALIZING: String = "Finalizzazione dell'associazione…"
-    const val CANCEL: String = "Annulla"
-    const val OOB_QUESTION: String = "I numeri coincidono?"
+    const val IDLE_CTA: String = "Find computer"
+    const val IDLE_TITLE: String = "Pair a computer"
+    const val IDLE_DESCRIPTION: String = "Link your phone to your computer securely over Bluetooth."
+    const val SEARCHING: String = "Searching for nearby DeskUnlock computers…"
+    const val FOUND_PREFIX: String = "Computer found: "
+    const val BLUETOOTH_HELP: String = "Check that the Bluetooth code matches on both devices."
+    const val OOB_HELP: String = "Check that this number matches the one shown on the computer."
+    const val FINALIZING: String = "Finishing pairing…"
+    const val CANCEL: String = "Cancel"
+    const val OOB_QUESTION: String = "Do the numbers match?"
     const val OOB_YES: String = "Sì"
     const val OOB_NO: String = "No"
-    const val BONDED: String = "Computer associato"
-    const val DONE: String = "Fine"
+    const val BONDED: String = "Computer paired"
+    const val DONE: String = "Done"
     const val FAILED_PREFIX: String = "Pairing failed: "
+
+    /**
+     * Shown instead of [FAILED_PREFIX] + reason when the computer refused the
+     * transaction: the raw reason carries no action, this one names the arming
+     * step on the computer (SPEC §6 T-004).
+     */
+    const val PEER_REJECTED_HELP: String =
+        "The computer refused the pairing. On the computer, open DeskUnlock " +
+            "and press \"Associa telefono\", then try again."
     const val BACK: String = "Back"
 }
 
@@ -160,7 +170,7 @@ private fun ScanningContent(onCancel: () -> Unit) {
 
 @Composable
 private fun LescContent(code: String, onCancel: () -> Unit) {
-    Text(text = "Verifica Bluetooth", style = MaterialTheme.typography.titleLarge)
+    Text(text = "Verify Bluetooth", style = MaterialTheme.typography.titleLarge)
     Text(text = PairingStrings.BLUETOOTH_HELP)
     Spacer(modifier = Modifier.height(12.dp))
     Text(
@@ -225,7 +235,7 @@ private fun FinalizingContent() {
 
 @Composable
 private fun UncertainContent(reason: String, onRetry: () -> Unit) {
-    Text(text = "Verifica dell'associazione in corso…", style = MaterialTheme.typography.titleLarge)
+    Text(text = "Verifying pairing…", style = MaterialTheme.typography.titleLarge)
     Spacer(modifier = Modifier.height(8.dp))
     Text(text = reason, modifier = Modifier.semantics { testTag = PairingTestTags.UNCERTAIN_REASON })
     Spacer(modifier = Modifier.height(16.dp))
@@ -250,7 +260,7 @@ private fun BondedContent(onDone: () -> Unit) {
 @Composable
 private fun FailedContent(reason: String, onBack: () -> Unit) {
     Text(
-        text = PairingStrings.FAILED_PREFIX + reason,
+        text = failure_message(reason),
         modifier = Modifier.semantics { testTag = PairingTestTags.FAILED_REASON },
     )
     Spacer(modifier = Modifier.height(24.dp))
@@ -261,3 +271,18 @@ private fun FailedContent(reason: String, onBack: () -> Unit) {
         Text(text = PairingStrings.BACK)
     }
 }
+
+/**
+ * Render one backend failure reason for the operator.
+ *
+ * A peer rejection is not a crash to report: it is the computer refusing the
+ * transaction because nobody armed the pairing there (SPEC §6 T-004). The raw
+ * reason says only that the remote confirmation failed, so it is replaced by
+ * the next action to take (BUG-20260924: the operator saw nothing to act on).
+ */
+internal fun failure_message(reason: String): String =
+    if (reason == PEER_REJECTED_REASON) {
+        PairingStrings.PEER_REJECTED_HELP
+    } else {
+        PairingStrings.FAILED_PREFIX + reason
+    }
