@@ -1,3 +1,15 @@
+msgid "Nessun dispositivo associato"
+msgstr "No device paired"
+
+msgid "Tema: chiaro"
+msgstr "Theme: light"
+
+msgid "Tema: scuro"
+msgstr "Theme: dark"
+
+msgid " minuti"
+msgstr " min"
+
 msgid ""
 msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -237,3 +249,24 @@ msgstr "The phone was unpaired from DeskUnlock.\n\nYou can pair another one with
 msgid "Attendere…"
 msgstr "Please wait…"
 
+
+msgid "Associazione"
+msgstr "Pairing"
+
+msgid "Ultimo sblocco"
+msgstr "Last unlock"
+
+msgid "Sblocco con impronta"
+msgstr "Fingerprint unlock"
+
+msgid "✓  Login e sblocco della sessione"
+msgstr "✓  Session login and unlock"
+
+msgid "✓  Conferma biometrica sul telefono"
+msgstr "✓  Biometric confirmation on the phone"
+
+msgid "✓  Blocco automatico per allontanamento"
+msgstr "✓  Automatic lock on walking away"
+
+msgid "✓  Password Linux disponibile come fallback"
+msgstr "✓  Linux password available as fallback"

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-24 21:27+0200\n"
+"POT-Creation-Date: 2026-09-24 21:41+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -32,7 +32,7 @@ msgstr ""
 msgid "Telefono assente"
 msgstr ""
 
-#: desktop/bin/syauth-settings:210 desktop/bin/syauth-settings:1129
+#: desktop/bin/syauth-settings:210 desktop/bin/syauth-settings:1132
 msgid "Vicino"
 msgstr ""
 
@@ -80,8 +80,8 @@ msgstr ""
 msgid "Associa telefono — DeskUnlock"
 msgstr ""
 
-#: desktop/bin/syauth-settings:496 desktop/bin/syauth-settings:832
-#: desktop/bin/syauth-settings:935
+#: desktop/bin/syauth-settings:496 desktop/bin/syauth-settings:833
+#: desktop/bin/syauth-settings:938
 msgid "DeskUnlock"
 msgstr ""
 
@@ -121,7 +121,7 @@ msgstr ""
 msgid "In attesa della tua conferma…"
 msgstr ""
 
-#: desktop/bin/syauth-settings:569 desktop/bin/syauth-settings:1033
+#: desktop/bin/syauth-settings:569 desktop/bin/syauth-settings:1036
 msgid "Telefono associato"
 msgstr ""
 
@@ -130,7 +130,7 @@ msgid "Associazione non completata."
 msgstr ""
 
 #: desktop/bin/syauth-settings:580 desktop/bin/syauth-settings:680
-#: desktop/bin/syauth-settings:875 desktop/bin/syauth-settings:1255
+#: desktop/bin/syauth-settings:876 desktop/bin/syauth-settings:1258
 msgid "Chiudi"
 msgstr ""
 
@@ -142,199 +142,243 @@ msgstr ""
 msgid "Associazione non completata. Puoi riprovare."
 msgstr ""
 
-#: desktop/bin/syauth-settings:944
+#: desktop/bin/syauth-settings:913
+msgid "Tema: scuro"
+msgstr ""
+
+#: desktop/bin/syauth-settings:913
+msgid "Tema: chiaro"
+msgstr ""
+
+#: desktop/bin/syauth-settings:947
 msgid "Autenticazione sicura con il telefono"
 msgstr ""
 
-#: desktop/bin/syauth-settings:970 desktop/bin/syauth-settings:1118
+#: desktop/bin/syauth-settings:973 desktop/bin/syauth-settings:1121
 msgid "Caricamento…"
 msgstr ""
 
-#: desktop/bin/syauth-settings:980
+#: desktop/bin/syauth-settings:983
 msgid "Autenticazione e controllo di prossimità"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1004
+#: desktop/bin/syauth-settings:1007
 msgid "DISPOSITIVO ASSOCIATO"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1066
+#: desktop/bin/syauth-settings:1069
 msgid "Dissocia"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1080
+#: desktop/bin/syauth-settings:1083
 msgid "PROSSIMITÀ"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1091
+#: desktop/bin/syauth-settings:1094
 msgid "Proximity Lock"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1098
+#: desktop/bin/syauth-settings:1101
 msgid "Blocca il PC quando il telefono si allontana"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1107 desktop/bin/syauth-settings:1179
+#: desktop/bin/syauth-settings:1110 desktop/bin/syauth-settings:1182
 msgid "Attivo"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1116
+#: desktop/bin/syauth-settings:1119
 msgid "Stato"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1125
+#: desktop/bin/syauth-settings:1128
 msgid "Sensibilità"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1130
+#: desktop/bin/syauth-settings:1133
 msgid "Bilanciato"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1131
+#: desktop/bin/syauth-settings:1134
 msgid "Ampio"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1140
+#: desktop/bin/syauth-settings:1143
 msgid ""
 "Privacy: RSSI, baseline e stato restano locali; nessuna telemetria viene "
 "inviata."
 msgstr ""
 
-#: desktop/bin/syauth-settings:1148 desktop/bin/syauth-settings:1220
+#: desktop/bin/syauth-settings:1151 desktop/bin/syauth-settings:1223
 msgid "Diagnostica avanzata"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1158
+#: desktop/bin/syauth-settings:1161
 msgid "INATTIVITÀ"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1168
+#: desktop/bin/syauth-settings:1171
 msgid "Blocco per inattività"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1173
+#: desktop/bin/syauth-settings:1176
 msgid "Blocca il PC dopo un periodo senza attività"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1185
+#: desktop/bin/syauth-settings:1188
 msgid "Blocca dopo"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1226
+#: desktop/bin/syauth-settings:1192
+msgid " minuti"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1229
 msgid "DIAGNOSTICA AVANZATA"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1234
+#: desktop/bin/syauth-settings:1237
 msgid "RSSI raw"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1235
+#: desktop/bin/syauth-settings:1238
 msgid "RSSI filtered"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1236
+#: desktop/bin/syauth-settings:1239
 msgid "Baseline"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1237
+#: desktop/bin/syauth-settings:1240
 msgid "Delta"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1238
+#: desktop/bin/syauth-settings:1241
 msgid "Sample age"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1239
+#: desktop/bin/syauth-settings:1242
 msgid "Proximity state"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1240
+#: desktop/bin/syauth-settings:1243
 msgid "Heartbeat age"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1241
+#: desktop/bin/syauth-settings:1244
 msgid "GATT ready"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1242
+#: desktop/bin/syauth-settings:1245
 msgid "Lock reason"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1267
+#: desktop/bin/syauth-settings:1270
 msgid "UTILIZZATO PER"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1292
+#: desktop/bin/syauth-settings:1281
+msgid "✓  Login e sblocco della sessione"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1282
+msgid "✓  Conferma biometrica sul telefono"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1283
+msgid "✓  Blocco automatico per allontanamento"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1284
+msgid "✓  Password Linux disponibile come fallback"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1295
 msgid "STATO SISTEMA"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1380
+#: desktop/bin/syauth-settings:1310
+msgid "Associazione"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1314
+msgid "Ultimo sblocco"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1325
+msgid "Sblocco con impronta"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1383
 msgid "●  DeskUnlock attivo"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1388
+#: desktop/bin/syauth-settings:1391
 msgid "Disattiva"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1393
+#: desktop/bin/syauth-settings:1396
 msgid "○  DeskUnlock disattivato"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1401
+#: desktop/bin/syauth-settings:1404
 msgid "Attiva"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1406
+#: desktop/bin/syauth-settings:1409
 msgid "●  Stato degradato"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1414
+#: desktop/bin/syauth-settings:1417
 msgid "Ripristina"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1430
+#: desktop/bin/syauth-settings:1425
+msgid "Nessun dispositivo associato"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1433
 msgid "DeskUnlock non ha un telefono configurato"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1437
+#: desktop/bin/syauth-settings:1440
 msgid "Associa telefono"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1446
+#: desktop/bin/syauth-settings:1449
 msgid "Associazione presente · Problema DeskUnlock"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1453
+#: desktop/bin/syauth-settings:1456
 msgid "Controlla"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1461
+#: desktop/bin/syauth-settings:1464
 msgid "Associato"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1466
+#: desktop/bin/syauth-settings:1469
 msgid "Associato · Connesso"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1474
+#: desktop/bin/syauth-settings:1477
 msgid "Associato · Non connesso"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1485
+#: desktop/bin/syauth-settings:1488
 msgid "Cambia telefono"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1651
+#: desktop/bin/syauth-settings:1654
 msgid "Telefono dissociato"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1653
+#: desktop/bin/syauth-settings:1656
 msgid ""
 "Il telefono è stato dissociato da DeskUnlock.\n"
 "\n"
 "Puoi associarne un altro con \"Associa telefono\"."
 msgstr ""
 
-#: desktop/bin/syauth-settings:1668
+#: desktop/bin/syauth-settings:1671
 msgid "Attendere…"
 msgstr ""

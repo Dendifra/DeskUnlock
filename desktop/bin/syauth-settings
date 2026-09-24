@@ -909,7 +909,9 @@ class SettingsWindow(QMainWindow):
 
     def update_theme_button(self):
         """The label always starts with "Tema" and names the current theme."""
-        self.theme_button.setText("Tema: scuro" if self.theme == THEME_DARK else "Tema: chiaro")
+        self.theme_button.setText(
+            _("Tema: scuro") if self.theme == THEME_DARK else _("Tema: chiaro")
+        )
 
     def toggle_theme(self):
         """Switch the app theme immediately and remember the choice."""
@@ -1187,7 +1189,7 @@ class SettingsWindow(QMainWindow):
         timeout_row.addStretch()
         self.idle_minutes = QSpinBox()
         self.idle_minutes.setRange(1, 120)
-        self.idle_minutes.setSuffix(" minuti")
+        self.idle_minutes.setSuffix(_(" minuti"))
         self.idle_minutes.valueChanged.connect(self.set_idle_minutes)
         timeout_row.addWidget(self.idle_minutes)
         layout.addLayout(timeout_row)
@@ -1276,10 +1278,10 @@ class SettingsWindow(QMainWindow):
         layout.setSpacing(8)
 
         features = (
-            "✓  Login e sblocco della sessione",
-            "✓  Conferma biometrica sul telefono",
-            "✓  Blocco automatico per allontanamento",
-            "✓  Password Linux disponibile come fallback",
+            _("✓  Login e sblocco della sessione"),
+            _("✓  Conferma biometrica sul telefono"),
+            _("✓  Blocco automatico per allontanamento"),
+            _("✓  Password Linux disponibile come fallback"),
         )
 
         for feature in features:
@@ -1305,11 +1307,11 @@ class SettingsWindow(QMainWindow):
         )
 
         self.bond_row = StatusRow(
-            "Associazione"
+            _("Associazione")
         )
 
         self.unlock_row = StatusRow(
-            "Ultimo sblocco"
+            _("Ultimo sblocco")
         )
 
         self.proximity_system_row = StatusRow(
@@ -1320,7 +1322,7 @@ class SettingsWindow(QMainWindow):
         # at-a-glance signal that the session can be unlocked from the phone
         # (the phone performs the actual biometric check).
         self.fingerprint_row = StatusRow(
-            "Sblocco con impronta",
+            _("Sblocco con impronta"),
             icon_name="fingerprint",
         )
 
@@ -1420,7 +1422,7 @@ class SettingsWindow(QMainWindow):
         self.phone_name.setText(
             phone["name"]
             if data["bonded"] > 0
-            else "Nessun dispositivo associato"
+            else _("Nessun dispositivo associato")
         )
 
         self.device_action.hide()
