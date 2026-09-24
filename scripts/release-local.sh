@@ -93,7 +93,11 @@ APK_RAW="syauth-android/app/build/outputs/apk/release/app-release-unsigned.apk"
 step "checking the shipped libraries carry no build paths"
 LEAK_DIR="$(mktemp -d)"
 unzip -q -o "$APK_RAW" 'lib/*/libsyauth_mobile.so' -d "$LEAK_DIR"
-LEAKS="$(find "$LEAK_DIR" -name '*.so' -exec strings {} + | grep -c '/home/')"
+# `|| true` is load-bearing: `grep -c` exits 1 when it counts zero matches, and
+# under `set -e` that aborts the whole script silently — a clean tree would kill
+# the release without a message.
+LEAKS="$(find "$LEAK_DIR" -name '*.so' -exec strings {} + | grep -c '/home/' || true)"
+LEAKS="${LEAKS:-0}"
 rm -rf "$LEAK_DIR"
 [[ "$LEAKS" == "0" ]] || die "the APK embeds $LEAKS build paths from this machine; rebuild the .aar (NDK_HOME) before shipping"
 step "libraries clean"
