@@ -212,6 +212,31 @@ def proximity_display_state(proximity):
     }.get(proximity["state"], "Sconosciuto"), True
 
 
+def association_display(bonded, present):
+    """Return `(label, active)` for the "Associazione" row.
+
+    A bond record is not an association. When the phone dissociates — or simply
+    goes away — the desktop keeps the record but has nothing left to talk to,
+    so the row must not read green (observed 2026-09-24: the card said
+    "Associato" while the phone was dissociated and phone unlock was dead).
+    """
+    if bonded <= 0:
+        return "Non associato", False
+    if not present:
+        return "Telefono non connesso", False
+    return "Associato", True
+
+
+def last_unlock_display(last_unlock, associated):
+    """Return `(label, active)` for the "Ultimo sblocco" row.
+
+    A past unlock proves nothing while no phone is associated: keep the
+    timestamp readable, but only colour the row green when the association is
+    actually live.
+    """
+    return last_unlock, bool(associated) and last_unlock != "Mai"
+
+
 def get_phone_info():
     # The application bond is authoritative. A Bluetooth name is neither
     # unique nor a peer_id; never guess an address from a vendor/name match.
@@ -343,6 +368,7 @@ class StatusRow(QWidget):
         super().__init__()
 
         self.dot = StatusDot()
+        self.good = False
 
         self.icon = None
         if icon_name is not None:
@@ -374,6 +400,9 @@ class StatusRow(QWidget):
         layout.addWidget(self.value)
 
     def set_status(self, good, text):
+        # Kept as an attribute so a test can assert the row's verdict directly
+        # instead of reading Qt stylesheets back out.
+        self.good = bool(good)
         self.dot.set_state(good)
         self.value.setText(text)
 
@@ -1382,20 +1411,24 @@ class SettingsWindow(QMainWindow):
             else "Non disponibile",
         )
 
-        self.bond_row.set_status(
-            data["bonded"] > 0,
-            "Associato"
-            if data["bonded"] > 0
-            else "Non associato",
+        # "Associato" means the phone is actually reachable, not merely that a
+        # bond file exists on disk.
+        association_label, associated = association_display(
+            data["bonded"], phone_present()
         )
 
-        unlock_ok = (
-            data["last_unlock"] != "Mai"
+        self.bond_row.set_status(
+            associated,
+            association_label,
+        )
+
+        unlock_label, unlock_ok = last_unlock_display(
+            data["last_unlock"], associated
         )
 
         self.unlock_row.set_status(
             unlock_ok,
-            data["last_unlock"],
+            unlock_label,
         )
 
         # The phone unlock row reports the real state, not just "the tree is
