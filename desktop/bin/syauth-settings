@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import gettext
 import json
 import os
 import re
@@ -689,31 +690,129 @@ class PairingDialog(QDialog):
 # ---------------------------------------------------------------------------
 THEME_DARK = "dark"
 THEME_LIGHT = "light"
+# ---------------------------------------------------------------------------
+# Localisation.
+#
+# The source strings are English, so an English run needs no catalog at all:
+# a language without a translation falls back to the source, never to a
+# half-translated screen. The order is the operator's explicit choice in
+# gui.conf, then the desktop's own locale, then English.
+# ---------------------------------------------------------------------------
+LOCALE_DIR = Path(os.environ.get("SYAUTH_LOCALE_DIR", "/usr/share/locale"))
+TEXT_DOMAIN = "deskunlock"
+SUPPORTED_LANGUAGES = ("en", "it")
+DEFAULT_LANGUAGE = "en"
+LANGUAGE_AUTO = "auto"
+
+
+
+def resolve_language(configured, env):
+    """Return the language to use.
+
+    `configured` is the operator's choice ("auto" or a supported code); `env`
+    is the process environment. An unsupported or empty answer falls back to
+    [DEFAULT_LANGUAGE] instead of to the desktop's locale, so a `de_DE` desktop
+    reads a coherent English GUI rather than whatever mixed catalog happens to
+    exist.
+    """
+    if configured in SUPPORTED_LANGUAGES:
+        return configured
+    for key in ("LANGUAGE", "LC_ALL", "LANG"):
+        raw = (env.get(key) or "").strip()
+        if not raw:
+            continue
+        code = raw.split(":", 1)[0].split(".", 1)[0].split("_", 1)[0].lower()
+        if code in SUPPORTED_LANGUAGES:
+            return code
+    return DEFAULT_LANGUAGE
+
+
+def install_translations(language):
+    """Bind the module-level `_` to `language`.
+
+    English is the source language, so it maps to the identity: no catalog
+    lookup and no failure mode when `/usr/share/locale` is empty.
+    """
+    global _
+    if language == DEFAULT_LANGUAGE:
+        _ = lambda message: message
+        return
+    try:
+        translation = gettext.translation(
+            TEXT_DOMAIN, localedir=str(LOCALE_DIR), languages=[language], fallback=True
+        )
+    except OSError:
+        translation = gettext.NullTranslations()
+    _ = translation.gettext
+
+
+_ = lambda message: message  # replaced by install_translations() at startup
+
+
+GUI_CONFIG_KEYS = ("theme", "language")
+
 GUI_THEME_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "syauth" / "gui.conf"
 
 HINT_COLOR = {"dark": "#aeb4bc", "light": "#4d545c"}
 
 
-def read_gui_theme():
-    """Return the persisted theme, defaulting to dark."""
+def read_gui_config():
+    """Return every persisted GUI setting as a dict.
+
+    Unknown keys are dropped so a hand-edited file cannot inject surprise.
+    """
+    values = {}
     try:
         for line in GUI_THEME_CONFIG.read_text(encoding="utf-8").splitlines():
-            if line.startswith("theme="):
-                value = line.split("=", 1)[1].strip()
-                if value in (THEME_DARK, THEME_LIGHT):
-                    return value
+            key, separator, value = line.partition("=")
+            if separator and key in GUI_CONFIG_KEYS:
+                values[key] = value.strip()
     except OSError:
         pass
-    return THEME_DARK
+    return values
+
+
+def write_gui_config(**updates):
+    """Merge `updates` into gui.conf instead of rewriting the file.
+
+    The previous writer replaced the whole file, so saving the theme dropped
+    every other setting; with two keys that is a bug waiting to happen. Values
+    that are `None` are removed. Best-effort: a read-only config dir must not
+    crash the GUI.
+    """
+    values = read_gui_config()
+    for key, value in updates.items():
+        if value is None:
+            values.pop(key, None)
+        else:
+            values[key] = value
+    body = "".join(f"{key}={values[key]}\n" for key in GUI_CONFIG_KEYS if key in values)
+    try:
+        GUI_THEME_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        GUI_THEME_CONFIG.write_text(body, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def read_gui_theme():
+    """Return the persisted theme, defaulting to dark."""
+    theme = read_gui_config().get("theme")
+    return theme if theme in (THEME_DARK, THEME_LIGHT) else THEME_DARK
 
 
 def write_gui_theme(theme):
-    """Persist the theme; best-effort (a read-only config dir must not crash)."""
-    try:
-        GUI_THEME_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-        GUI_THEME_CONFIG.write_text(f"theme={theme}\n", encoding="utf-8")
-    except OSError:
-        pass
+    """Persist the theme without disturbing the other settings."""
+    write_gui_config(theme=theme)
+
+
+def read_gui_language():
+    """Return the persisted language choice, defaulting to auto."""
+    return read_gui_config().get("language", LANGUAGE_AUTO)
+
+
+def write_gui_language(language):
+    """Persist the language choice."""
+    write_gui_config(language=language)
 
 
 def apply_theme(app, theme):
