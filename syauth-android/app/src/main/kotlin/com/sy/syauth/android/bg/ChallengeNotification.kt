@@ -48,7 +48,7 @@ public const val NOTIFICATION_CHANNEL_HISTORY_NAME: String = "DeskUnlock"
  * high-importance channel.
  */
 public const val NOTIFICATION_CHANNEL_HISTORY_DESCRIPTION: String =
-    "Cronologia delle richieste di sblocco del computer."
+    "History of computer unlock requests."
 
 /**
  * Per-SPEC rate-limit window between visible audit posts. Audit
@@ -204,7 +204,7 @@ private fun buildNotification(
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
     val title = "DeskUnlock"
-    val text = "Richiesta di sblocco"
+    val text = "Unlock request"
     return NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_HISTORY)
         .setContentTitle(title)
         .setContentText(text)

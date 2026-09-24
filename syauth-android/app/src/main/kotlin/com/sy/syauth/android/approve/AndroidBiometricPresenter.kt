@@ -95,7 +95,7 @@ public class AndroidBiometricPresenter(
             val promptInfo = BiometricPrompt.PromptInfo.Builder()
                 .setTitle("DeskUnlock")
                 .setSubtitle(hostname)
-                .setDescription("Conferma per autorizzare lo sblocco del computer")
+                .setDescription("Confirm to authorize the computer unlock")
                 .setAllowedAuthenticators(ALLOWED_AUTHENTICATORS)
                 .build()
             prompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(signature))

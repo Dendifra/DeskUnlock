@@ -66,11 +66,11 @@ class ApproveScreenTest {
             .assertIsDisplayed()
 
         composeTestRule
-            .onNodeWithText("Sblocca il computer")
+            .onNodeWithText("Unlock the computer")
             .assertIsDisplayed()
 
         composeTestRule
-            .onNodeWithText("Richiesta di sblocco del computer")
+            .onNodeWithText("Computer unlock request")
             .assertIsDisplayed()
 
         composeTestRule

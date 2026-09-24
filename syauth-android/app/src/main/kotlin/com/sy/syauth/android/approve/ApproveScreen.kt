@@ -199,7 +199,7 @@ public fun ApproveScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Fingerprint,
-                        contentDescription = "Autenticazione biometrica",
+                        contentDescription = "Biometric authentication",
                         modifier = Modifier
                             .size(BIOMETRIC_ICON_SIZE_DP)
                             .semantics { testTag = ApproveScreenTestTags.BIOMETRIC_ICON },
@@ -207,7 +207,7 @@ public fun ApproveScreen(
                     )
                     Spacer(modifier = Modifier.height(SECTION_SPACING_DP))
                     Text(
-                        text = "Sblocca il computer",
+                        text = "Unlock the computer",
                         style = MaterialTheme.typography.headlineSmall,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
@@ -222,7 +222,7 @@ public fun ApproveScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Richiesta di sblocco del computer",
+                        text = "Computer unlock request",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -246,9 +246,9 @@ public fun ApproveScreen(
 @Composable
 private fun CountdownRow(state: ApproveUiState) {
     val text = when (state) {
-        is ApproveUiState.Counting -> "Autorizza entro ${state.remainingSeconds}s"
-        ApproveUiState.AwaitingBiometric -> "In attesa della biometria…"
-        ApproveUiState.Signing -> "Firma in corso…"
+        is ApproveUiState.Counting -> "Approve within ${state.remainingSeconds}s"
+        ApproveUiState.AwaitingBiometric -> "Waiting for biometrics…"
+        ApproveUiState.Signing -> "Signing…"
         else -> ""
     }
     Text(
@@ -283,7 +283,7 @@ private fun ButtonStack(
             ),
         ) {
             Text(
-                text = "Autorizza",
+                text = "Approve",
                 style = MaterialTheme.typography.titleMedium,
             )
         }
@@ -300,7 +300,7 @@ private fun ButtonStack(
             ),
         ) {
             Text(
-                text = "Rifiuta",
+                text = "Deny",
                 style = MaterialTheme.typography.titleMedium,
             )
         }
@@ -310,7 +310,7 @@ private fun ButtonStack(
 @Composable
 private fun TerminalMessage(state: ApproveUiState) {
     val text = when (state) {
-        is ApproveUiState.Approved -> "Sblocco autorizzato"
+        is ApproveUiState.Approved -> "Unlock approved"
         is ApproveUiState.Denied -> "Richiesta rifiutata: ${denialReasonLabel(state.reason)}"
         else -> ""
     }

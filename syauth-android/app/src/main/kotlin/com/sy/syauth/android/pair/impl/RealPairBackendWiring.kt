@@ -253,6 +253,16 @@ public class AndroidPairGattExchange(
 
     override fun peerDisplayName(): String? = hostDisplayName
 
+    /**
+     * Reflective `BluetoothGatt.refresh()` — clears the OS per-device GATT
+     * cache. `@hide` on AOSP but stable; mirrors the unlock client's helper.
+     * Never throws: a failed refresh just means the next discovery may use
+     * cached data.
+     */
+    private fun refreshGattCache(gatt: BluetoothGatt): Boolean = runCatching {
+        gatt.javaClass.getMethod("refresh").invoke(gatt) as? Boolean ?: false
+    }.getOrDefault(false)
+
     override fun exchangePubkeys(address: String, phonePubkey: ByteArray): ByteArray {
         hostDisplayName = null
         val nameDone = CountDownLatch(1)
@@ -266,6 +276,12 @@ public class AndroidPairGattExchange(
         val callback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
                 if (newState == BluetoothGatt.STATE_CONNECTED) {
+                    // Clear the stale per-device GATT cache first: the desktop
+                    // re-registers its pair application on every start, and a
+                    // cached service tree makes `discoverServices()` hand back
+                    // the dead registration (a fresh handshake is what the
+                    // unlock client already does).
+                    refreshGattCache(gatt)
                     runCatching { gatt.discoverServices() }
                 } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
                     if (hostPubkey.get() == null && failure.get() == null) {

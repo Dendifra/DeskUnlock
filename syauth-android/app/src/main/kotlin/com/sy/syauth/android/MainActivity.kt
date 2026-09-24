@@ -42,8 +42,14 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -63,6 +69,8 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTag
@@ -156,6 +164,13 @@ private const val PEER_ID_TRUNCATION_SUFFIX: String = "…" // ellipsis
 
 /** Date format pattern surfaced under "paired:" on the home card. */
 private const val PAIRED_AT_FORMAT_PATTERN: String = "yyyy-MM-dd HH:mm"
+
+// Home status dot: green when the DeskUnlock service is running, red when it
+// is not. Same green/red as the desktop GUI so the two read alike.
+private val HOME_STATUS_DOT_SIZE = 12.dp
+private val HOME_STATUS_DOT_GAP = 8.dp
+private val HOME_STATUS_GREEN = Color(0xFF63C174)
+private val HOME_STATUS_RED = Color(0xFFE06C75)
 
 /**
  * Fixed bond_key fixture used by the hello-world screen. 32 bytes, the
@@ -947,7 +962,7 @@ private const val BOND_KEY_BYTES_LEN: Int = 32
 private const val PERMISSION_LOG_TAG: String = "syauth.permission"
 
 /** Surfaced as a toast when no bond is yet present (pair has not run). */
-private const val NO_BOND_TOAST: String = "Nessun computer associato — avvia il pairing sul computer e tocca Associa nell'app"
+private const val NO_BOND_TOAST: String = "No computer paired — start pairing on the computer and tap Pair in the app"
 
 /**
  * Runtime BLE permission Android 12+ (API 31+) enforces for the
@@ -1032,7 +1047,7 @@ private fun HomeRoute(
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
-                text = "Il telefono è la tua chiave biometrica",
+                text = "Your phone is your biometric key",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1065,7 +1080,7 @@ private fun HomeRoute(
             text = {
                 Text(
                     text =
-                        "Questo rimuove l'associazione DeskUnlock e la chiave Keystore. " +
+                        "This removes the DeskUnlock pairing and the Keystore key. " +
                         "The Android Bluetooth bond is not changed.",
                 )
             },
@@ -1163,17 +1178,27 @@ private fun PairedHomeBody(
 
             Spacer(modifier = Modifier.height(18.dp))
 
-            Text(
-                text = if (serviceRunning)
-                    "● Servizio DeskUnlock attivo"
-                else
-                    "○ Servizio DeskUnlock inattivo",
-                style = MaterialTheme.typography.titleMedium,
-                color = if (serviceRunning)
-                    MaterialTheme.colorScheme.primary
-                else
-                    MaterialTheme.colorScheme.error,
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(HOME_STATUS_DOT_SIZE)
+                        .clip(CircleShape)
+                        .background(
+                            if (serviceRunning) HOME_STATUS_GREEN else HOME_STATUS_RED,
+                        ),
+                )
+                Spacer(modifier = Modifier.width(HOME_STATUS_DOT_GAP))
+                Text(
+                    text = if (serviceRunning)
+                        "DeskUnlock service active"
+                    else
+                        "DeskUnlock service inactive",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
 

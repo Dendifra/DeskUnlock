@@ -80,7 +80,7 @@ class ChallengeNotificationTest {
         val text = "${n.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)} " +
             "${n.extras.getCharSequence(android.app.Notification.EXTRA_TEXT)}"
         assertTrue("DeskUnlock title missing: $text", text.startsWith("DeskUnlock"))
-        assertTrue("unlock request text missing: $text", text.endsWith("Richiesta di sblocco"))
+        assertTrue("unlock request text missing: $text", text.endsWith("Unlock request"))
         assertTrue("internal wording leaked: $text", !text.contains("syauth"))
         assertTrue("internal wording leaked: $text", !text.contains("sudo"))
         assertTrue("peer id leaked: $text", !text.contains("peer_id"))
