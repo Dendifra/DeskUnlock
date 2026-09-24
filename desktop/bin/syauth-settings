@@ -208,9 +208,9 @@ def proximity_display_state(proximity):
         return _("Telefono assente"), False
     return {
         "NEAR": "Vicino",
-        "MID": "Intermedio",
-        "FAR": "Lontano",
-    }.get(proximity["state"], "Sconosciuto"), True
+        "MID": _("Intermedio"),
+        "FAR": _("Lontano"),
+    }.get(proximity["state"], _("Sconosciuto")), True
 
 
 def association_display(bonded, present):
@@ -1289,15 +1289,15 @@ class SettingsWindow(QMainWindow):
         card_layout.setSpacing(1)
 
         fields = (
-            ("RSSI raw", "rssi raw"),
-            ("RSSI filtered", "rssi filtered"),
-            ("Baseline", "baseline"),
-            ("Delta", "delta"),
-            ("Sample age", "sample age"),
-            ("Proximity state", "proximity state"),
-            ("Heartbeat age", "heartbeat age"),
-            ("GATT ready", "challenge-ready"),
-            ("Lock reason", "lock reason"),
+            (_("RSSI raw"), "rssi raw"),
+            (_("RSSI filtered"), "rssi filtered"),
+            (_("Baseline"), "baseline"),
+            (_("Delta"), "delta"),
+            (_("Sample age"), "sample age"),
+            (_("Proximity state"), "proximity state"),
+            (_("Heartbeat age"), "heartbeat age"),
+            (_("GATT ready"), "challenge-ready"),
+            (_("Lock reason"), "lock reason"),
         )
         for label, key in fields:
             row = QHBoxLayout()
