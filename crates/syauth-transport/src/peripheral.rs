@@ -47,6 +47,7 @@ use bluer::{
     },
 };
 use futures::StreamExt;
+use syauth_core::pair_transaction::{Message, Operation};
 use thiserror::Error;
 use tokio::{
     io::AsyncReadExt,
@@ -60,7 +61,7 @@ use crate::{
     },
     bluez_advertise::{ADVERTISE_DISCOVERABLE, ADVERTISE_LOCAL_NAME},
     error::TransportError,
-    pair_engine::{PairCommitRequest, PairServiceState, build_pair_service, host_name_payload, run_pair_session},
+    pair_engine::{PairCommitPhase, PairCommitRequest, PairServiceState, build_pair_service, host_name_payload, run_pair_session},
     pairing::PairingBroker,
 };
 
@@ -70,6 +71,24 @@ use crate::{
 /// generous headroom.
 const RESPONSE_READ_BUF_BYTES: usize = 512;
 const PRESENCE_HEARTBEAT: &[u8] = b"SYAUTH-PRESENCE-v1";
+
+/// The peer id named by a day-2 `Revoke` frame, or `None` for everything else
+/// the writable characteristic of a bonded session carries (presence heartbeat,
+/// RSSI sample, challenge response).
+///
+/// Revocation has to be understood here, not only on the pair engine's
+/// v2-control channel: a bonded session is served by `build_and_register_peer`,
+/// whose GATT app exposes just the challenge/response pair, while the phone
+/// writes its revoke frame to the response characteristic
+/// (`PersistentGattClient.send`). Without this branch the frame lands in the
+/// challenge-response channel and the bond survives (BUG-20260924: `sent=true`
+/// on the phone, `bonds.toml` untouched on the computer).
+fn revoke_peer_id(bytes: &[u8]) -> Option<[u8; 16]> {
+    match Message::decode(bytes) {
+        Ok(message) if message.operation == Operation::Revoke => Some(message.transaction),
+        _ => None,
+    }
+}
 const RSSI_TELEMETRY_PREFIX: &[u8] = b"SYAUTH-RSSI-v1:";
 const RSSI_EWMA_ALPHA: f64 = 0.25;
 
@@ -899,6 +918,10 @@ impl PersistentPeripheral {
         let (response_tx, response_rx) = mpsc::channel::<Vec<u8>>(RESPONSE_BUFFER_DEPTH);
         let notifier_slot_for_task = notifier_slot.clone();
         let response_tx_for_task = response_tx.clone();
+        // Day-2 revocation reaches the daemon through the same commit channel
+        // the pair engine uses: a bonded session is served by this task, and its
+        // GATT app has no v2-control characteristic to carry a revoke frame.
+        let revoke_tx_for_task = self.pair_commit_tx.clone();
         let task = tokio::spawn(async move {
             let mut reader_opt: Option<CharacteristicReader> = None;
             let mut rssi_filtered: Option<f64> = None;
@@ -981,6 +1004,23 @@ impl PersistentPeripheral {
                                         target: "syauth_transport",
                                         "presence heartbeat received"
                                     );
+                                } else if let Some(peer_id) = revoke_peer_id(&bytes) {
+                                    // Not part of any challenge: the phone is
+                                    // telling us it dropped this bond, with the
+                                    // peer id in the transaction field (16 raw
+                                    // bytes = 32 hex).
+                                    let (reply, _answer) = tokio::sync::oneshot::channel();
+                                    let request = PairCommitRequest {
+                                        phase: PairCommitPhase::Revoke,
+                                        transaction: peer_id,
+                                        phone_pubkey: [0; PAIR_PUBKEY_LEN],
+                                        host_pubkey: [0; PAIR_PUBKEY_LEN],
+                                        peer: String::new(),
+                                        reply,
+                                    };
+                                    if let Err(err) = revoke_tx_for_task.try_send(request) {
+                                        tracing::warn!(target: "syauth_transport", error = %err, "day-2 revoke request dropped");
+                                    }
                                 } else if let Some(raw) = parse_rssi(&bytes) {
                                     let filtered = record_rssi(raw, rssi_filtered);
                                     rssi_filtered = Some(filtered);
@@ -1524,6 +1564,37 @@ const FAKE_RESPONSE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 mod tests {
     // Journey: specs/journeys/JOURNEY-S-003-peripheral-library-api.md
     use super::*;
+
+    /// Day-2 revocation must be understood on the channel a *bonded* session
+    /// actually exposes. `build_and_register_peer` serves only the
+    /// challenge/response pair, so the pair engine's v2-control branch never
+    /// sees the frame the phone writes to the response characteristic
+    /// (BUG-20260924: the frame arrived, fell into `response_tx`, and the bond
+    /// survived).
+    #[test]
+    fn a_revoke_frame_is_recognised_on_the_writable_peer_characteristic() {
+        let peer_id = [0x5au8; 16];
+        let frame = Message {
+            transaction: peer_id,
+            operation: Operation::Revoke,
+        }
+        .encode();
+
+        assert_eq!(revoke_peer_id(&frame), Some(peer_id));
+
+        // Everything else the writable characteristic carries keeps its own
+        // path: a challenge operation, the heartbeat, an RSSI sample, a
+        // truncated frame.
+        let capability = Message {
+            transaction: peer_id,
+            operation: Operation::Capability,
+        }
+        .encode();
+        assert_eq!(revoke_peer_id(&capability), None);
+        assert_eq!(revoke_peer_id(PRESENCE_HEARTBEAT), None);
+        assert_eq!(revoke_peer_id(b"SYAUTH-RSSI-v1:-70"), None);
+        assert_eq!(revoke_peer_id(&frame[..frame.len() - 1]), None);
+    }
 
     #[test]
     fn rssi_telemetry_parses_signed_values_and_uses_ewma() {
