@@ -1,0 +1,281 @@
+38	Resolve a sibling helper next to this script.
+
+    The package installs the GUI and its helpers side by side in
+    ``/usr/bin``; a source checkout keeps them side by side in
+    ``desktop/bin``. Resolving next to this file means a checkout runs
+    its own helpers (so edits take effect immediately) instead of
+    silently driving the packaged copy. Falls back to ``/usr/bin`` when
+    no sibling exists.
+    
+80	Syauth: ON
+83	Syauth: OFF
+90	Format an RFC3339 UTC timestamp in the system's local timezone.
+110	Powered
+123	Mai
+181	ABSENT
+201	Servizio non disponibile
+203	Disattivato
+208	Telefono assente
+210	NEAR
+210	Vicino
+211	Intermedio
+211	MID
+212	FAR
+212	Lontano
+213	Sconosciuto
+217	Return `(label, active)` for the "Associazione" row.
+
+    A bond record is not an association. When the phone dissociates — or simply
+    goes away — the desktop keeps the record but has nothing left to talk to,
+    so the row must not read green (observed 2026-09-24: the card said
+    "Associato" while the phone was dissociated and phone unlock was dead).
+    
+225	Non associato
+227	Telefono non connesso
+228	Associato
+232	Return `(label, active)` for the "Ultimo sblocco" row.
+
+    A past unlock proves nothing while no phone is associated: keep the
+    timestamp readable, but only colour the row green when the association is
+    actually live.
+    
+248	Telefono Android
+252	Nessun dispositivo associato
+252	Più telefoni associati
+269	color: #63c174;font-size: 16px;
+274	color: #8b929a;font-size: 16px;
+280	Return the patched DMS lock tree, or None when no tree carries the hook.
+
+    The fingerprint indicator used to be gated on a `pam_syauth.so` line inside
+    the lock PAM stack. That line is gone for good: a DeskUnlock module in a
+    stack that guards the login is how the operator ended up unable to get back
+    in with the correct password — twice (2026-09-23). The phone unlock is out
+    of band now: the lock screen calls `syauth unlock-request` on the operator's
+    gesture. Every marker the patch writes must be present, so a half-applied
+    adaptation (DMS moved an anchor) reads as broken instead of "Attivo".
+    
+292	Lock
+292	LockScreenContent.qml
+292	Modules
+293	Pam.qml
+302	requestPhoneUnlock
+303	syauthUnlockReady
+304	syauthUnlockProcess
+305	fprintSuppressedByPrimaryPam
+312	True when the patch recorded that the running DMS loaded `tree`.
+
+    DMS loads its extracted QML once and does not watch it, so a tree patched
+    after DMS started is inert: the lock screen keeps the stock icon and never
+    asks the phone. The patch writes `dms-lock-loaded` with the adapted tree
+    name(s) right after it restarts DMS, and that marker — not the on-disk
+    patch — is what says the running shell actually has the adaptation
+    (2026-09-24).
+    
+334	True when the daemon saw a recent presence heartbeat from the phone.
+344	Return `(ok, reason)` for the fingerprint/phone unlock row.
+
+    The GUI used to show "Attivo" whenever the tree was patched on disk, even
+    when DMS had loaded the unpatched copy, the runtime marker was missing, or
+    the daemon was down. Every failure now names itself so the row is honest.
+    
+351	DeskUnlock disattivato
+353	Nessun telefono
+356	Lock screen non adattato
+359	Sblocco telefono non armato
+361	Riavvia DMS
+364	Attivo
+389	color: #aeb4bc;
+417	Return QProcess parameters that put the child in its own session.
+
+    The pairing dialog launches a shell wrapper that in turn spawns the
+    real ``syauth pair`` process. Without a private session, killing the
+    wrapper leaves the real process orphaned. ``CreateNewSession`` makes
+    the wrapper a session/process-group leader so
+    :func:`terminate_process_tree` can signal the whole tree at once.
+
+    Returns ``None`` when the Qt build predates ``UnixProcessParameters``
+    (Qt < 6.6); callers then fall back to a plain ``start``.
+    
+428	UnixProcessParameters
+429	UnixProcessFlag
+430	CreateNewSession
+439	SIGKILL the process group led by ``pid``.
+
+    Pure ``os``; safe to call from a non-Qt worker thread. Never raises:
+    a group that already exited, or a signal the kernel refused, is a
+    no-op. Falls back to the bare pid when the process is not a group
+    leader.
+    
+460	Reap ``process`` and every descendant it spawned.
+
+    Reads the process-group id from ``process`` and delegates to
+    :func:`kill_process_group`. Main-thread only (touches QProcess).
+    
+478	Associa telefono — DeskUnlock
+496	DeskUnlock
+497	font-size: 18px; font-weight: 600;
+499	Preparazione di DeskUnlock…
+503	font-size: 28px; font-weight: 700; letter-spacing: 3px;
+507	Conferma
+508	Non corrisponde
+509	Annulla
+510	Fine
+548	Cerco telefoni DeskUnlock nelle vicinanze…
+550	
+Verifica il codice Bluetooth sul telefono.
+550	Telefono trovato: 
+550	Telefono trovato: {}
+Verifica il codice Bluetooth sul telefono.
+554	Controlla che il codice Bluetooth coincida sui due dispositivi.
+560	Controlla che questo numero coincida con quello mostrato sul telefono.
+566	In attesa della tua conferma…
+569	Telefono associato
+577	Associazione non completata.
+580	Chiudi
+598	Annullamento…
+614	Arm the event-loop-independent cancel fallback (idempotent).
+634	Worker-thread fallback: SIGKILL the pairing process group.
+
+        Touches no thread-unsafe Qt API; only emits a queued signal that
+        Qt delivers on the dialog's main thread.
+        
+648	Main-thread handler: close only this dialog, never the app.
+677	Associazione non completata. Puoi riprovare.
+701	SYAUTH_LOCALE_DIR
+710	Automatica (lingua di sistema)
+711	English
+712	Italiano
+718	Return the language to use.
+
+    `configured` is the operator's choice ("auto" or a supported code); `env`
+    is the process environment. An unsupported or empty answer falls back to
+    [DEFAULT_LANGUAGE] instead of to the desktop's locale, so a `de_DE` desktop
+    reads a coherent English GUI rather than whatever mixed catalog happens to
+    exist.
+    
+728	LANG
+728	LANGUAGE
+728	LC_ALL
+739	Bind the module-level `_` to `language`.
+
+    English is the source language, so it maps to the identity: no catalog
+    lookup and no failure mode when `/usr/share/locale` is empty.
+    
+762	XDG_CONFIG_HOME
+768	Return every persisted GUI setting as a dict.
+
+    Unknown keys are dropped so a hand-edited file cannot inject surprise.
+    
+784	Merge `updates` into gui.conf instead of rewriting the file.
+
+    The previous writer replaced the whole file, so saving the theme dropped
+    every other setting; with two keys that is a bug waiting to happen. Values
+    that are `None` are removed. Best-effort: a read-only config dir must not
+    crash the GUI.
+    
+806	Return the persisted theme, defaulting to dark.
+812	Persist the theme without disturbing the other settings.
+817	Return the persisted language choice, defaulting to auto.
+822	Persist the language choice.
+827	Apply `theme` to the whole application (palette + hint labels).
+828	Fusion
+848	QLabel[role="hint"] { color: 
+848	QLabel[role="hint"] { color: {}; }
+937	font-size: 11px;font-weight: 600;color: #aeb4bc;
+949	The label always starts with "Tema" and names the current theme.
+950	Tema: chiaro
+950	Tema: scuro
+953	Switch the app theme immediately and remember the choice.
+960	Remember the language choice.
+
+        Unlike the theme this cannot be applied live: every label in this window
+        was built with the translation that was installed at startup, so the new
+        language lands on the next launch. Saying so beats an entry that looks
+        like it did nothing.
+        
+972	Lingua salvata: riavvia DeskUnlock per applicarla.
+998	Autenticazione sicura con il telefono
+1024	Caricamento…
+1034	Autenticazione e controllo di prossimità
+1058	DISPOSITIVO ASSOCIATO
+1120	Dissocia
+1134	PROSSIMITÀ
+1145	Proximity Lock
+1152	Blocca il PC quando il telefono si allontana
+1170	Stato
+1179	Sensibilità
+1184	Bilanciato
+1185	Ampio
+1194	Privacy: RSSI, baseline e stato restano locali; nessuna telemetria viene inviata.
+1202	Diagnostica avanzata
+1212	INATTIVITÀ
+1222	Blocco per inattività
+1227	Blocca il PC dopo un periodo senza attività
+1239	Blocca dopo
+1243	 minuti
+1280	DIAGNOSTICA AVANZATA
+1288	RSSI raw
+1288	rssi raw
+1289	RSSI filtered
+1289	rssi filtered
+1290	Baseline
+1291	Delta
+1292	Sample age
+1292	sample age
+1293	Proximity state
+1293	proximity state
+1294	Heartbeat age
+1294	heartbeat age
+1295	GATT ready
+1296	Lock reason
+1296	lock reason
+1321	UTILIZZATO PER
+1332	✓  Login e sblocco della sessione
+1333	✓  Conferma biometrica sul telefono
+1334	✓  Blocco automatico per allontanamento
+1335	✓  Password Linux disponibile come fallback
+1346	STATO SISTEMA
+1357	Bluetooth
+1361	Associazione
+1365	Ultimo sblocco
+1376	Sblocco con impronta
+1425	color: #63c174;
+1430	color: #e06c75;
+1434	●  DeskUnlock attivo
+1442	Disattiva
+1447	○  DeskUnlock disattivato
+1455	Attiva
+1460	●  Stato degradato
+1464	color: #d5a14f;
+1468	Ripristina
+1484	DeskUnlock non ha un telefono configurato
+1491	Associa telefono
+1500	Associazione presente · Problema DeskUnlock
+1507	Controlla
+1520	Associato · Connesso
+1528	Associato · Non connesso
+1539	Cambia telefono
+1548	Disponibile
+1550	Non disponibile
+1624	Operazione completata.
+1630	Operazione non riuscita.
+1648	Controllo DeskUnlock
+1654	Dissocia telefono
+1656	Dissociare il telefono da DeskUnlock?
+
+Non potrà più autenticare o sbloccare questo computer.
+La password Linux resterà disponibile.
+
+Il normale pairing Bluetooth non verrà eliminato.
+1684	Errore
+1685	Dissociazione non riuscita.
+
+
+1694	Errore sconosciuto.
+1698	Dissociazione non riuscita
+1705	Telefono dissociato
+1707	Il telefono è stato dissociato da DeskUnlock.
+
+Puoi associarne un altro con "Associa telefono".
+1722	Attendere…
+1758	DeskUnlock Settings
