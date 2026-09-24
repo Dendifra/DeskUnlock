@@ -113,8 +113,14 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # `android-actions/setup-android` defaults to a `packages` list that still
+      # names `tools`, which the modern SDK no longer ships: the action aborts
+      # with "Failed to find package 'tools'" before the APK is ever built.
+      # Name the packages explicitly (2026-09-24).
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-34 build-tools;34.0.0"
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
