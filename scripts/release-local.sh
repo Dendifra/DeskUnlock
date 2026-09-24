@@ -71,10 +71,32 @@ tar --zstd -tf "$PKG" | grep -q 'locale/.*deskunlock\.mo' \
     || die "package carries no locale catalogs: the GUI would not be bilingual"
 
 # --- 5. APK, signed by the operator -----------------------------------------
+# The Rust libraries must be rebuilt BEFORE gradle, and this is the hole that
+# let a leak reach the published APK: gradle consumes the prebuilt AAR from
+# crates/syauth-mobile/target/ and reports "up-to-date" if it exists, so a
+# stale AAR silently ships old binaries. Rebuilding it here is what makes the
+# --remap-path-prefix in scripts/build_aar.sh take effect at all.
+step "rebuilding the Rust libraries (the .aar gradle consumes)"
+NDK_HOME="${NDK_HOME:-$(ls -d /opt/android-sdk/ndk/* 2>/dev/null | sort -V | tail -1)}"
+[[ -n "$NDK_HOME" && -d "$NDK_HOME" ]] || die "no Android NDK found; set NDK_HOME"
+export NDK_HOME
+make android-aar
+
 step "building the APK (unsigned)"
 ( cd syauth-android && JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk}" ./gradlew :app:assembleRelease )
 APK_RAW="syauth-android/app/build/outputs/apk/release/app-release-unsigned.apk"
 [[ -f "$APK_RAW" ]] || die "no APK produced"
+
+# Prove the compiled libraries do not carry the builder's home directory. The
+# signed APK is what reaches strangers, and `strings` reads it in one command;
+# checking here is the difference between knowing and assuming.
+step "checking the shipped libraries carry no build paths"
+LEAK_DIR="$(mktemp -d)"
+unzip -q -o "$APK_RAW" 'lib/*/libsyauth_mobile.so' -d "$LEAK_DIR"
+LEAKS="$(find "$LEAK_DIR" -name '*.so' -exec strings {} + | grep -c '/home/')"
+rm -rf "$LEAK_DIR"
+[[ "$LEAKS" == "0" ]] || die "the APK embeds $LEAKS build paths from this machine; rebuild the .aar (NDK_HOME) before shipping"
+step "libraries clean"
 
 step "signing the APK — the keystore password prompt follows"
 mkdir -p "$OUT"
