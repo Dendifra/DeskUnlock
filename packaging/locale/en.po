@@ -1,0 +1,239 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: en\n"
+
+msgid "Servizio non disponibile"
+msgstr "Service unavailable"
+
+msgid "Disattivato"
+msgstr "Off"
+
+msgid "Telefono assente"
+msgstr "Phone not present"
+
+msgid "Vicino"
+msgstr "Near"
+
+msgid "Intermedio"
+msgstr "Medium"
+
+msgid "Lontano"
+msgstr "Far"
+
+msgid "Sconosciuto"
+msgstr "Unknown"
+
+msgid "Non associato"
+msgstr "Not paired"
+
+msgid "Telefono non connesso"
+msgstr "Phone not connected"
+
+msgid "DeskUnlock disattivato"
+msgstr "DeskUnlock off"
+
+msgid "Nessun telefono"
+msgstr "No phone"
+
+msgid "Lock screen non adattato"
+msgstr "Lock screen not adapted"
+
+msgid "Sblocco telefono non armato"
+msgstr "Phone unlock not armed"
+
+msgid "Riavvia DMS"
+msgstr "Restart DMS"
+
+msgid "Associa telefono — DeskUnlock"
+msgstr "Pair phone — DeskUnlock"
+
+msgid "DeskUnlock"
+msgstr "DeskUnlock"
+
+msgid "Preparazione di DeskUnlock…"
+msgstr "Preparing DeskUnlock…"
+
+msgid "Conferma"
+msgstr "Confirm"
+
+msgid "Non corrisponde"
+msgstr "Does not match"
+
+msgid "Annulla"
+msgstr "Cancel"
+
+msgid "Fine"
+msgstr "Done"
+
+msgid "Cerco telefoni DeskUnlock nelle vicinanze…"
+msgstr "Searching for nearby DeskUnlock phones…"
+
+msgid "Controlla che il codice Bluetooth coincida sui due dispositivi."
+msgstr "Check that the Bluetooth code matches on both devices."
+
+msgid "Controlla che questo numero coincida con quello mostrato sul telefono."
+msgstr "Check that this number matches the one shown on the phone."
+
+msgid "In attesa della tua conferma…"
+msgstr "Waiting for your confirmation…"
+
+msgid "Telefono associato"
+msgstr "Phone paired"
+
+msgid "Associazione non completata."
+msgstr "Pairing not completed."
+
+msgid "Chiudi"
+msgstr "Close"
+
+msgid "Annullamento…"
+msgstr "Cancelling…"
+
+msgid "Associazione non completata. Puoi riprovare."
+msgstr "Pairing not completed. You can try again."
+
+msgid "Autenticazione sicura con il telefono"
+msgstr "Secure authentication with your phone"
+
+msgid "Caricamento…"
+msgstr "Loading…"
+
+msgid "Autenticazione e controllo di prossimità"
+msgstr "Authentication and proximity checking"
+
+msgid "DISPOSITIVO ASSOCIATO"
+msgstr "PAIRED DEVICE"
+
+msgid "Dissocia"
+msgstr "Unpair"
+
+msgid "PROSSIMITÀ"
+msgstr "PROXIMITY"
+
+msgid "Proximity Lock"
+msgstr "Proximity Lock"
+
+msgid "Blocca il PC quando il telefono si allontana"
+msgstr "Lock the PC when the phone walks away"
+
+msgid "Attivo"
+msgstr "Active"
+
+msgid "Stato"
+msgstr "State"
+
+msgid "Sensibilità"
+msgstr "Sensitivity"
+
+msgid "Bilanciato"
+msgstr "Balanced"
+
+msgid "Ampio"
+msgstr "Wide"
+
+msgid "Privacy: RSSI, baseline e stato restano locali; nessuna telemetria viene inviata."
+msgstr "Privacy: RSSI, baseline and state stay local; no telemetry is sent."
+
+msgid "Diagnostica avanzata"
+msgstr "Advanced diagnostics"
+
+msgid "INATTIVITÀ"
+msgstr "IDLE"
+
+msgid "Blocco per inattività"
+msgstr "Idle lock"
+
+msgid "Blocca il PC dopo un periodo senza attività"
+msgstr "Lock the PC after a period without activity"
+
+msgid "Blocca dopo"
+msgstr "Lock after"
+
+msgid "DIAGNOSTICA AVANZATA"
+msgstr "ADVANCED DIAGNOSTICS"
+
+msgid "RSSI raw"
+msgstr "RSSI raw"
+
+msgid "RSSI filtered"
+msgstr "RSSI filtered"
+
+msgid "Baseline"
+msgstr "Baseline"
+
+msgid "Delta"
+msgstr "Delta"
+
+msgid "Sample age"
+msgstr "Sample age"
+
+msgid "Proximity state"
+msgstr "Proximity state"
+
+msgid "Heartbeat age"
+msgstr "Heartbeat age"
+
+msgid "GATT ready"
+msgstr "GATT ready"
+
+msgid "Lock reason"
+msgstr "Lock reason"
+
+msgid "UTILIZZATO PER"
+msgstr "USED FOR"
+
+msgid "STATO SISTEMA"
+msgstr "SYSTEM STATUS"
+
+msgid "●  DeskUnlock attivo"
+msgstr "●  DeskUnlock on"
+
+msgid "Disattiva"
+msgstr "Turn off"
+
+msgid "○  DeskUnlock disattivato"
+msgstr "○  DeskUnlock off"
+
+msgid "Attiva"
+msgstr "Turn on"
+
+msgid "●  Stato degradato"
+msgstr "●  Degraded"
+
+msgid "Ripristina"
+msgstr "Restore"
+
+msgid "DeskUnlock non ha un telefono configurato"
+msgstr "DeskUnlock has no phone configured"
+
+msgid "Associa telefono"
+msgstr "Pair phone"
+
+msgid "Associazione presente · Problema DeskUnlock"
+msgstr "Paired · DeskUnlock problem"
+
+msgid "Controlla"
+msgstr "Check"
+
+msgid "Associato"
+msgstr "Paired"
+
+msgid "Associato · Connesso"
+msgstr "Paired · Connected"
+
+msgid "Associato · Non connesso"
+msgstr "Paired · Not connected"
+
+msgid "Cambia telefono"
+msgstr "Change phone"
+
+msgid "Telefono dissociato"
+msgstr "Phone unpaired"
+
+msgid "Il telefono è stato dissociato da DeskUnlock.\n\nPuoi associarne un altro con \"Associa telefono\"."
+msgstr "The phone was unpaired from DeskUnlock.\n\nYou can pair another one with \"Pair phone\"."
+
+msgid "Attendere…"
+msgstr "Please wait…"
+

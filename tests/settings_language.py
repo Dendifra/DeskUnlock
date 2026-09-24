@@ -83,17 +83,33 @@ class ConfigMergeTests(unittest.TestCase):
 
 
 class TranslationTests(unittest.TestCase):
-    def test_english_needs_no_catalog(self):
-        """The source language maps to the identity, so a machine with no
-        /usr/share/locale still reads a complete English GUI."""
-        settings.install_translations("en")
-        self.assertEqual("Pair a computer", settings._("Pair a computer"))
+    def test_every_message_has_an_english_translation(self):
+        """A missing translation must fail the suite, never reach the screen.
 
-    def test_italian_without_a_catalog_falls_back_to_the_source(self):
+        The source is Italian, so English exists only because the catalog says
+        so: one empty msgstr is one Italian line in an English GUI.
+        """
+        po = (Path(__file__).parents[1] / "packaging/locale/en.po").read_text(encoding="utf-8")
+        blocks = [b for b in po.split("\n\n") if "msgid " in b]
+        untranslated = [b for b in blocks if 'msgstr ""' in b and 'msgid ""\nmsgstr ""' not in b]
+        self.assertEqual([], untranslated, "untranslated entries in en.po")
+
+    def test_the_italian_catalog_covers_the_already_english_labels(self):
+        """Nine labels are English in the source; Italian needs them in a catalog."""
+        po = (Path(__file__).parents[1] / "packaging/locale/it.po").read_text(encoding="utf-8")
+        for label in ("RSSI raw", "Lock reason", "Sample age"):
+            self.assertIn(f'msgid "{label}"', po)
+
+    def test_a_missing_catalog_falls_back_to_the_source(self):
         with patch.object(settings, "LOCALE_DIR", Path("/nonexistent/locale")):
             settings.install_translations("it")
             self.assertEqual("Pair a computer", settings._("Pair a computer"))
-        settings.install_translations("en")
+
+    def test_english_is_loaded_from_its_catalog(self):
+        """English is not the identity: the source is Italian."""
+        with patch.object(settings, "LOCALE_DIR", Path(__file__).parents[1] / "packaging/locale"):
+            settings.install_translations("en")
+            self.assertEqual("Close", settings._("Chiudi"))
 
 
 if __name__ == "__main__":

@@ -725,13 +725,14 @@ def resolve_language(env):
 def install_translations(language):
     """Bind the module-level `_` to `language`.
 
-    English is the source language, so it maps to the identity: no catalog
-    lookup and no failure mode when `/usr/share/locale` is empty.
+    Every supported language needs a catalog, English included: the source is
+    Italian, so English exists only because the catalog says so. Treating English
+    as the identity meant an English desktop read Italian — the whole point of
+    the catalog is that it is the one thing that makes English real.
+
+    A missing catalog falls back to the source, never to an empty screen.
     """
     global _
-    if language == DEFAULT_LANGUAGE:
-        _ = lambda message: message
-        return
     try:
         translation = gettext.translation(
             TEXT_DOMAIN, localedir=str(LOCALE_DIR), languages=[language], fallback=True
@@ -1648,11 +1649,11 @@ class SettingsWindow(QMainWindow):
 
         QMessageBox.information(
             self,
-            "Telefono dissociato",
+            _("Telefono dissociato"),
             (
-                "Il telefono è stato dissociato da DeskUnlock.\n\n"
+                _("Il telefono è stato dissociato da DeskUnlock.\n\n"
                 "Puoi associarne un altro con "
-                "\"Associa telefono\"."
+                "\"Associa telefono\".")
             ),
         )
         self.refresh()

@@ -1,0 +1,239 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: it\n"
+
+msgid "Servizio non disponibile"
+msgstr ""
+
+msgid "Disattivato"
+msgstr ""
+
+msgid "Telefono assente"
+msgstr ""
+
+msgid "Vicino"
+msgstr ""
+
+msgid "Intermedio"
+msgstr ""
+
+msgid "Lontano"
+msgstr ""
+
+msgid "Sconosciuto"
+msgstr ""
+
+msgid "Non associato"
+msgstr ""
+
+msgid "Telefono non connesso"
+msgstr ""
+
+msgid "DeskUnlock disattivato"
+msgstr ""
+
+msgid "Nessun telefono"
+msgstr ""
+
+msgid "Lock screen non adattato"
+msgstr ""
+
+msgid "Sblocco telefono non armato"
+msgstr ""
+
+msgid "Riavvia DMS"
+msgstr ""
+
+msgid "Associa telefono — DeskUnlock"
+msgstr ""
+
+msgid "DeskUnlock"
+msgstr ""
+
+msgid "Preparazione di DeskUnlock…"
+msgstr ""
+
+msgid "Conferma"
+msgstr ""
+
+msgid "Non corrisponde"
+msgstr ""
+
+msgid "Annulla"
+msgstr ""
+
+msgid "Fine"
+msgstr ""
+
+msgid "Cerco telefoni DeskUnlock nelle vicinanze…"
+msgstr ""
+
+msgid "Controlla che il codice Bluetooth coincida sui due dispositivi."
+msgstr ""
+
+msgid "Controlla che questo numero coincida con quello mostrato sul telefono."
+msgstr ""
+
+msgid "In attesa della tua conferma…"
+msgstr ""
+
+msgid "Telefono associato"
+msgstr ""
+
+msgid "Associazione non completata."
+msgstr ""
+
+msgid "Chiudi"
+msgstr ""
+
+msgid "Annullamento…"
+msgstr ""
+
+msgid "Associazione non completata. Puoi riprovare."
+msgstr ""
+
+msgid "Autenticazione sicura con il telefono"
+msgstr ""
+
+msgid "Caricamento…"
+msgstr ""
+
+msgid "Autenticazione e controllo di prossimità"
+msgstr ""
+
+msgid "DISPOSITIVO ASSOCIATO"
+msgstr ""
+
+msgid "Dissocia"
+msgstr ""
+
+msgid "PROSSIMITÀ"
+msgstr ""
+
+msgid "Proximity Lock"
+msgstr ""
+
+msgid "Blocca il PC quando il telefono si allontana"
+msgstr ""
+
+msgid "Attivo"
+msgstr ""
+
+msgid "Stato"
+msgstr ""
+
+msgid "Sensibilità"
+msgstr ""
+
+msgid "Bilanciato"
+msgstr ""
+
+msgid "Ampio"
+msgstr ""
+
+msgid "Privacy: RSSI, baseline e stato restano locali; nessuna telemetria viene inviata."
+msgstr ""
+
+msgid "Diagnostica avanzata"
+msgstr ""
+
+msgid "INATTIVITÀ"
+msgstr ""
+
+msgid "Blocco per inattività"
+msgstr ""
+
+msgid "Blocca il PC dopo un periodo senza attività"
+msgstr ""
+
+msgid "Blocca dopo"
+msgstr ""
+
+msgid "DIAGNOSTICA AVANZATA"
+msgstr ""
+
+msgid "RSSI raw"
+msgstr "RSSI grezzo"
+
+msgid "RSSI filtered"
+msgstr "RSSI filtrato"
+
+msgid "Baseline"
+msgstr "Linea di base"
+
+msgid "Delta"
+msgstr "Delta"
+
+msgid "Sample age"
+msgstr "Età del campione"
+
+msgid "Proximity state"
+msgstr "Stato di prossimità"
+
+msgid "Heartbeat age"
+msgstr "Età dell'heartbeat"
+
+msgid "GATT ready"
+msgstr "GATT pronto"
+
+msgid "Lock reason"
+msgstr "Motivo del blocco"
+
+msgid "UTILIZZATO PER"
+msgstr ""
+
+msgid "STATO SISTEMA"
+msgstr ""
+
+msgid "●  DeskUnlock attivo"
+msgstr ""
+
+msgid "Disattiva"
+msgstr ""
+
+msgid "○  DeskUnlock disattivato"
+msgstr ""
+
+msgid "Attiva"
+msgstr ""
+
+msgid "●  Stato degradato"
+msgstr ""
+
+msgid "Ripristina"
+msgstr ""
+
+msgid "DeskUnlock non ha un telefono configurato"
+msgstr ""
+
+msgid "Associa telefono"
+msgstr ""
+
+msgid "Associazione presente · Problema DeskUnlock"
+msgstr ""
+
+msgid "Controlla"
+msgstr ""
+
+msgid "Associato"
+msgstr ""
+
+msgid "Associato · Connesso"
+msgstr ""
+
+msgid "Associato · Non connesso"
+msgstr ""
+
+msgid "Cambia telefono"
+msgstr ""
+
+msgid "Telefono dissociato"
+msgstr ""
+
+msgid "Il telefono è stato dissociato da DeskUnlock.\n\nPuoi associarne un altro con \"Associa telefono\"."
+msgstr ""
+
+msgid "Attendere…"
+msgstr ""
+
