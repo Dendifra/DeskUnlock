@@ -52,7 +52,16 @@ published. Verify the published SHA-256 checksum before installation.
 
 ## Source details
 
-The protocol-level threat material is in
-[`specs/threat/THREAT-2026-05-15.md`](../specs/threat/THREAT-2026-05-15.md).
+The protocol-level threat material lives in `specs/threat/`:
+[`THREAT-20260925.md`](../specs/threat/THREAT-20260925.md) is the `/threat` review
+for the v0.1.0-beta.2 cycle, and
+[`THREAT-2026-05-15.md`](../specs/threat/THREAT-2026-05-15.md) is the earlier one
+it re-runs. The current review lists the ten canonical abuse paths of a
+proximity-unlock system with a verdict and evidence for each, and six open
+findings with the test each one needs.
+
+Neither is an audit. DeskUnlock has not received an independent professional
+security audit, and this document does not claim one.
+
 The main implementation areas are `crates/syauth-core`, `crates/syauth-pam`,
 and `crates/syauth-cli`.
