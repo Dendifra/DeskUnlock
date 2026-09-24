@@ -15,6 +15,7 @@ CONFIG_PATH="$CONFIG_DIR/proximity.conf"
 CHECK_INTERVAL_SECONDS=1
 RSSI_STALE_AFTER_MS=5000
 HEARTBEAT_STALE_AFTER_MS=60000
+LEAVE_NEAR_LOCK_DELAY_MS=5000
 BASELINE_BOOTSTRAP_SAMPLES=3
 BASELINE_BOOTSTRAP_MAX_RANGE_DB=8
 BASELINE_ALPHA_PERCENT=5
@@ -63,6 +64,8 @@ RSSI_SAMPLE_MS=0
 RSSI_AGE_MS=0
 HEARTBEAT_AGE_MS=0
 STATE_CHANGED=0
+LEFT_NEAR_SINCE_MS=0
+NEAR_SEEN_SINCE_LOCK=1
 
 log() {
     echo "syauth-proximity: $*"
@@ -85,7 +88,7 @@ profile_value() {
         near:near_persistence) printf '%s\n' 3 ;;
         near:return_delta) printf '%s\n' -2 ;;
         balanced:far_delta) printf '%s\n' -7 ;;
-        balanced:near_delta) printf '%s\n' -4 ;;
+        balanced:near_delta) printf '%s\n' -2 ;;
         balanced:far_persistence) printf '%s\n' 8 ;;
         balanced:near_persistence) printf '%s\n' 4 ;;
         balanced:return_delta) printf '%s\n' -3 ;;
@@ -563,6 +566,7 @@ request_proximity_lock() {
         LOCK_REASON=PROXIMITY
         AUTO_AUTH_SENT=0
         FAST_RETURN_SAMPLE_COUNT=0
+        NEAR_SEEN_SINCE_LOCK=0
         RETURN_MODE="$RETURN_MODE_PROXIMITY"
         log "proximity lock requested state=$PROXIMITY_STATE"
     fi
@@ -585,6 +589,11 @@ maybe_auto_auth() {
 engine_initialize() {
     load_config
     load_runtime
+    # One-lock-per-departure bookkeeping lives in process memory only: a
+    # restart re-arms the watcher (the runtime file carries the state, not
+    # the countdown).
+    LEFT_NEAR_SINCE_MS=0
+    NEAR_SEEN_SINCE_LOCK=1
     if [[ "$PROXIMITY_STATE" == FAR && "$LOCK_ISSUED" == "$LOCK_NOT_ISSUED" ]]; then
         PROXIMITY_STATE=MID
         PENDING_STATE=""
@@ -651,14 +660,21 @@ engine_tick() {
             fi
         fi
         if (( SEEN_PRESENCE == 1 )); then
+            local departed=0
             if [[ "$PROXIMITY_STATE" != ABSENT ]]; then
                 PROXIMITY_STATE=ABSENT
                 PENDING_STATE=""
                 PENDING_SINCE_MS=0
                 STATE_CHANGED=1
+                departed=1
                 [[ "$LOCK_REASON" == PROXIMITY ]] && AUTO_AUTH_SENT=0
             fi
-            if (( locked == 0 )) && [[ -n "$sid" ]]; then
+            # One lock per departure: lock when the phone is *observed* going
+            # away, never again while it stays away. Re-locking on the level
+            # state undid the operator's unlock on the next tick (hardware run
+            # 2026-09-23: lock -> unlock -> lock 1 s later), a lock-screen loop
+            # that risks locking the operator out for good.
+            if (( locked == 0 )) && [[ -n "$sid" ]] && (( departed == 1 )); then
                 request_proximity_lock "$sid"
             fi
         else
@@ -675,9 +691,24 @@ engine_tick() {
     process_rssi "$now"
     fast_return_candidate
 
+    # Leaving NEAR arms a short countdown: the operator asked the lock to fire
+    # 5 s after the state leaves NEAR (2026-09-24), not only at FAR or after a
+    # full disconnect. The countdown resets on any NEAR candidate so a quick
+    # walk to the next room that comes straight back does not lock.
+    if [[ "$PROXIMITY_STATE" == NEAR ]]; then
+        NEAR_SEEN_SINCE_LOCK=1
+        LEFT_NEAR_SINCE_MS=0
+    elif [[ "$PENDING_STATE" == NEAR ]]; then
+        LEFT_NEAR_SINCE_MS=0
+    elif (( LEFT_NEAR_SINCE_MS == 0 )); then
+        LEFT_NEAR_SINCE_MS="$now"
+    fi
+
     if (( locked == 0 )); then
-        if [[ "$PROXIMITY_STATE" == FAR && "$STATE_CHANGED" == 1 && "$RETURN_MODE" != "$RETURN_MODE_SETTLING" && -n "$sid" ]]; then
-            request_proximity_lock "$sid"
+        if (( NEAR_SEEN_SINCE_LOCK == 1 )) && [[ "$RETURN_MODE" != "$RETURN_MODE_SETTLING" && -n "$sid" ]]; then
+            if [[ "$PROXIMITY_STATE" == MID || "$PROXIMITY_STATE" == FAR ]] && (( LEFT_NEAR_SINCE_MS > 0 )) && (( now - LEFT_NEAR_SINCE_MS >= LEAVE_NEAR_LOCK_DELAY_MS )); then
+                request_proximity_lock "$sid"
+            fi
         fi
     else
         if [[ "$LOCK_REASON" != PROXIMITY ]]; then
@@ -741,9 +772,16 @@ set_profile_cmd() {
 
 set_enabled_cmd() {
     local enabled="$1"
+    [[ "$enabled" == 0 || "$enabled" == 1 ]] || return 2
     load_config
     ENABLED="$enabled"
     save_config
+    [[ "${SYAUTH_PROXIMITY_TEST:-0}" == 1 ]] && return 0
+    if (( enabled == 1 )); then
+        systemctl --user start syauth-proximity.service
+    else
+        systemctl --user stop syauth-proximity.service
+    fi
 }
 
 reset_cmd() {

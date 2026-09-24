@@ -67,4 +67,55 @@ class SyauthWatchdogWorkerTest {
             started!!.component?.className,
         )
     }
+
+    /**
+     * Day-2 guard (observed 2026-09-23): with the service already running the
+     * worker used to do nothing, so a bond set that changed behind the
+     * service's back (a dissociation, a re-pair) left a stale GATT client
+     * alive — the app UI said "No computer paired" while the service kept
+     * heartbeating for the old bond, the desktop stayed `Connected: no` and
+     * presence samples dried up. Every tick must now ask the service to
+     * reconcile, and the request must carry the reload action.
+     */
+    @Test
+    fun asks_the_running_service_to_reconcile_its_clients() {
+        SyauthCompanionService.isRunning.set(true)
+        BondStore(app.filesDir).save(fixtureBond())
+
+        val worker = TestListenableWorkerBuilder
+            .from(app, SyauthWatchdogWorker::class.java)
+            .build()
+        val result = worker.startWork().get()
+
+        assertEquals(ListenableWorker.Result.success(), result)
+        val request = shadowOf(app).nextStartedService
+        assertNotNull("expected a reload request against SyauthCompanionService", request)
+        assertEquals(SyauthCompanionService::class.java.name, request!!.component?.className)
+        assertEquals(
+            "the request must carry the reload action",
+            SyauthCompanionService.ACTION_RELOAD_BONDS,
+            request.action,
+        )
+    }
+
+    /**
+     * With no service running there is nothing to reconcile — the resurrect
+     * path owns that case and must not be pre-empted by a reload request.
+     */
+    @Test
+    fun does_not_reload_when_the_service_is_not_running() {
+        SyauthCompanionService.isRunning.set(false)
+        BondStore(app.filesDir).save(fixtureBond())
+
+        TestListenableWorkerBuilder
+            .from(app, SyauthWatchdogWorker::class.java)
+            .build()
+            .startWork()
+            .get()
+
+        val resurrected = shadowOf(app).nextStartedService
+        assertNotNull("resurrection must still happen", resurrected)
+        assertEquals("resurrection must not carry the reload action", null, resurrected!!.action)
+        assertEquals("no further start request when nothing is running", null, shadowOf(app).nextStartedService)
+    }
 }

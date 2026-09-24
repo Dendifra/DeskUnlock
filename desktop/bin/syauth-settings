@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 
+import json
+import os
 import re
+import signal
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QProcess
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtCore import Qt, QTimer, QProcess, Signal
+from PySide6.QtGui import QColor, QFont, QIcon, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -27,11 +31,26 @@ from PySide6.QtWidgets import (
 
 
 HOME = Path.home()
-CONTROL = Path("/usr/bin/syauth-control")
-DEVICE_CONTROL = Path("/usr/bin/syauth-device")
-PROXIMITY_CONTROL = Path("/usr/bin/syauth-proximity")
-IDLE_CONTROL = Path("/usr/bin/syauth-idle-lock")
-PRESENCE_MARKER = Path("/run/syauth/presence.last")
+
+
+def helper_script(name):
+    """Resolve a sibling helper next to this script.
+
+    The package installs the GUI and its helpers side by side in
+    ``/usr/bin``; a source checkout keeps them side by side in
+    ``desktop/bin``. Resolving next to this file means a checkout runs
+    its own helpers (so edits take effect immediately) instead of
+    silently driving the packaged copy. Falls back to ``/usr/bin`` when
+    no sibling exists.
+    """
+    sibling = Path(__file__).resolve().parent / name
+    return sibling if sibling.is_file() else Path("/usr/bin") / name
+
+
+CONTROL = helper_script("syauth-control")
+DEVICE_CONTROL = helper_script("syauth-device")
+PROXIMITY_CONTROL = helper_script("syauth-proximity")
+IDLE_CONTROL = helper_script("syauth-idle-lock")
 DESKUNLOCK_LOGO = Path("/usr/share/icons/hicolor/256x256/apps/deskunlock.png")
 
 
@@ -85,7 +104,6 @@ def get_syauth_state():
     status = run_command(["syauth", "status"])
     bonds = run_command(["syauth", "list"])
 
-    daemon_up = "daemon=up" in status
     bluetooth_ready = (
         "adapter-state:" in status
         and "Powered" in status
@@ -114,7 +132,6 @@ def get_syauth_state():
             last_unlock = format_unlock_timestamp(last_unlock)
 
     return {
-        "daemon": daemon_up,
         "bluetooth": bluetooth_ready,
         "bonded": bonded,
         "revoked": revoked,
@@ -178,43 +195,40 @@ def get_proximity_state():
     }
 
 
+def proximity_display_state(proximity):
+    if not proximity["available"]:
+        return "Servizio non disponibile", False
+    if not proximity["enabled"]:
+        return "Disattivato", False
+    if proximity["state"] == "ABSENT":
+        # Watcher armed but the phone is not connected: nothing can lock or
+        # unlock right now, so do not report "Attivo" (observed 2026-09-24:
+        # the row said Attivo while the phone was disconnected).
+        return "Telefono assente", False
+    return {
+        "NEAR": "Vicino",
+        "MID": "Intermedio",
+        "FAR": "Lontano",
+    }.get(proximity["state"], "Sconosciuto"), True
+
+
 def get_phone_info():
-    output = run_command(
-        ["bluetoothctl", "devices", "Bonded"]
-    )
-
-    for line in output.splitlines():
-        parts = line.split(maxsplit=2)
-
-        if len(parts) != 3:
-            continue
-
-        address = parts[1]
-        name = parts[2].strip()
-
-        if "pixel" not in name.lower():
-            continue
-
-        info = run_command(
-            ["bluetoothctl", "info", address]
-        )
-
-        connected = "Connected: yes" in info
-        paired = (
-            "Paired: yes" in info
-            and "Bonded: yes" in info
-        )
-
-        return {
-            "name": name,
-            "connected": connected,
-            "paired": paired,
-        }
+    # The application bond is authoritative. A Bluetooth name is neither
+    # unique nor a peer_id; never guess an address from a vendor/name match.
+    active = []
+    for line in run_command(["syauth", "list"]).splitlines():
+        fields = line.split("\t")
+        if len(fields) == 4 and fields[2] == "bonded":
+            active.append(fields[1].strip() or "Telefono Android")
 
     return {
-        "name": "Telefono associato",
-        "connected": False,
-        "paired": False,
+        "name": active[0] if len(active) == 1 else (
+            "Più telefoni associati" if active else "Nessun dispositivo associato"
+        ),
+        # Existing bond records do not contain a Bluetooth address. Until a
+        # peer-bound status is available, do not claim connected/disconnected.
+        "connected": None,
+        "paired": len(active) == 1,
     }
 
 
@@ -236,11 +250,106 @@ class StatusDot(QLabel):
             )
 
 
+def lock_screen_adapted(runtime=None):
+    """Return the patched DMS lock tree, or None when no tree carries the hook.
+
+    The fingerprint indicator used to be gated on a `pam_syauth.so` line inside
+    the lock PAM stack. That line is gone for good: a DeskUnlock module in a
+    stack that guards the login is how the operator ended up unable to get back
+    in with the correct password — twice (2026-09-23). The phone unlock is out
+    of band now: the lock screen calls `syauth unlock-request` on the operator's
+    gesture. Every marker the patch writes must be present, so a half-applied
+    adaptation (DMS moved an anchor) reads as broken instead of "Attivo".
+    """
+    runtime = runtime or Path(f"/run/user/{os.getuid()}/danklinux-shell")
+    for tree in runtime.glob("*/"):
+        content = tree / "Modules" / "Lock" / "LockScreenContent.qml"
+        pam_qml = tree / "Modules" / "Lock" / "Pam.qml"
+        if not (content.is_file() and pam_qml.is_file()):
+            continue
+        try:
+            content_text = content.read_text(encoding="utf-8", errors="replace")
+            pam_text = pam_qml.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if (
+            "requestPhoneUnlock" in content_text
+            and "syauthUnlockReady" in content_text
+            and "syauthUnlockProcess" in content_text
+            and "fprintSuppressedByPrimaryPam" in pam_text
+        ):
+            return tree
+    return None
+
+
+def dms_loaded_after(tree, marker=None):
+    """True when the patch recorded that the running DMS loaded `tree`.
+
+    DMS loads its extracted QML once and does not watch it, so a tree patched
+    after DMS started is inert: the lock screen keeps the stock icon and never
+    asks the phone. The patch writes `dms-lock-loaded` with the adapted tree
+    name(s) right after it restarts DMS, and that marker — not the on-disk
+    patch — is what says the running shell actually has the adaptation
+    (2026-09-24).
+    """
+    marker = marker or Path(f"/run/user/{os.getuid()}/syauth/dms-lock-loaded")
+    try:
+        loaded = marker.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return False
+    return tree.name in loaded.split(",")
+
+
+# A phone presence heartbeat older than this means the phone is not connected.
+PRESENCE_FRESH_SECONDS = 60
+
+
+def phone_present():
+    """True when the daemon saw a recent presence heartbeat from the phone."""
+    marker = Path(f"/run/user/{os.getuid()}/syauth/presence.last")
+    try:
+        age = time.time() - marker.stat().st_mtime
+    except OSError:
+        return False
+    return age < PRESENCE_FRESH_SECONDS
+
+
+def fingerprint_unlock_health(master, bonded, runtime=None, marker=None, loaded_marker=None, present=None):
+    """Return `(ok, reason)` for the fingerprint/phone unlock row.
+
+    The GUI used to show "Attivo" whenever the tree was patched on disk, even
+    when DMS had loaded the unpatched copy, the runtime marker was missing, or
+    the daemon was down. Every failure now names itself so the row is honest.
+    """
+    if master != "on":
+        return False, "DeskUnlock disattivato"
+    if bonded <= 0:
+        return False, "Nessun telefono"
+    tree = lock_screen_adapted(runtime)
+    if tree is None:
+        return False, "Lock screen non adattato"
+    marker = marker or Path(f"/run/user/{os.getuid()}/syauth/unlock-ready")
+    if not marker.is_file():
+        return False, "Sblocco telefono non armato"
+    if not dms_loaded_after(tree, loaded_marker):
+        return False, "Riavvia DMS"
+    if not (phone_present() if present is None else present):
+        return False, "Telefono non connesso"
+    return True, "Attivo"
+
+
 class StatusRow(QWidget):
-    def __init__(self, title):
+    def __init__(self, title, icon_name=None):
         super().__init__()
 
         self.dot = StatusDot()
+
+        self.icon = None
+        if icon_name is not None:
+            icon = QIcon.fromTheme(icon_name)
+            if not icon.isNull():
+                self.icon = QLabel()
+                self.icon.setPixmap(icon.pixmap(18, 18))
 
         self.title = QLabel(title)
 
@@ -258,6 +367,8 @@ class StatusRow(QWidget):
         layout.setSpacing(7)
 
         layout.addWidget(self.dot)
+        if self.icon is not None:
+            layout.addWidget(self.icon)
         layout.addWidget(self.title)
         layout.addStretch()
         layout.addWidget(self.value)
@@ -265,6 +376,340 @@ class StatusRow(QWidget):
     def set_status(self, good, text):
         self.dot.set_state(good)
         self.value.setText(text)
+
+
+# Grace period granted to the pairing backend to exit after a Cancel
+# command, before the independent watchdog SIGKILLs the session.
+CANCEL_GRACE_SECONDS = 1.5
+
+
+def new_session_process_parameters():
+    """Return QProcess parameters that put the child in its own session.
+
+    The pairing dialog launches a shell wrapper that in turn spawns the
+    real ``syauth pair`` process. Without a private session, killing the
+    wrapper leaves the real process orphaned. ``CreateNewSession`` makes
+    the wrapper a session/process-group leader so
+    :func:`terminate_process_tree` can signal the whole tree at once.
+
+    Returns ``None`` when the Qt build predates ``UnixProcessParameters``
+    (Qt < 6.6); callers then fall back to a plain ``start``.
+    """
+    parameters_type = getattr(QProcess, "UnixProcessParameters", None)
+    flag_type = getattr(QProcess, "UnixProcessFlag", None)
+    flag = getattr(flag_type, "CreateNewSession", None) if flag_type else None
+    if parameters_type is None or flag is None:
+        return None
+    parameters = parameters_type()
+    parameters.flags = flag
+    return parameters
+
+
+def kill_process_group(pid):
+    """SIGKILL the process group led by ``pid``.
+
+    Pure ``os``; safe to call from a non-Qt worker thread. Never raises:
+    a group that already exited, or a signal the kernel refused, is a
+    no-op. Falls back to the bare pid when the process is not a group
+    leader.
+    """
+    if pid <= 0:
+        return
+    try:
+        os.killpg(pid, signal.SIGKILL)
+        return
+    except OSError:
+        pass
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+def terminate_process_tree(process):
+    """Reap ``process`` and every descendant it spawned.
+
+    Reads the process-group id from ``process`` and delegates to
+    :func:`kill_process_group`. Main-thread only (touches QProcess).
+    """
+    if process is None or process.state() == QProcess.ProcessState.NotRunning:
+        return
+    kill_process_group(process.processId())
+
+
+class PairingDialog(QDialog):
+    # Emitted by the watchdog thread after it SIGKILLs the pairing
+    # process group. Qt delivers it to the main thread via a queued
+    # connection, so the dialog is only ever closed there.
+    cancel_watchdog_fired = Signal()
+
+    def __init__(self, parent, mode):
+        super().__init__(parent)
+        self.setWindowTitle("Associa telefono — DeskUnlock")
+        self.setMinimumWidth(440)
+        self.process = QProcess(self)
+        self.process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
+        process_parameters = new_session_process_parameters()
+        if process_parameters is not None:
+            self.process.setUnixProcessParameters(process_parameters)
+        self.process.readyReadStandardOutput.connect(self.read_events)
+        self.process.finished.connect(self.finished)
+        self.buffer = ""
+        self.bonded = False
+        self.cancel_requested = False
+        self.cancel_watchdog = None
+        self.cancel_watchdog_fired.connect(self._on_cancel_watchdog_fired)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 18)
+        layout.setSpacing(12)
+        title = QLabel("DeskUnlock")
+        title.setStyleSheet("font-size: 18px; font-weight: 600;")
+        layout.addWidget(title)
+        self.status = QLabel("Preparazione di DeskUnlock…")
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
+        self.code = QLabel("")
+        self.code.setStyleSheet("font-size: 28px; font-weight: 700; letter-spacing: 3px;")
+        self.code.hide()
+        layout.addWidget(self.code)
+        buttons = QHBoxLayout()
+        self.confirm = QPushButton("Conferma")
+        self.reject = QPushButton("Non corrisponde")
+        self.cancel = QPushButton("Annulla")
+        self.finish = QPushButton("Fine")
+        self.confirm.hide()
+        self.reject.hide()
+        self.finish.hide()
+        self.confirm.clicked.connect(lambda: self.send("confirm"))
+        self.reject.clicked.connect(lambda: self.send("reject"))
+        self.cancel.clicked.connect(self.cancel_pairing)
+        self.finish.clicked.connect(self.finish_pairing)
+        buttons.addWidget(self.confirm)
+        buttons.addWidget(self.reject)
+        buttons.addStretch()
+        buttons.addWidget(self.finish)
+        buttons.addWidget(self.cancel)
+        layout.addLayout(buttons)
+        self.process.start(str(DEVICE_CONTROL), [mode, "--gui"])
+
+    def closeEvent(self, event):
+        if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
+            self.cancel_pairing()
+            event.ignore()
+            return
+        event.accept()
+
+    def read_events(self):
+        self.buffer += bytes(self.process.readAllStandardOutput()).decode("utf-8", "replace")
+        while "\n" in self.buffer:
+            line, self.buffer = self.buffer.split("\n", 1)
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            self.apply_event(event)
+
+    def apply_event(self, event):
+        kind = event.get("event")
+        if kind == "preparing":
+            self.status.setText("Preparazione di DeskUnlock…")
+        elif kind == "scan_started":
+            self.status.setText("Cerco telefoni DeskUnlock nelle vicinanze…")
+        elif kind == "device_found":
+            self.status.setText(f"Telefono trovato: {event.get('name', 'Telefono Android')}\nVerifica il codice Bluetooth sul telefono.")
+        elif kind == "lesc_code":
+            self.code.setText(event.get("code", ""))
+            self.code.show()
+            self.status.setText("Controlla che il codice Bluetooth coincida sui due dispositivi.")
+            self.confirm.show()
+            self.reject.show()
+        elif kind == "oob_ready":
+            self.code.setText(event.get("code", ""))
+            self.code.show()
+            self.status.setText("Controlla che questo numero coincida con quello mostrato sul telefono.")
+            self.confirm.setEnabled(True)
+            self.reject.setEnabled(True)
+            self.confirm.show()
+            self.reject.show()
+        elif kind == "waiting_confirmation":
+            self.status.setText("In attesa della tua conferma…")
+        elif kind == "bonded":
+            self.bonded = True
+            self.status.setText("Telefono associato")
+            self.confirm.hide()
+            self.reject.hide()
+            self.confirm.setEnabled(False)
+            self.reject.setEnabled(False)
+            self.cancel.hide()
+            self.finish.show()
+        elif kind == "error":
+            self.status.setText(event.get("message", "Associazione non completata."))
+            self.confirm.hide()
+            self.reject.hide()
+            self.cancel.setText("Chiudi")
+
+    def send(self, command):
+        # NOTE: QProcess has no flush() in Qt 6. The previous code called
+        # it, which raised AttributeError here and aborted cancel_pairing()
+        # before the fallback was armed. QProcess buffers writes and Qt
+        # flushes them; no explicit flush is needed.
+        self.process.write((json.dumps({"command": command}) + "\n").encode())
+        self.confirm.setEnabled(False)
+        self.reject.setEnabled(False)
+
+    def cancel_pairing(self):
+        if self.process is None or self.process.state() == QProcess.ProcessState.NotRunning:
+            self.accept()
+            return
+        if self.cancel_requested:
+            return
+        self.cancel_requested = True
+        self.cancel.setText("Annullamento…")
+        self.cancel.setEnabled(False)
+        self.confirm.setEnabled(False)
+        self.reject.setEnabled(False)
+        # Arm the independent watchdog BEFORE touching the process: the
+        # fallback must not depend on the cancel write succeeding nor on
+        # the Qt event loop delivering a timer.
+        self._start_cancel_watchdog()
+        try:
+            self.send("cancel")
+        except Exception:
+            # A failed cancel write must never wedge the dialog: the
+            # watchdog is already armed and reaps the session anyway.
+            pass
+
+    def _start_cancel_watchdog(self):
+        """Arm the event-loop-independent cancel fallback (idempotent)."""
+        if self.cancel_watchdog is not None:
+            return
+        pid = self.process.processId() if self.process is not None else 0
+        watchdog = threading.Timer(
+            CANCEL_GRACE_SECONDS,
+            self._watchdog_kill,
+            args=(pid,),
+        )
+        watchdog.daemon = True
+        self.cancel_watchdog = watchdog
+        watchdog.start()
+
+    def _cancel_watchdog_timer(self):
+        watchdog = self.cancel_watchdog
+        self.cancel_watchdog = None
+        if watchdog is not None:
+            watchdog.cancel()
+
+    def _watchdog_kill(self, pid):
+        """Worker-thread fallback: SIGKILL the pairing process group.
+
+        Touches no thread-unsafe Qt API; only emits a queued signal that
+        Qt delivers on the dialog's main thread.
+        """
+        kill_process_group(pid)
+        try:
+            self.cancel_watchdog_fired.emit()
+        except RuntimeError:
+            # The dialog's C++ object is already gone; the kill above is
+            # the part that matters.
+            pass
+
+    def _on_cancel_watchdog_fired(self):
+        """Main-thread handler: close only this dialog, never the app."""
+        self.cleanup_process()
+        QDialog.reject(self)
+
+    def finish_pairing(self):
+        if self.process is None or self.process.state() == QProcess.ProcessState.NotRunning:
+            self.cleanup_process()
+        self.accept()
+
+    def cleanup_process(self):
+        self._cancel_watchdog_timer()
+        process = self.process
+        self.process = None
+        if process is not None:
+            terminate_process_tree(process)
+            if process.state() != QProcess.ProcessState.NotRunning:
+                process.waitForFinished(500)
+            process.deleteLater()
+
+    def finished(self, code, _status):
+        self.cleanup_process()
+        if self.bonded:
+            return
+        if self.cancel_requested:
+            # Cancel closes the pairing dialog and returns to the main
+            # window; it must never leave the dialog on "Annullamento…".
+            QDialog.reject(self)
+            return
+        if code != 0:
+            self.status.setText("Associazione non completata. Puoi riprovare.")
+            self.confirm.hide()
+            self.reject.hide()
+            self.cancel.setText("Chiudi")
+
+
+# ---------------------------------------------------------------------------
+# Grafica: tema chiaro/scuro
+#
+# L'app è disegnata su superfici scure. Segue il tema di sistema quando c'è,
+# ma un lancio fuori sessione (unità systemd, ssh) non ha il tema del desktop e
+# comparirebbe chiara: il tema è quindi esplicito e persistito, con un pulsante
+# per cambiarlo. Il default è scuro.
+# ---------------------------------------------------------------------------
+THEME_DARK = "dark"
+THEME_LIGHT = "light"
+GUI_THEME_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "syauth" / "gui.conf"
+
+HINT_COLOR = {"dark": "#aeb4bc", "light": "#4d545c"}
+
+
+def read_gui_theme():
+    """Return the persisted theme, defaulting to dark."""
+    try:
+        for line in GUI_THEME_CONFIG.read_text(encoding="utf-8").splitlines():
+            if line.startswith("theme="):
+                value = line.split("=", 1)[1].strip()
+                if value in (THEME_DARK, THEME_LIGHT):
+                    return value
+    except OSError:
+        pass
+    return THEME_DARK
+
+
+def write_gui_theme(theme):
+    """Persist the theme; best-effort (a read-only config dir must not crash)."""
+    try:
+        GUI_THEME_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        GUI_THEME_CONFIG.write_text(f"theme={theme}\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def apply_theme(app, theme):
+    """Apply `theme` to the whole application (palette + hint labels)."""
+    app.setStyle("Fusion")
+    if theme == THEME_LIGHT:
+        app.setPalette(app.style().standardPalette())
+    else:
+        palette = QPalette()
+        palette.setColor(QPalette.Window, QColor(46, 48, 52))
+        palette.setColor(QPalette.WindowText, QColor(228, 230, 234))
+        palette.setColor(QPalette.Base, QColor(38, 40, 43))
+        palette.setColor(QPalette.AlternateBase, QColor(46, 48, 52))
+        palette.setColor(QPalette.Text, QColor(228, 230, 234))
+        palette.setColor(QPalette.Button, QColor(52, 55, 60))
+        palette.setColor(QPalette.ButtonText, QColor(228, 230, 234))
+        palette.setColor(QPalette.Highlight, QColor(53, 132, 228))
+        palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
+        palette.setColor(QPalette.ToolTipBase, QColor(46, 48, 52))
+        palette.setColor(QPalette.ToolTipText, QColor(228, 230, 234))
+        palette.setColor(QPalette.PlaceholderText, QColor(150, 155, 162))
+        palette.setColor(QPalette.Disabled, QPalette.Text, QColor(150, 155, 162))
+        palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor(150, 155, 162))
+        app.setPalette(palette)
+    app.setStyleSheet(f'QLabel[role="hint"] {{ color: {HINT_COLOR[theme]}; }}')
 
 
 class SettingsWindow(QMainWindow):
@@ -303,6 +748,14 @@ class SettingsWindow(QMainWindow):
         main.addStretch()
 
         footer = QHBoxLayout()
+
+        self.theme = read_gui_theme()
+        self.theme_button = QPushButton()
+        self.theme_button.setMinimumWidth(150)
+        self.theme_button.clicked.connect(self.toggle_theme)
+        self.update_theme_button()
+        footer.addWidget(self.theme_button)
+
         footer.addStretch()
 
         close_button = QPushButton("Chiudi")
@@ -338,6 +791,17 @@ class SettingsWindow(QMainWindow):
         frame = QFrame()
         frame.setFrameShape(QFrame.Shape.StyledPanel)
         return frame
+
+    def update_theme_button(self):
+        """The label always starts with "Tema" and names the current theme."""
+        self.theme_button.setText("Tema: scuro" if self.theme == THEME_DARK else "Tema: chiaro")
+
+    def toggle_theme(self):
+        """Switch the app theme immediately and remember the choice."""
+        self.theme = THEME_LIGHT if self.theme == THEME_DARK else THEME_DARK
+        apply_theme(QApplication.instance(), self.theme)
+        write_gui_theme(self.theme)
+        self.update_theme_button()
 
     def build_header(self, main):
         header = QHBoxLayout()
@@ -430,7 +894,7 @@ class SettingsWindow(QMainWindow):
         card = self.card()
 
         layout = QHBoxLayout(card)
-        layout.setContentsMargins(18, 15, 18, 15)
+        layout.setContentsMargins(18, 16, 18, 16)
 
         icon_label = QLabel()
 
@@ -454,6 +918,7 @@ class SettingsWindow(QMainWindow):
         self.phone_name = QLabel(
             "Telefono associato"
         )
+        self.phone_name.setTextFormat(Qt.TextFormat.PlainText)
 
         font = self.phone_name.font()
         font.setBold(True)
@@ -502,12 +967,12 @@ class SettingsWindow(QMainWindow):
 
         card = self.card()
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 14, 18, 14)
-        layout.setSpacing(10)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(14)
 
         header = QHBoxLayout()
         text = QVBoxLayout()
-        text.setSpacing(2)
+        text.setSpacing(5)
 
         title = QLabel("Proximity Lock")
         font = title.font()
@@ -518,7 +983,7 @@ class SettingsWindow(QMainWindow):
         description = QLabel(
             "Blocca il PC quando il telefono si allontana"
         )
-        description.setStyleSheet("color: #aeb4bc;")
+        description.setProperty("role", "hint")
 
         text.addWidget(title)
         text.addWidget(description)
@@ -531,14 +996,16 @@ class SettingsWindow(QMainWindow):
         )
         header.addWidget(self.proximity_toggle)
         layout.addLayout(header)
+        layout.addSpacing(4)
 
         state_row = QHBoxLayout()
         state_row.addWidget(QLabel("Stato"))
         state_row.addStretch()
         self.proximity_state = QLabel("Caricamento…")
-        self.proximity_state.setStyleSheet("color: #aeb4bc;")
+        self.proximity_state.setProperty("role", "hint")
         state_row.addWidget(self.proximity_state)
         layout.addLayout(state_row)
+        layout.addSpacing(8)
 
         profile_row = QHBoxLayout()
         profile_row.addWidget(QLabel("Sensibilità"))
@@ -553,13 +1020,14 @@ class SettingsWindow(QMainWindow):
         )
         profile_row.addWidget(self.proximity_profile)
         layout.addLayout(profile_row)
+        layout.addSpacing(6)
 
         privacy = QLabel(
             "Privacy: RSSI, baseline e stato restano locali; "
             "nessuna telemetria viene inviata."
         )
         privacy.setWordWrap(True)
-        privacy.setStyleSheet("color: #aeb4bc;")
+        privacy.setProperty("role", "hint")
         layout.addWidget(privacy)
 
         self.proximity_diagnostics = QPushButton(
@@ -577,19 +1045,19 @@ class SettingsWindow(QMainWindow):
 
         card = self.card()
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 14, 18, 14)
-        layout.setSpacing(10)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(14)
 
         header = QHBoxLayout()
         text = QVBoxLayout()
-        text.setSpacing(2)
+        text.setSpacing(5)
         title = QLabel("Blocco per inattività")
         font = title.font()
         font.setBold(True)
         font.setPointSize(11)
         title.setFont(font)
         description = QLabel("Blocca il PC dopo un periodo senza attività")
-        description.setStyleSheet("color: #aeb4bc;")
+        description.setProperty("role", "hint")
         text.addWidget(title)
         text.addWidget(description)
         header.addLayout(text)
@@ -665,7 +1133,7 @@ class SettingsWindow(QMainWindow):
             row.addWidget(QLabel(label))
             row.addStretch()
             value = QLabel(values.get(key, "n/a"))
-            value.setStyleSheet("color: #aeb4bc;")
+            value.setProperty("role", "hint")
             row.addWidget(value)
             card_layout.addLayout(row)
 
@@ -717,10 +1185,6 @@ class SettingsWindow(QMainWindow):
         layout.setContentsMargins(18, 10, 18, 10)
         layout.setSpacing(1)
 
-        self.daemon_row = StatusRow(
-            "Servizio DeskUnlock"
-        )
-
         self.bluetooth_row = StatusRow(
             "Bluetooth"
         )
@@ -733,11 +1197,24 @@ class SettingsWindow(QMainWindow):
             "Ultimo sblocco"
         )
 
+        self.proximity_system_row = StatusRow(
+            "Proximity Lock"
+        )
+
+        # Phone-as-key biometric unlock: the fingerprint icon is the
+        # at-a-glance signal that the session can be unlocked from the phone
+        # (the phone performs the actual biometric check).
+        self.fingerprint_row = StatusRow(
+            "Sblocco con impronta",
+            icon_name="fingerprint",
+        )
+
         for row in (
-            self.daemon_row,
             self.bluetooth_row,
             self.bond_row,
             self.unlock_row,
+            self.proximity_system_row,
+            self.fingerprint_row,
         ):
             layout.addWidget(row)
 
@@ -769,23 +1246,19 @@ class SettingsWindow(QMainWindow):
             self.proximity_profile.setCurrentIndex(profile_index)
         self.proximity_profile.blockSignals(False)
 
-        state_labels = {
-            "NEAR": "Vicino",
-            "MID": "Intermedio",
-            "FAR": "Lontano",
-            "ABSENT": "Assente",
-        }
-        if proximity["available"]:
-            self.proximity_state.setText(
-                state_labels.get(proximity["state"], "Sconosciuto")
-            )
+        proximity_label, proximity_active = proximity_display_state(proximity)
+        self.proximity_state.setText(proximity_label)
+        self.proximity_system_row.set_status(
+            proximity_active,
+            "Attivo" if proximity_active else proximity_label,
+        )
+        if proximity["available"] and proximity["enabled"]:
             self.proximity_state.setStyleSheet(
                 "color: #63c174;"
                 if proximity["state"] == "NEAR"
                 else "color: #aeb4bc;"
             )
         else:
-            self.proximity_state.setText("Servizio non disponibile")
             self.proximity_state.setStyleSheet("color: #e06c75;")
 
         if master == "on":
@@ -870,9 +1343,13 @@ class SettingsWindow(QMainWindow):
             )
             self.device_action.show()
 
+        elif phone["connected"] is None:
+            self.phone_state.setText("Associato")
+            self.phone_state.setProperty("role", "hint")
+
         elif phone["connected"]:
             self.phone_state.setText(
-                "Associato a questo computer · Connesso"
+                "Associato · Connesso"
             )
             self.phone_state.setStyleSheet(
                 "color: #63c174;"
@@ -880,7 +1357,7 @@ class SettingsWindow(QMainWindow):
 
         else:
             self.phone_state.setText(
-                "Associato a questo computer · Non connesso"
+                "Associato · Non connesso"
             )
             self.phone_state.setStyleSheet(
                 "color: #aeb4bc;"
@@ -897,13 +1374,6 @@ class SettingsWindow(QMainWindow):
                     "action", "change"
                 )
                 self.device_action.show()
-
-        self.daemon_row.set_status(
-            data["daemon"],
-            "Attivo"
-            if data["daemon"]
-            else "Non attivo",
-        )
 
         self.bluetooth_row.set_status(
             data["bluetooth"],
@@ -926,6 +1396,18 @@ class SettingsWindow(QMainWindow):
         self.unlock_row.set_status(
             unlock_ok,
             data["last_unlock"],
+        )
+
+        # The phone unlock row reports the real state, not just "the tree is
+        # patched on disk": master on, a bonded phone, a fully adapted lock
+        # tree, the runtime marker, and a DMS that actually loaded the patch.
+        phone_unlock_armed, phone_unlock_reason = fingerprint_unlock_health(
+            master,
+            data["bonded"],
+        )
+        self.fingerprint_row.set_status(
+            phone_unlock_armed,
+            phone_unlock_reason,
         )
 
         self.toggle_button.setEnabled(
@@ -983,11 +1465,10 @@ class SettingsWindow(QMainWindow):
         )
 
         if action in ("pair", "change"):
-            self.run_background_command(
-                str(DEVICE_CONTROL),
-                [action],
-                "Associazione telefono",
-            )
+            dialog = PairingDialog(self, action)
+            dialog.exec()
+            dialog.deleteLater()
+            self.refresh()
         elif action == "doctor":
             self.run_background_command(
                 "syauth",
@@ -1104,6 +1585,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("DeskUnlock Settings")
     app.setDesktopFileName("syauth")
+    apply_theme(app, read_gui_theme())
     window = SettingsWindow()
     window.show()
     return app.exec()

@@ -1,0 +1,382 @@
+#!/usr/bin/env bash
+# Syauth: show DMS's fingerprint indicator on the lock screen.
+#
+# DMS extracts its Quickshell UI (and its PAM configs) into
+# $XDG_RUNTIME_DIR/danklinux-shell/<hash>/ on every start, so the lock screen is
+# adapted there and re-applied by syauth-dms-lock-patch.timer.
+#
+# What this script is allowed to touch, and why:
+#
+#   1. Modules/Lock/Pam.qml: the indicator counts as available when the lock PAM
+#      is externally managed — which is what DeskUnlock is — so the lock screen
+#      shows the fingerprint icon when the phone is the unlock path.
+#   2. Modules/Lock/Pam.qml: repair DMS's own enable/suppression gates if an
+#      earlier adaptation removed them. Those gates are what stop DMS from
+#      starting the biometric context *by itself* the moment the lock appears;
+#      without them the phone gets asked immediately, which is wrong.
+#
+# What it must **never** do: point a PAM service at `pam_syauth.so`.
+# A DeskUnlock module inside a PAM stack that guards the login is how the
+# operator ended up unable to get back in with the correct password (2026-09-23,
+# twice). The phone unlock is out of band now (`syauth unlock-request`), so this
+# script actively **restores** any `pam_syauth.so` line it finds in DMS's own
+# `assets/pam/` directory.
+#
+# Idempotent. When an anchor is missing nothing is touched and a desktop
+# notification says so: a DMS update that moves the code must be noticed, never
+# silently ignored. The unit still exits 0 so the session is not left
+# `degraded`; the notification is the signal.
+set -Eeuo pipefail
+
+UID_NUM="$(id -u)"
+RUNTIME="${XDG_RUNTIME_DIR:-/run/user/$UID_NUM}"
+SEARCH_ROOT="${SYAUTH_DMS_DIR:-$RUNTIME/danklinux-shell}"
+
+notify() {
+    printf 'syauth-dms-lock-patch: %s\n' "$1" >&2
+    command -v notify-send >/dev/null 2>&1 && notify-send --app-name=DeskUnlock "$1" || true
+}
+
+# The runtime marker the lock screen reads: phone unlock is armed only when
+# the master switch is on, at least one bond exists and the daemon runs.
+# The 30 s timer tick refreshes it, so the icon follows the real state and
+# never lingers after a dissociation or a master switch-off. Kept before the
+# tree loop (and its early exit) because the marker is runtime state that
+# must follow reality even while DMS has no extracted tree.
+MARKER="${SYAUTH_UNLOCK_READY:-$RUNTIME/syauth/unlock-ready}"
+# Written with the adapted tree name(s) right after DMS is restarted to load
+# the patch. The GUI reads it to tell "patched on disk" from "actually loaded"
+# without a fragile process-start-time comparison.
+LOADED_MARKER="${SYAUTH_DMS_LOADED:-$RUNTIME/syauth/dms-lock-loaded}"
+BONDS_FILE="${SYAUTH_BONDS_FILE:-/var/lib/syauth/bonds.toml}"
+DISABLED_FILE="${SYAUTH_DISABLED_FILE:-$HOME/.config/syauth/disabled}"
+if [[ "${SYAUTH_PRESENCED_ACTIVE:-auto}" == "auto" ]]; then
+    if systemctl --user -q is-active syauth-presenced 2>/dev/null; then PRESENCED=1; else PRESENCED=0; fi
+else
+    PRESENCED="$SYAUTH_PRESENCED_ACTIVE"
+fi
+if [[ "$PRESENCED" == "1" && ! -e "$DISABLED_FILE" ]] && grep -q 'kind = "Bonded"' "$BONDS_FILE" 2>/dev/null; then
+    mkdir -p "$(dirname "$MARKER")" 2>/dev/null || true
+    : > "$MARKER" 2>/dev/null || true
+else
+    rm -f "$MARKER" 2>/dev/null || true
+fi
+
+[[ -d "$SEARCH_ROOT" ]] || exit 0
+
+status=0
+changed_any=0
+adapted_trees=()
+for dir in "$SEARCH_ROOT"/*/; do
+    [[ -f "$dir/Modules/Lock/Pam.qml" ]] || continue
+    # DMS extracts the tree read-only (directories included), so the file this
+    # script owns is made writable first. It is a runtime copy that DMS
+    # regenerates; nothing in the installed package is touched.
+    chmod u+w "$dir/Modules/Lock" 2>/dev/null || true
+    chmod u+w "$dir/Modules/Lock/Pam.qml" "$dir/Modules/Lock/LockScreenContent.qml" 2>/dev/null || true
+    pam_dir="$dir/assets/pam"
+    [[ -d "$pam_dir" ]] && chmod u+w "$pam_dir" 2>/dev/null || true
+    [[ -f "$pam_dir/fprint" ]] && chmod u+w "$pam_dir/fprint" 2>/dev/null || true
+
+    code=0
+    output="$(python3 - "$dir/Modules/Lock/Pam.qml" "$pam_dir/fprint" "$dir/Modules/Lock/LockScreenContent.qml" "$MARKER" <<'PY'
+
+import os
+import pathlib
+import sys
+
+
+# Replace a DMS file; the extracted tree ships them read-only, so the new
+# content goes in through a sibling file and an atomic rename.
+def rewrite(path, text):
+    tmp = path.with_name(path.name + ".syauth-new")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+qml = pathlib.Path(sys.argv[1])
+pam = pathlib.Path(sys.argv[2])
+content = pathlib.Path(sys.argv[3])
+changed = []
+
+# 0. Safety first: DeskUnlock must never sit inside a PAM service, not even
+#    DMS's own biometric one. Restore the stock fprintd line if an earlier
+#    adaptation (or the operator's own experiment) left ours behind.
+if pam.is_file():
+    text = pam.read_text()
+    if "pam_syauth.so" in text:
+        text = text.replace(
+            "auth    sufficient  pam_syauth.so",
+            "auth    required    pam_fprintd.so  max-tries=5",
+            1,
+        )
+        if "pam_syauth.so" in text:
+            raise SystemExit(3)
+        rewrite(pam, text)
+        changed.append("pam/fprint ripristinato")
+
+# 1. Show the indicator when the lock PAM is externally managed.
+qml_text = qml.read_text()
+original = qml_text
+qml_text = qml_text.replace(
+    "        property bool available: SettingsData.lockFingerprintReady\n",
+    "        property bool available: SettingsData.lockFingerprintReady || SettingsData.lockPamExternallyManaged\n",
+    1,
+)
+# 2. Repair DMS's own gates: the icon is ours, the automatic start is not.
+qml_text = qml_text.replace(
+    "            if (!available || !root.lockSecured) {",
+    "            if (!available || !SettingsData.enableFprint || !root.lockSecured || root.fprintSuppressedByPrimaryPam) {",
+    1,
+)
+
+if qml_text != original:
+    if "lockPamExternallyManaged" not in qml_text:
+        raise SystemExit(3)
+    # Keep DMS's own gate so the phone is only asked when the operator actually
+    # tries to unlock — never the moment the lock appears.
+    if "fprintSuppressedByPrimaryPam" not in qml_text:
+        raise SystemExit(3)
+    rewrite(qml, qml_text)
+    changed.append("Pam.qml")
+
+# 3. Ask the phone when the operator actually tries to unlock: Enter with an
+#    empty password field, or mouse movement over the lock surface. Never when
+#    the lock merely appears, and never on the post-auth success signal (an
+#    earlier adaptation fired the request there — noise after the session was
+#    already unlocking). One outstanding request at a time (30 s cooldown),
+#    and only while the marker file says phone unlock is armed.
+if content.is_file():
+    text = content.read_text()
+    original = text
+    marker = sys.argv[4]
+    # 3a. Undo the earlier post-auth trigger if a previous adaptation put it in.
+    text = text.replace(
+        '            Quickshell.execDetached(["/usr/bin/syauth", "unlock-request"]);\n',
+        "",
+        1,
+    )
+    # 3b. Enter with an empty field = pure phone-unlock gesture; a typed
+    #     password keeps the untouched password path.
+    enter_anchor = (
+        "                        onAccepted: {\n"
+        "                            if (!demoMode && !root.unlocking && !pam.passwd.active && !pam.u2fPending) {\n"
+        "                                pam.passwd.start();\n"
+        "                            }\n"
+        "                        }\n"
+    )
+    enter_new = (
+        "                        onAccepted: {\n"
+        "                            if (text.length === 0) {\n"
+        "                                requestPhoneUnlock();\n"
+        "                            } else if (!demoMode && !root.unlocking && !pam.passwd.active && !pam.u2fPending) {\n"
+        "                                pam.passwd.start();\n"
+        "                            }\n"
+        "                        }\n"
+    )
+    if enter_anchor in text and "requestPhoneUnlock" not in text:
+        text = text.replace(enter_anchor, enter_new, 1)
+    # 3c. State + cooldown + the request helper, next to DMS's own timer.
+    state_anchor = "    Timer {\n        id: placeholderDelay\n"
+    state_new = (
+        "    property bool syauthRequestCooldown: false\n"
+        "\n"
+        "    FileView {\n"
+        "        id: syauthUnlockReady\n"
+        '        path: "' + marker + '"\n'
+        "    }\n"
+        "\n"
+        "    Process {\n"
+        "        id: syauthUnlockProcess\n"
+        "        running: false\n"
+        '        command: ["/usr/bin/syauth", "unlock-request"]\n'
+        "        onExited: exitCode => {\n"
+        "            if (exitCode === 0) {\n"
+        "                root.unlocking = true;\n"
+        "                lockerReadyArmed = false;\n"
+        "                passwordField.clear();\n"
+        "                root.unlockRequested();\n"
+        "            }\n"
+        "        }\n"
+        "    }\n"
+        "\n"
+        "    function requestPhoneUnlock() {\n"
+        "        if (!syauthUnlockReady.loaded || syauthRequestCooldown || syauthUnlockProcess.running) {\n"
+        "            return;\n"
+        "        }\n"
+        "        syauthRequestCooldown = true;\n"
+        "        syauthCooldownTimer.restart();\n"
+        "        syauthUnlockProcess.running = true;\n"
+        "    }\n"
+        "\n"
+        "    Timer {\n"
+        "        id: syauthCooldownTimer\n"
+        "        interval: 30000\n"
+        "        onTriggered: syauthRequestCooldown = false\n"
+        "    }\n"
+        "\n"
+        + state_anchor
+    )
+    if "syauthUnlockReady" not in text and state_anchor in text:
+        text = text.replace(state_anchor, state_new, 1)
+    # 3d. Mouse movement over the lock surface asks the phone (cooldown-limited).
+    #     The first sight of the cursor only sets the baseline: a lock that
+    #     merely appears must not ask the phone — a real movement (> 8 px)
+    #     must (observed 2026-09-24: the request fired the instant the lock
+    #     appeared).
+    mouse_anchor = (
+        "    MouseArea {\n"
+        "        anchors.fill: parent\n"
+        "        enabled: demoMode\n"
+        "        onClicked: root.unlockRequested()\n"
+        "    }\n"
+    )
+    mouse_new = mouse_anchor + (
+        "\n"
+        "    MouseArea {\n"
+        "        anchors.fill: parent\n"
+        "        hoverEnabled: true\n"
+        "        property real syauthEnterX: 0\n"
+        "        property real syauthEnterY: 0\n"
+        "        property bool syauthHoverActive: false\n"
+        "        onExited: syauthHoverActive = false\n"
+        "        onPositionChanged: {\n"
+        "            if (!syauthHoverActive) {\n"
+        "                syauthHoverActive = true;\n"
+        "                syauthEnterX = mouseX;\n"
+        "                syauthEnterY = mouseY;\n"
+        "                return;\n"
+        "            }\n"
+        "            if (Math.abs(mouseX - syauthEnterX) > 8 || Math.abs(mouseY - syauthEnterY) > 8) {\n"
+        "                requestPhoneUnlock();\n"
+        "            }\n"
+        "        }\n"
+        "    }\n"
+    )
+    if "syauthEnterX" not in text and "onPositionChanged: requestPhoneUnlock" not in text and mouse_anchor in text:
+        text = text.replace(mouse_anchor, mouse_new, 1)
+    # 3f. Upgrade a previous adaptation: execDetached was fire-and-forget, so
+    #     a verified approval could not dismiss the lock (observed
+    #     2026-09-24). Upgrade it to a managed Process whose success emits
+    #     DMS's own unlock signal, and give the mouse hook a movement
+    #     threshold so the lock merely appearing never asks the phone.
+    text = text.replace(
+        '        Quickshell.execDetached(["/usr/bin/syauth", "unlock-request"]);\n',
+        "        syauthUnlockProcess.running = true;\n",
+        1,
+    )
+    text = text.replace(
+        "        if (!syauthUnlockReady.loaded || syauthRequestCooldown) {\n",
+        "        if (!syauthUnlockReady.loaded || syauthRequestCooldown || syauthUnlockProcess.running) {\n",
+        1,
+    )
+    process_anchor = "    function requestPhoneUnlock() {\n"
+    process_new = (
+        "    Process {\n"
+        "        id: syauthUnlockProcess\n"
+        "        running: false\n"
+        '        command: ["/usr/bin/syauth", "unlock-request"]\n'
+        "        onExited: exitCode => {\n"
+        "            if (exitCode === 0) {\n"
+        "                root.unlocking = true;\n"
+        "                lockerReadyArmed = false;\n"
+        "                passwordField.clear();\n"
+        "                root.unlockRequested();\n"
+        "            }\n"
+        "        }\n"
+        "    }\n"
+        "\n"
+        + process_anchor
+    )
+    if "id: syauthUnlockProcess" not in text and process_anchor in text:
+        text = text.replace(process_anchor, process_new, 1)
+    text = text.replace(
+        "        hoverEnabled: true\n"
+        "        onPositionChanged: requestPhoneUnlock()\n",
+        "        hoverEnabled: true\n"
+        "        property real syauthEnterX: 0\n"
+        "        property real syauthEnterY: 0\n"
+        "        property bool syauthHoverActive: false\n"
+        "        onExited: syauthHoverActive = false\n"
+        "        onPositionChanged: {\n"
+        "            if (!syauthHoverActive) {\n"
+        "                syauthHoverActive = true;\n"
+        "                syauthEnterX = mouseX;\n"
+        "                syauthEnterY = mouseY;\n"
+        "                return;\n"
+        "            }\n"
+        "            if (Math.abs(mouseX - syauthEnterX) > 8 || Math.abs(mouseY - syauthEnterY) > 8) {\n"
+        "                requestPhoneUnlock();\n"
+        "            }\n"
+        "        }\n",
+        1,
+    )
+    # 3e. The password-field icon shows the fingerprint when phone unlock is
+    #     armed, not only during an active fprint attempt.
+    icon_anchor = (
+        "                                if (pam.u2f.active)\n"
+        '                                    return "passkey";\n'
+        '                                return "lock";\n'
+    )
+    icon_new = (
+        "                                if (pam.u2f.active)\n"
+        '                                    return "passkey";\n'
+        "                                if (syauthUnlockReady.loaded)\n"
+        '                                    return "fingerprint";\n'
+        '                                return "lock";\n'
+    )
+    if "if (syauthUnlockReady.loaded)" not in text and icon_anchor in text:
+        text = text.replace(icon_anchor, icon_new, 1)
+    if text != original:
+        rewrite(content, text)
+        changed.append("LockScreenContent.qml")
+
+# The end state, not the edit, is what matters.
+final_qml = qml.read_text()
+adapted = (
+    "lockPamExternallyManaged" in final_qml
+    and "fprintSuppressedByPrimaryPam" in final_qml
+    and (not pam.is_file() or "pam_syauth.so" not in pam.read_text())
+    and (not content.is_file() or (
+        "requestPhoneUnlock" in content.read_text()
+        and "syauthUnlockReady" in content.read_text()
+        and "syauthUnlockProcess" in content.read_text()
+        and 'execDetached(["/usr/bin/syauth"' not in content.read_text()
+    ))
+)
+if not adapted:
+    raise SystemExit(3)
+if changed:
+    print("DMS lock screen: " + ", ".join(changed))
+PY
+)" || code=$?
+    if [[ -n "$output" ]]; then
+        printf '%s\n' "$output"
+        changed_any=1
+    fi
+    [[ "$code" -eq 0 ]] || status=3
+    [[ "$code" -eq 0 ]] && adapted_trees+=("$(basename "$dir")")
+done
+
+# DMS extracts its embedded UI into a hash-named runtime dir and loads it
+# without watching the QML files, so a tree patched *after* DMS started would
+# never take effect — the lock screen kept the stock "lock" icon and never
+# called `syauth unlock-request` (observed 2026-09-24). DMS skips
+# re-extraction when the hash dir already exists, so restarting it once loads
+# the patched tree; the next tick sees an already-adapted tree, does not
+# change anything and does not restart again. No loop.
+adapted_names="$(IFS=,; printf '%s' "${adapted_trees[*]:-}")"
+loaded_names="$(cat "$LOADED_MARKER" 2>/dev/null || true)"
+if [[ -n "$adapted_names" ]] \
+    && { [[ "$changed_any" == "1" ]] || [[ "$loaded_names" != "$adapted_names" ]]; } \
+    && systemctl --user -q is-active dms.service 2>/dev/null; then
+    printf 'syauth-dms-lock-patch: riavvio DMS per caricare l\x27albero adattato (%s)\n' "$adapted_names" >&2
+    systemctl --user restart dms.service >/dev/null 2>&1 || true
+    mkdir -p "$(dirname "$LOADED_MARKER")" 2>/dev/null || true
+    printf '%s\n' "$adapted_names" > "$LOADED_MARKER" 2>/dev/null || true
+fi
+
+if [[ "$status" -ne 0 ]]; then
+    notify "adattamento del lock screen non applicato: gli ancoraggi di DMS sono cambiati (nessuna modifica fatta)"
+fi
+exit "$status"

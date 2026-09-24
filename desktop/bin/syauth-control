@@ -3,11 +3,65 @@ set -euo pipefail
 
 MARKER="$HOME/.config/syauth/disabled"
 
+# The daemon refuses to run with no associated phone (operator's rule,
+# 2026-09-23: nothing to unlock means nothing to serve). Pairing is the one
+# exception, and it has to be said explicitly — otherwise the first pairing
+# could never happen. The marker lives next to the daemon's pidfile.
+RUNTIME_SUBDIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/syauth"
+PAIRING_MODE_MARKER="$RUNTIME_SUBDIR/pairing-mode"
+BONDS_FILE="/var/lib/syauth/bonds.toml"
+
+mark_pairing_mode_when_unassociated() {
+    if [[ -f "$BONDS_FILE" ]] && grep -q 'kind = "Bonded"' "$BONDS_FILE"; then
+        return 0
+    fi
+    mkdir -p "$(dirname "$PAIRING_MODE_MARKER")"
+    : >"$PAIRING_MODE_MARKER"
+    echo "Nessun telefono associato: demone in modalita' associazione." >&2
+}
+
 units=(
   syauth-presenced.service
   syauth-proximity.service
   syauth-reconcile.path
+  syauth-reconcile.timer
+  syauth-dms-lock-patch.timer
 )
+
+# A masked unit is a deliberate operator decision, and `systemctl enable`
+# fails hard on one. Both this script and `syauth-user-setup` run under
+# `set -e`: on 2026-09-23 that combination aborted activation half-way, so
+# the daemon never came back and the GUI looked like it would not start at
+# all. Masked units are now skipped, loudly, and never abort the rest.
+unit_is_masked() {
+    [[ "$(systemctl --user is-enabled "$1" 2>/dev/null || true)" == "masked" ]]
+}
+
+enable_unit() {
+    if unit_is_masked "$1"; then
+        echo "Syauth: $1 è mascherata, la lascio disattivata." >&2
+        return 0
+    fi
+    systemctl --user enable "$1" >/dev/null
+}
+
+start_unit() {
+    if unit_is_masked "$1"; then
+        return 0
+    fi
+    systemctl --user start "$1"
+}
+
+# Proximity Lock is optional. Turning it off in the GUI stops its watcher on
+# purpose, so a stopped proximity unit must not drag the whole session to
+# DEGRADED: authentication — the master switch's actual job — is still up.
+# Missing config means the default (enabled).
+proximity_enabled() {
+    local conf="${XDG_CONFIG_HOME:-$HOME/.config}/syauth/proximity.conf" value
+    [[ -r "$conf" ]] || return 0
+    value="$(sed -n 's/^enabled=//p' "$conf" | tail -n 1)"
+    [[ "$value" != "0" ]]
+}
 
 status_cmd() {
     if [[ -e "$MARKER" ]]; then
@@ -16,13 +70,25 @@ status_cmd() {
     fi
 
     bad=0
+    masked=()
     for u in "${units[@]}"; do
+        if [[ "$u" == "syauth-proximity.service" ]] && ! proximity_enabled; then
+            continue
+        fi
+        if unit_is_masked "$u"; then
+            masked+=("$u")
+            continue
+        fi
         systemctl --user is-active --quiet "$u" || bad=1
         systemctl --user is-enabled --quiet "$u" || bad=1
     done
 
     if (( bad == 0 )); then
-        echo "Syauth: ON"
+        if (( ${#masked[@]} > 0 )); then
+            echo "Syauth: ON (mascherate: ${masked[*]})"
+        else
+            echo "Syauth: ON"
+        fi
     else
         echo "Syauth: DEGRADED"
         exit 2
@@ -32,36 +98,55 @@ status_cmd() {
 off_cmd() {
     mkdir -p "$(dirname "$MARKER")"
     touch "$MARKER"
+    # Audit line: the master switch silences every DeskUnlock unit, and on
+    # 2026-09-23 it was found flipped with nobody remembering doing it. The
+    # journal is the only place that can answer "who asked for this" later.
+    command -v logger >/dev/null 2>&1 &&
+        logger -t syauth-control "master OFF by uid=$(id -u) pid=$$ ppid=$PPID comm=$(ps -o comm= -p "$PPID" 2>/dev/null || echo '?')" || true
 
-    systemctl --user disable --now syauth-reconcile.path >/dev/null 2>&1 || true
+    systemctl --user disable --now syauth-reconcile.path syauth-reconcile.timer syauth-dms-lock-patch.timer >/dev/null 2>&1 || true
     systemctl --user stop syauth-reconcile.service >/dev/null 2>&1 || true
     systemctl --user disable --now syauth-proximity.service >/dev/null 2>&1 || true
     systemctl --user disable --now syauth-presenced.service >/dev/null 2>&1 || true
     systemctl --user disable --now syauth-idle-lock.service >/dev/null 2>&1 || true
 
-    rm -f /run/syauth/gatt.ready /run/syauth/presence.last 2>/dev/null || true
+    # `gatt.ready` is the orchestrator-check marker under /run/syauth; the
+    # daemon's presence/telemetry markers live under the user runtime dir.
+    # Clearing only the former left a stale presence marker behind on every
+    # master OFF.
+    rm -f /run/syauth/gatt.ready \
+        "$RUNTIME_SUBDIR/presence.last" \
+        "$RUNTIME_SUBDIR/rssi.last" \
+        "$RUNTIME_SUBDIR/challenge-ready.last" 2>/dev/null || true
 
     echo "Syauth: OFF"
 }
 
 on_cmd() {
     rm -f "$MARKER"
+    command -v logger >/dev/null 2>&1 &&
+        logger -t syauth-control "master ON by uid=$(id -u) pid=$$ ppid=$PPID comm=$(ps -o comm= -p "$PPID" 2>/dev/null || echo '?')" || true
     systemctl --user daemon-reload
 
-    systemctl --user enable syauth-presenced.service >/dev/null
-    systemctl --user enable syauth-proximity.service >/dev/null
-    systemctl --user enable syauth-reconcile.path >/dev/null
-    systemctl --user enable syauth-idle-lock.service >/dev/null
+    mark_pairing_mode_when_unassociated
+    enable_unit syauth-presenced.service
+    enable_unit syauth-proximity.service
+    enable_unit syauth-reconcile.path
+    enable_unit syauth-reconcile.timer
+    enable_unit syauth-dms-lock-patch.timer
+    enable_unit syauth-idle-lock.service
 
-    if ! systemctl --user start syauth-presenced.service; then
+    if ! start_unit syauth-presenced.service; then
         echo "Syauth ON fallito: presenced"
         off_cmd
         exit 1
     fi
 
-    systemctl --user start syauth-reconcile.path
+    start_unit syauth-reconcile.path
+    start_unit syauth-reconcile.timer
+    start_unit syauth-dms-lock-patch.timer
 
-    if ! systemctl --user start syauth-proximity.service; then
+    if ! start_unit syauth-proximity.service; then
         echo "Syauth ON fallito: proximity"
         off_cmd
         exit 1

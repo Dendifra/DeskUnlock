@@ -61,7 +61,9 @@ pub mod implementation;
 pub use implementation::{
     ED25519_SECRET_KEY_LEN, ED25519_SIGNATURE_LEN, FrameSigner, HKDF_INFO_OOB_V1, HKDF_INFO_SESSION_V1, INVITE_PUBKEY_LEN,
     INVITE_QUERY_KEY_HOST, INVITE_QUERY_KEY_PUBKEY, INVITE_URI_HOST_PATH, INVITE_URI_SCHEME, Invite, MOBILE_BOND_KEY_LEN, MobileError,
-    OOB_WORD_COUNT, OOB_WORDS, SESSION_UUID_BYTES_MOBILE, build_response_frame, oob_code_for_bond, parse_invite_uri, session_uuid_for_bond,
+    OOB_CODE_DIGITS, SESSION_UUID_BYTES_MOBILE, build_response_frame, oob_code_for_bond, pair_transaction_apply_local,
+    pair_transaction_apply_remote, pair_transaction_apply_status, pair_transaction_create, pair_transaction_phase,
+    pair_transaction_restore, pair_transaction_status_query, parse_invite_uri, peer_id_from_pubkey, session_uuid_for_bond,
     sign_challenge_response, verify_challenge_frame,
 };
 
@@ -93,7 +95,7 @@ mod tests {
         // when the whole point is to assert the EXACT public signatures.
         type ParseFn = fn(String) -> Result<Invite, MobileError>;
         type FramedFn = fn(Vec<u8>, Vec<u8>) -> Result<Vec<u8>, MobileError>;
-        type OobFn = fn(Vec<u8>) -> Result<Vec<String>, MobileError>;
+        type OobFn = fn(Vec<u8>) -> Result<String, MobileError>;
         type BuildFn = fn(Vec<u8>, Box<dyn FrameSigner>, Vec<u8>) -> Result<Vec<u8>, MobileError>;
         let _: ParseFn = parse_invite_uri;
         let _: FramedFn = verify_challenge_frame;

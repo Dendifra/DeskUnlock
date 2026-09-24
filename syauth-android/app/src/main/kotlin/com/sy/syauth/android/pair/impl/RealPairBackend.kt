@@ -44,6 +44,8 @@
 // All Android platform dependencies live behind small interfaces so
 // the JVM/Robolectric unit tests in `app/src/test/.../pair/`
 // substitute fakes without standing up a real BLE stack.
+@file:Suppress("MissingPermission", "NewApi")
+
 package com.sy.syauth.android.pair.impl
 
 import android.bluetooth.BluetoothAdapter
@@ -52,7 +54,16 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.util.Base64
 import android.util.Log
+import uniffi.syauth_mobile.pairTransactionApplyLocal
+import uniffi.syauth_mobile.pairTransactionApplyRemote
+import uniffi.syauth_mobile.pairTransactionApplyStatus
+import uniffi.syauth_mobile.pairTransactionCreate
+import uniffi.syauth_mobile.pairTransactionRestore
+import uniffi.syauth_mobile.pairTransactionStatusQuery
+import com.sy.syauth.android.pair.api.BondPersister
+import com.sy.syauth.android.pair.api.BondRecord
 import com.sy.syauth.android.pair.api.LescResult
 import com.sy.syauth.android.pair.api.PairBackend
 import com.sy.syauth.android.pair.api.PeerHandle
@@ -118,6 +129,62 @@ public const val KEYSTORE_MINT_FAILED_PREFIX: String = "Keystore Ed25519 mint fa
 /** Stable prefix for the per-address Keystore alias used by the unlock-time signer. */
 public const val KEYSTORE_ALIAS_PREFIX: String = "syauth.ed25519."
 
+private const val TRANSACTION_MESSAGE_LEN: Int = 18
+
+/**
+ * Length of a persisted `Transaction` snapshot (`Transaction::encode` in
+ * `syauth-core`). Layout: `[version:1][role:1][phase:1][id:16][flags:8]`.
+ */
+private const val TRANSACTION_STATE_LEN: Int = 27
+
+/** Offset of the 16-byte transaction id inside a persisted snapshot. */
+private const val STATE_ID_OFFSET: Int = 3
+private const val STATE_ID_END: Int = STATE_ID_OFFSET + 16
+
+/**
+ * True only when [state] is the persisted machine of the attempt identified by
+ * [transactionId].
+ *
+ * The desktop mints a fresh transaction id for every attempt, so a snapshot
+ * restored at startup for recovery can never be resumed by a later attempt:
+ * advancing it would reject the very first event (`EVENT_CONFIRM`) and strand
+ * the pairing with "local confirmation transition rejected". A foreign snapshot
+ * must be discarded, never used.
+ */
+internal fun transactionStateBelongsToAttempt(state: ByteArray?, transactionId: ByteArray): Boolean =
+    state != null &&
+        state.size == TRANSACTION_STATE_LEN &&
+        state.copyOfRange(STATE_ID_OFFSET, STATE_ID_END).contentEquals(transactionId)
+private const val STATUS_MESSAGE_LEN: Int = 26
+private const val TRANSACTION_VERSION: Byte = 2
+private const val OP_CAPABILITY: Byte = 1
+private const val OP_CONFIRM: Byte = 2
+private const val OP_REJECT: Byte = 3
+private const val OP_CANCEL: Byte = 4
+private const val OP_TIMEOUT: Byte = 5
+private const val OP_PREPARED: Byte = 6
+private const val OP_COMMIT: Byte = 7
+private const val OP_COMMIT_ACK: Byte = 8
+private const val OP_COMMITTED: Byte = 9
+private const val OP_ERROR: Byte = 11
+private const val ROLE_PARTICIPANT: UByte = 1u
+private const val EVENT_CAPABILITY: UByte = 0u
+private const val EVENT_VERIFIED_EXCHANGE: UByte = 1u
+private const val EVENT_CONFIRM: UByte = 2u
+private const val EVENT_PREPARED: UByte = 3u
+private const val EVENT_COMMIT_ACK: UByte = 5u
+private const val EVENT_COMMITTED: UByte = 6u
+
+/** 50 ms poll steps: 30 s for machine-paced acknowledgements. */
+private const val MACHINE_WAIT_STEPS: Int = 600
+
+/**
+ * The coordinator's CONFIRM is gated by the operator reading the four OOB words
+ * in the desktop dialog, so that one round is human-paced. Every later step is
+ * machine-paced ([MACHINE_WAIT_STEPS]) and the commit sequence stays tight.
+ */
+private const val OOB_WAIT_STEPS: Int = 3600
+
 // ---------------------------------------------------------------------------
 // Seam interfaces — every Android platform dependency lives behind one of
 // these so the Robolectric tests can substitute deterministic fakes.
@@ -147,6 +214,22 @@ public interface PairCompanionScanner {
         onPicked: (deviceAddress: String, deviceName: String?) -> Unit,
         onFailed: (reason: String) -> Unit,
     )
+
+    /**
+     * Mark the CDM association created by the current session as
+     * committed (the pair reached BONDED). Committed associations are
+     * never removed by [abandonSessionAssociation]. No-op for non-CDM
+     * implementations.
+     */
+    public fun commitSessionAssociation() {}
+
+    /**
+     * Remove the CDM association(s) created by the current session
+     * because the pair ended before BONDED (cancel, reject, error,
+     * timeout). Idempotent; never touches associations from other
+     * sessions, devices, or apps. No-op for non-CDM implementations.
+     */
+    public fun abandonSessionAssociation() {}
 }
 
 /**
@@ -164,6 +247,21 @@ public interface PairGattExchange {
      * `LescResult.Failed`.
      */
     public fun exchangePubkeys(address: String, phonePubkey: ByteArray): ByteArray
+
+    /** Name read from the same authenticated peer; display only, not identity. */
+    public fun peerDisplayName(): String? = null
+
+    /** V2 control channel, kept on the authenticated GATT session. */
+    public fun writeTransactionMessage(message: ByteArray): Boolean = false
+    public fun readTransactionMessage(): ByteArray? = null
+    /** Query the authenticated peer's durable outcome. */
+    public fun queryTransactionStatus(query: ByteArray): ByteArray? {
+        if (!writeTransactionMessage(query)) return null
+        return readTransactionMessage()
+    }
+    /** Reopen the bonded peer's GATT service after process death. */
+    public fun reconnectStatus(address: String): Boolean = false
+    public fun closeSession() {}
 }
 
 /**
@@ -311,6 +409,7 @@ public class RealPairBackend(
     private val clock: PairClock,
     private val sessionUuidLookup: PairSessionUuidLookup,
     private val bondKeyDeriver: PairBondKeyDeriver,
+    private val bondPersister: BondPersister? = null,
     private val keystoreKeyGenerator: KeystoreKeyGenerator? = null,
     private val onLescResultCallback: AtomicReference<(LescResult) -> Unit> = AtomicReference { _ -> },
     private val onPeerPickedCallback: AtomicReference<(PeerHandle) -> Unit> = AtomicReference { _ -> },
@@ -353,6 +452,34 @@ public class RealPairBackend(
      */
     @Volatile
     private var pickedName: String = ""
+
+    private var transactionId: ByteArray? = null
+    private var transactionState: ByteArray? = null
+
+    private val transactionPrefs = context.getSharedPreferences("pairing-v2-recovery", Context.MODE_PRIVATE)
+
+    init {
+        // Loaded for [recoverTransaction] only: a snapshot restored here belongs
+        // to some *previous* attempt. [coordinateTransaction] re-validates it
+        // against the current attempt id before ever advancing it.
+        val encoded = transactionPrefs.getString("state", null)
+        val restored = encoded?.let { runCatching { Base64.decode(it, Base64.DEFAULT) }.getOrNull() }
+        if (restored != null && restored.size == TRANSACTION_STATE_LEN) {
+            transactionState = runCatching { pairTransactionRestore(restored) }.getOrNull()
+            transactionId = restored.copyOfRange(STATE_ID_OFFSET, STATE_ID_END)
+            pickedAddress = transactionPrefs.getString("peer_address", null)
+        }
+    }
+
+    private fun saveTransactionState(state: ByteArray) {
+        transactionPrefs.edit().putString("state", Base64.encodeToString(state, Base64.NO_WRAP)).commit()
+    }
+
+    private fun restoreTransactionState(id: ByteArray) {
+        val encoded = transactionPrefs.getString("state", null) ?: return
+        val state = runCatching { Base64.decode(encoded, Base64.DEFAULT) }.getOrNull() ?: return
+        if (transactionStateBelongsToAttempt(state, id)) transactionState = state
+    }
 
     /** Resolved by the bond-state receiver. */
     private val lescResultDeferred: CompletableDeferred<LescResult> = CompletableDeferred()
@@ -457,6 +584,23 @@ onPairingCodeCallback.get().invoke(code)
     }
 
     /**
+     * Delegate the BONDED commit to the CDM scanner so the provisional
+     * association created by the picker is never disassociated.
+     */
+    override fun commitProvisionalAssociation() {
+        companionScanner?.commitSessionAssociation()
+    }
+
+    /**
+     * Delegate the pre-BONDED cleanup to the CDM scanner. Idempotent;
+     * the scanner only touches the association it recorded for the
+     * current session.
+     */
+    override fun abandonProvisionalAssociation() {
+        companionScanner?.abandonSessionAssociation()
+    }
+
+    /**
      * Slot UUIDs the backend last requested via CDM. Exposed so tests
      * can assert the (current, previous) inclusion without driving a
      * real CDM session.
@@ -473,6 +617,7 @@ onPairingCodeCallback.get().invoke(code)
         }
         pickedAddress = peer.id
         pickedName = peer.name
+        transactionPrefs.edit().putString("peer_address", peer.id).commit()
         // Never reuse the numeric-comparison code from a previous attempt.
         // ACTION_PAIRING_REQUEST will provide the current OS passkey asynchronously.
         lastPairingCode = LESC_PENDING_PLACEHOLDER
@@ -525,16 +670,118 @@ onPairingCodeCallback.get().invoke(code)
     override fun awaitLescResult(): LescResult =
         runBlocking { lescResultDeferred.await() }
 
+    override fun recoverTransaction(): Result<Boolean> {
+        val state = transactionState ?: return Result.failure(IllegalStateException("no persisted transaction"))
+        val id = transactionId ?: return Result.failure(IllegalStateException("transaction identity unavailable"))
+        val nonce = System.nanoTime().toULong().toLong()
+        val query = pairTransactionStatusQuery(id, nonce)
+        val address = pickedAddress ?: return Result.failure(IllegalStateException("recovery peer identity unavailable"))
+        if (gattExchange?.reconnectStatus(address) != true) {
+            return Result.failure(IllegalStateException("authenticated recovery connection unavailable"))
+        }
+        val response = gattExchange.queryTransactionStatus(query)
+            ?: return Result.failure(IllegalStateException("authenticated status unavailable"))
+        val updated = runCatching { pairTransactionApplyStatus(state, response, nonce) }
+            .getOrElse { return Result.failure(IllegalStateException("UNCERTAIN: authenticated status rejected", it)) }
+        transactionState = updated
+        saveTransactionState(updated)
+        val phase = runCatching { uniffi.syauth_mobile.pairTransactionPhase(updated) }.getOrDefault(8u)
+        val terminal = phase == 6.toUByte() || phase == 7.toUByte()
+        if (terminal) transactionPrefs.edit().remove("state").remove("peer_address").commit()
+        return Result.success(phase == 6.toUByte())
+    }
+
+    override fun persistBond(record: BondRecord): Result<Unit> =
+        runCatching {
+            bondPersister?.persist(record)
+                ?: throw IllegalStateException("bond persistence unavailable")
+        }
+
+    override fun abortTransaction(cancel: Boolean) {
+        val exchange = gattExchange ?: return
+        val id = transactionId ?: return
+        val operation = if (cancel) OP_CANCEL else OP_REJECT
+        exchange.writeTransactionMessage(byteArrayOf(TRANSACTION_VERSION) + id + byteArrayOf(operation))
+        exchange.closeSession()
+    }
+
+    override fun coordinateTransaction(persistCommitted: () -> Boolean): Result<String> {
+        val exchange = gattExchange ?: return Result.failure(IllegalStateException(GATT_EXCHANGE_MISSING_REASON))
+        val id = transactionId ?: return Result.failure(IllegalStateException("pairing protocol v2 unavailable"))
+        fun message(operation: Byte): ByteArray = byteArrayOf(TRANSACTION_VERSION) + id + byteArrayOf(operation)
+        fun operation(bytes: ByteArray?): Byte? {
+            if (bytes == null || bytes.size != TRANSACTION_MESSAGE_LEN || bytes[0] != TRANSACTION_VERSION || !bytes.copyOfRange(1, 17).contentEquals(id)) return null
+            return bytes[17].takeIf { it in OP_CAPABILITY..OP_ERROR }
+        }
+        fun waitFor(expected: Byte, steps: Int = MACHINE_WAIT_STEPS): ByteArray? {
+            repeat(steps) {
+                val bytes = exchange.readTransactionMessage()
+                when (operation(bytes)) {
+                    expected -> return bytes
+                    OP_REJECT, OP_CANCEL, OP_TIMEOUT, OP_ERROR -> return null
+                    null -> return null
+                    else -> Unit
+                }
+                Thread.sleep(50L)
+            }
+            return null
+        }
+        fun failure(reason: String, commitSeen: Boolean): Result<String> =
+            Result.failure(IllegalStateException(if (commitSeen) "UNCERTAIN: $reason" else reason))
+        // A new attempt always carries a fresh transaction id from the desktop
+        // (pair_engine mints one per attempt). A snapshot restored at startup
+        // belongs to an older attempt and can never be resumed: advancing it
+        // would reject EVENT_CONFIRM and fail the pairing with
+        // "local confirmation transition rejected". Discard it and start clean.
+        if (!transactionStateBelongsToAttempt(transactionState, id)) {
+            transactionState = null
+            transactionPrefs.edit().remove("state").remove("peer_address").commit()
+        }
+        if (transactionState == null) {
+            runCatching {
+                var state = pairTransactionCreate(id.copyOf(), ROLE_PARTICIPANT)
+                state = pairTransactionApplyRemote(state, message(OP_CAPABILITY))
+                state = pairTransactionApplyLocal(state, EVENT_CAPABILITY)
+                transactionState = pairTransactionApplyLocal(state, EVENT_VERIFIED_EXCHANGE)
+                saveTransactionState(transactionState!!)
+            }.onFailure { return failure("Rust pairing transaction unavailable", false) }
+        }
+        fun local(event: UByte): Boolean = runCatching {
+            transactionState = pairTransactionApplyLocal(transactionState ?: error("pair transaction unavailable"), event)
+            saveTransactionState(transactionState!!)
+        }.isSuccess
+        fun remote(bytes: ByteArray?): Boolean = runCatching {
+            transactionState = pairTransactionApplyRemote(transactionState ?: error("pair transaction unavailable"), bytes ?: error("missing transaction message"))
+            saveTransactionState(transactionState!!)
+        }.isSuccess
+        if (!local(EVENT_CONFIRM)) return failure("local confirmation transition rejected", false)
+        // Publish our OOB decision on the wire. The desktop can only enter
+        // `Preparing` once BOTH sides have confirmed, and it waits for exactly
+        // this message; skipping it aborts the attempt on its side.
+        if (!exchange.writeTransactionMessage(message(OP_CONFIRM))) return failure("DeskUnlock confirmation rejected", false)
+        if (!waitFor(OP_CONFIRM, OOB_WAIT_STEPS).let { it != null && remote(it) }) return failure("remote confirmation failed", false)
+        if (!local(EVENT_PREPARED) || !exchange.writeTransactionMessage(message(OP_PREPARED))) return failure("local prepare failed", false)
+        if (!waitFor(OP_PREPARED).let { it != null && remote(it) }) return failure("remote prepare failed", false)
+        if (!waitFor(OP_COMMIT).let { it != null && remote(it) }) return failure("remote commit unavailable", false)
+        if (!persistCommitted()) return failure("local commit persistence failed", true)
+        if (!local(EVENT_COMMIT_ACK) || !exchange.writeTransactionMessage(message(OP_COMMIT_ACK))) return failure("commit acknowledgement unavailable", true)
+        if (!waitFor(OP_COMMITTED).let { it != null && remote(it) }) return failure("remote completion unavailable", true)
+        if (!local(EVENT_COMMITTED) || !exchange.writeTransactionMessage(message(OP_COMMITTED))) return failure("completion acknowledgement failed", true)
+        transactionPrefs.edit().remove("state").commit()
+        return Result.success(pickedName)
+    }
+
     /**
      * Tear down the receivers and any active scan. Called by the
      * ViewModel from `onCleared()` so the backend does not leak
      * receivers across pair attempts.
      */
-    public fun cleanup() {
+    override fun cleanup() {
         if (cleanedUp) return
         cleanedUp = true
         runCatching { pairingReceiverRegistrar.unregister(pairingReceiver) }
         runCatching { bondStateReceiverRegistrar.unregister(bondStateReceiver) }
+        runCatching { gattExchange?.closeSession() }
         if (!lescResultDeferred.isCompleted) {
             lescResultDeferred.complete(LescResult.Failed("backend cleanup"))
         }
@@ -634,6 +881,27 @@ onPairingCodeCallback.get().invoke(code)
             lescResultDeferred.complete(LescResult.Failed("host pubkey wrong length: ${hostPubkey.size}"))
             return
         }
+        val capability = exchange.readTransactionMessage()
+        if (capability == null || capability.size != TRANSACTION_MESSAGE_LEN || capability[0] != TRANSACTION_VERSION || capability[17] != OP_CAPABILITY) {
+            lescResultDeferred.complete(LescResult.Failed("Questa versione di DeskUnlock deve essere aggiornata prima dell'associazione."))
+            return
+        }
+        transactionId = capability.copyOfRange(1, 17)
+        restoreTransactionState(transactionId!!)
+        // Publish our CAPABILITY right away: the protocol version and the
+        // verified key exchange are transport facts, not the operator's
+        // decision. Sending it here lets the desktop raise its OOB dialog
+        // while the phone is still showing the same four words, so the
+        // operator can compare both screens. The human decision stays local
+        // (`EVENT_CONFIRM`) on each side.
+        if (!exchange.writeTransactionMessage(
+                byteArrayOf(TRANSACTION_VERSION) + transactionId!! + byteArrayOf(OP_CAPABILITY),
+            )
+        ) {
+            Log.w(REAL_PAIR_BACKEND_LOG_TAG, "capability publication refused")
+            lescResultDeferred.complete(LescResult.Failed("pairing protocol v2 capability write refused"))
+            return
+        }
         val bondKey = bondKeyDeriver.derive(hostPubkey, phonePubkey)
         if (bondKey.size != PAIR_BOND_KEY_LEN) {
             lescResultDeferred.complete(LescResult.Failed("bond_key wrong length: ${bondKey.size}"))
@@ -641,7 +909,7 @@ onPairingCodeCallback.get().invoke(code)
         }
         val result = LescResult.Bonded(
             bondKey = bondKey,
-            peerName = pickedName.ifEmpty { address },
+            peerName = exchange.peerDisplayName() ?: pickedName.ifEmpty { "Computer DeskUnlock" },
             keystoreAlias = material.alias,
             phonePubkey = phonePubkey,
         )

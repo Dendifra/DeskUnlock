@@ -54,3 +54,33 @@ public fun resurrectIfDead(context: Context): Boolean {
     Log.i(RESURRECT_LOG_TAG, "resurrected service for bonded device")
     return true
 }
+
+/**
+ * Ask a live [SyauthCompanionService] to reconcile its GATT clients with the
+ * bonds that exist on disk right now.
+ *
+ * `SyauthCompanionService` builds one client per bond in `onCreate` and is
+ * `START_STICKY`, so a bond set that changes while it runs (a dissociation, a
+ * re-pair) used to leave a stale client behind: the app UI said "No computer
+ * paired" while the service kept heartbeating for the old bond, the desktop
+ * stayed `Connected: no` and presence samples dried up — which killed both
+ * the proximity lock and the phone unlock until the app was restarted by hand
+ * (observed 2026-09-23). The immediate fix is the reload action sent by
+ * `MainActivity`; this is the periodic safety net behind it.
+ *
+ * No-op when the service is not running: there is nothing to reconcile, and
+ * [resurrectIfDead] owns that case.
+ */
+public fun requestBondReload(context: Context): Boolean {
+    if (!SyauthCompanionService.isRunning.get()) {
+        Log.d(RESURRECT_LOG_TAG, "service not running; nothing to reconcile")
+        return false
+    }
+    val intent = Intent(context, SyauthCompanionService::class.java).apply {
+        action = SyauthCompanionService.ACTION_RELOAD_BONDS
+    }
+    return runCatching { context.startService(intent) }
+        .onSuccess { Log.i(RESURRECT_LOG_TAG, "asked the service to reconcile its clients") }
+        .onFailure { Log.w(RESURRECT_LOG_TAG, "bond reload intent failed", it) }
+        .isSuccess
+}

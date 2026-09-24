@@ -55,9 +55,16 @@ test:
 	bash tests/proximity_readiness.sh
 	bash tests/rssi_status.sh
 	bash tests/proximity_engine.sh
+	bash tests/proximity_toggle.sh
+	bash tests/master_status.sh
 	bash tests/idle_lock.sh
 	bash tests/auth_lifecycle.sh
 	python3 tests/settings_last_unlock.py
+	python3 tests/settings_proximity_toggle.py
+	python3 tests/settings_system_status.py
+	python3 tests/settings_fingerprint_health.py
+	bash desktop/tests/test_dms_lock_patch.sh
+	python3 -m unittest desktop.tests.test_pairing_dialog
 
 # Run all tests with verbose output.
 .PHONY: testv

@@ -4,11 +4,11 @@
 
 ## Roadmap Link
 - Source roadmap: [specs/syauth/ROADMAP.md](../syauth/ROADMAP.md) — item **S-016**.
-- Feature: First production-shaped screen on the phone. The user taps a CTA, picks a peer from a BLE scan, watches the BT LESC numeric-comparison code, then confirms the app-level 4-word OOB emoji code that is derived (in Rust) from the freshly-negotiated bond key. The screen is the Android twin of the desktop `syauth pair` flow (S-011) and is the second step of the SPEC §4.1 pairing dataflow.
+- Feature: First production-shaped screen on the phone. The user taps a CTA, picks a peer from a BLE scan, watches the BT LESC numeric-comparison code, then confirms the app-level numeric OOB code that is derived (in Rust) from the freshly-negotiated bond key. The screen is the Android twin of the desktop `syauth pair` flow (S-011) and is the second step of the SPEC §4.1 pairing dataflow.
 
 ## 1. Journey
 
-When **Alex (the Linux power-user from SPEC §5.1) sits next to their Pixel 8 with `syauth pair` already running on the desktop**, I want to **tap "Pair with computer" in the Android app, pick the desktop from a BLE scan list, watch the BT LESC 6-digit code match the desktop, then confirm the 4-word emoji OOB code also matches** so I can **end the pairing flow with a `Bonded` state on both ends — knowing that a relay attacker who somehow bypassed BT pairing still failed the app-level OOB check (defense in depth per SPEC §4.1)**.
+When **Alex (the Linux power-user from SPEC §5.1) sits next to their Pixel 8 with `syauth pair` already running on the desktop**, I want to **tap "Pair with computer" in the Android app, pick the desktop from a BLE scan list, watch the BT LESC 6-digit code match the desktop, then confirm the numeric OOB code also matches** so I can **end the pairing flow with a `Bonded` state on both ends — knowing that a relay attacker who somehow bypassed BT pairing still failed the app-level OOB check (defense in depth per SPEC §4.1)**.
 
 ## 2. CJM
 
@@ -16,9 +16,11 @@ S-016 is the first screen that does real work. Until now (S-015) the app is a he
 
 Three forces dominate the design:
 
-1. **The OOB code MUST come from UniFFI.** SPEC §4.1 is explicit: the app-level OOB is `HKDF(bond, "syauth-oob-v1")[0..4]` followed by a 256-entry word-table lookup. S-014 ships this exact computation as `uniffi.syauth_mobile.oobCodeForBond(bondKey: ByteArray): List<String>`. Re-implementing the HKDF in Kotlin would (a) fork the byte-identity guarantee that `oob_byte_identical_to_cli_fixture` pins in `crates/syauth-mobile/src/implementation.rs`, and (b) move security-critical crypto from the audited Rust core into Kotlin where the audit surface is larger. We MUST call through UniFFI; the production `OobCalculator` impl is a one-liner that delegates.
+1. **The OOB code MUST come from UniFFI.** SPEC §4.1 is explicit: the app-level OOB is `HKDF(bond, "syauth-oob-v1")[0..4]` followed by a 256-entry decimal rendering. S-014 ships this exact computation as `uniffi.syauth_mobile.oobCodeForBond(bondKey: ByteArray): List<String>`. Re-implementing the HKDF in Kotlin would (a) fork the byte-identity guarantee that `oob_byte_identical_to_cli_fixture` pins in `crates/syauth-mobile/src/implementation.rs`, and (b) move security-critical crypto from the audited Rust core into Kotlin where the audit surface is larger. We MUST call through UniFFI; the production `OobCalculator` impl is a one-liner that delegates.
 
-2. **The `Failed` state MUST clean up both sides.** SPEC §6 T-004 ("Rogue device bonding") is mitigated by the OOB-mismatch path: if the user taps "No" on the 4-word confirmation, the phone (a) does not persist the bond via `BondPersister`, and (b) removes the BT-level bond via `BluetoothDevice.removeBond()`. Android does not expose `removeBond()` in the public SDK ([Android issue tracker 35681](https://issuetracker.google.com/issues/37057395)); it has been a hidden API since API 1 and remains so as of API 34. The production `BluetoothBondRemover` therefore uses reflection. The test seam is a `BluetoothBondRemover` interface so unit tests can verify "the remover was called exactly once" without needing a real `BluetoothDevice` instance.
+2. **The `Failed` state MUST clean up both sides.** SPEC §6 T-004 ("Rogue device bonding") is mitigated by the OOB-mismatch path: if the user taps "No" on the numeric confirmation, the phone (a) does not persist the bond via `BondPersister`, and (b) removes the BT-level bond via `BluetoothDevice.removeBond()`.
+
+   Bond removal is scoped to the two paths where it is correct: an LESC failure (no valid transport bond exists yet) and an explicit OOB-mismatch rejection (the transport bond is suspect). A pre-commit application failure *after* a successful bond KEEPS the transport bond: it carries no DeskUnlock trust, and keeping it lets the next "Associa telefono" take the already-bonded path instead of a fresh LESC. Android does not expose `removeBond()` in the public SDK ([Android issue tracker 35681](https://issuetracker.google.com/issues/37057395)); it has been a hidden API since API 1 and remains so as of API 34. The production `BluetoothBondRemover` therefore uses reflection. The test seam is a `BluetoothBondRemover` interface so unit tests can verify "the remover was called exactly once" without needing a real `BluetoothDevice` instance.
 
 3. **`Scanning` → `LescNegotiating` MUST gate on adapter capability.** DoD #5 requires us to refuse to advance past `Scanning` when the adapter doesn't support LE Secure Connections, and the error must include the adapter name. LE Secure Connections is Bluetooth 4.2+; some emulators and ancient devices expose only Bluetooth 4.0/4.1 controllers (no LESC). The capability check happens before any cryptographic material is exchanged — fail closed, with an actionable adapter name in the error so the user can identify which radio is at fault.
 
@@ -57,21 +59,21 @@ A fourth, operational force: **this CI host has no Android SDK / no emulator**, 
 **Actions:** The `LescNegotiating(code)` state renders the code in `MaterialTheme.typography.headlineLarge` (`testTag = "pair.lesc.code"`). A "Cancel" button (`testTag = "pair.lesc.cancel"`) aborts and returns to `Idle`. The BT stack on both ends drives the comparison; the user confirms in the *system* Bluetooth-pairing dialog (Android's stock UI), then the ViewModel observes the bond completing.
 
 **Pain / Risk:**
-- The system Bluetooth dialog is *modal* and outside our control — the LESC numeric comparison happens in the OS, not in our Compose surface. Our state `LescNegotiating(code)` is therefore informational: we display the same code the OS dialog is showing so the user has a *second* confirmation that "this is the right peer". When the OS bond completes successfully, our `PairBackend` notifies us, the ViewModel calls `oobCalculator.compute(bondKey)`, and we transition to `OobConfirming(emoji)`. Mitigation: `PairBackend` exposes a `bondCompleted` callback that carries the negotiated bond key bytes; our test fakes drive this synchronously.
+- The system Bluetooth dialog is *modal* and outside our control — the LESC numeric comparison happens in the OS, not in our Compose surface. Our state `LescNegotiating(code)` is therefore informational: we display the same code the OS dialog is showing so the user has a *second* confirmation that "this is the right peer". When the OS bond completes successfully, our `PairBackend` notifies us, the ViewModel calls `oobCalculator.compute(bondKey)`, and we transition to `OobConfirming(code)`. Mitigation: `PairBackend` exposes a `bondCompleted` callback that carries the negotiated bond key bytes; our test fakes drive this synchronously.
 - LESC fails mid-handshake (controller-firmware bug, RF interference). `PairBackend` emits a failure callback; ViewModel transitions to `Failed("LESC handshake failed: $reason")`. Per DoD #3, the bond is NOT persisted on either side; `bondRemover.remove(device)` is called.
 - The user cancels the OS dialog. Same as the failure above — `Failed("user cancelled BT pairing")`.
 
 **Success Signal:** The 6-digit code is rendered in `headlineLarge` and matches whatever the desktop CLI displays. The next state is `OobConfirming` with a non-empty 4-element list.
 
-### Phase 4: App-level OOB 4-word confirmation
+### Phase 4: App-level OOB numeric confirmation
 
-**User Intent:** Alex sees four emoji-prefixed words on the phone and the same four words on the desktop. They compare; they match. Alex taps "Yes".
+**User Intent:** Alex sees the numeric code on the phone and the same number on the desktop. They compare; they match. Alex taps "Yes".
 
-**Actions:** The `OobConfirming(emoji)` state renders the four words (`testTag = "pair.oob.words"`) followed by a question "These match the computer?" and two buttons: "Yes" (`testTag = "pair.oob.yes"`) and "No" (`testTag = "pair.oob.no"`). Tapping Yes calls `bondPersister.persist(...)` and transitions to `Bonded(peerName)`. Tapping No calls `bondRemover.remove(device)` and transitions to `Failed("OOB code did not match — peer might be a relay attacker")`.
+**Actions:** The `OobConfirming(code)` state renders the four words (`testTag = "pair.oob.words"`) followed by a question "These match the computer?" and two buttons: "Yes" (`testTag = "pair.oob.yes"`) and "No" (`testTag = "pair.oob.no"`). Tapping Yes calls `bondPersister.persist(...)` and transitions to `Bonded(peerName)`. Tapping No calls `bondRemover.remove(device)` and transitions to `Failed("OOB code did not match — peer might be a relay attacker")`.
 
 **Pain / Risk:**
-- The four words are emoji-prefixed; the user has to *read* them in the same order on both ends. Mitigation: the words are produced by the same UniFFI surface that the desktop CLI's `syauth pair` calls — byte-identical output is pinned by `crates/syauth-mobile/src/implementation.rs::oob_byte_identical_to_cli_fixture`. We never re-implement the HKDF in Kotlin.
-- The user is rushed and taps Yes without reading. This is the user-error class T-004 ("Rogue device bonding") guards against. We can only do so much in UI — the SPEC accepts this residual risk and documents it. The 4-word OOB at least slows the attack down and forces a visible inspection.
+- The operator has to *read* the same number on both ends. Mitigation: the words are produced by the same UniFFI surface that the desktop CLI's `syauth pair` calls — byte-identical output is pinned by `crates/syauth-mobile/src/implementation.rs::oob_code_is_byte_identical_to_cli_fixture`. We never re-implement the HKDF in Kotlin.
+- The user is rushed and taps Yes without reading. This is the user-error class T-004 ("Rogue device bonding") guards against. We can only do so much in UI — the SPEC accepts this residual risk and documents it. The numeric OOB at least slows the attack down and forces a visible inspection.
 - The user taps No because the codes really don't match (active MitM during pairing). DoD #3 mandates: (a) bond NOT persisted on the Kotlin side (`bondPersister` is never called), AND (b) BT bond is removed. Our test verifies *both*.
 
 **Success Signal:** On Yes, the screen shows `Bonded(peerName)`. On No, the screen shows `Failed(reason)` and the BT bond is removed.
@@ -119,7 +121,7 @@ A fourth, operational force: **this CI host has no Android SDK / no emulator**, 
                   │         │ oobCodeForBond(bondKey)        │
                   │         ▼                                │
                   │  ┌─────────────────────────┐             │
-                  │  │ OobConfirming(emoji)    │             │
+                  │  │ OobConfirming(code)    │             │
                   │  └────┬────────────┬───────┘             │
                   │       │            │                     │
                   │       │ tap Yes    │ tap No              │
@@ -172,7 +174,7 @@ Tested against API 34. The reflection is wrapped in `runCatching { ... }.getOrDe
 
 ### North Star Summary
 
-A first-time pairing takes Alex under 60 seconds end-to-end: tap CTA → pick peer → glance at 6-digit code → glance at 4-word OOB → tap Yes → see "Paired". On any mismatch, the bond is cleaned up on both sides with zero residual state — Alex can retry safely. The screen is the second-to-last step of SPEC §5.3 Phase 2 ("Pair"); the only thing after is `syauth list` showing the new peer on the desktop, which proves the same UniFFI surface drove both sides.
+A first-time pairing takes Alex under 60 seconds end-to-end: tap CTA → pick peer → glance at 6-digit code → glance at the numeric OOB → tap Yes → see "Paired". On any mismatch, the bond is cleaned up on both sides with zero residual state — Alex can retry safely. The screen is the second-to-last step of SPEC §5.3 Phase 2 ("Pair"); the only thing after is `syauth list` showing the new peer on the desktop, which proves the same UniFFI surface drove both sides.
 
 ## 3. UX Implementation and Assessment
 
@@ -211,7 +213,7 @@ A first-time pairing takes Alex under 60 seconds end-to-end: tap CTA → pick pe
 - [x] The state name + payload is the screen content; a screenshot is a state snapshot.
 
 ### Cross-Surface Consistency
-- [x] The 4-word OOB on the phone is byte-identical to the desktop's; pinned by `oob_byte_identical_to_cli_fixture` in syauth-mobile.
+- [x] The OOB code on the phone is byte-identical to the desktop's; pinned by `oob_code_is_byte_identical_to_cli_fixture` in syauth-mobile.
 
 ### Workflow Consistency
 - [x] Mirrors the prrr-android `ScanState`/`QRScanViewModel` idiom: sealed class state + StateFlow + UnconfinedTestDispatcher.
@@ -302,7 +304,7 @@ A first-time pairing takes Alex under 60 seconds end-to-end: tap CTA → pick pe
 **When** the rule composes.
 **Then** a node with testTag `pair.lesc.code` is displayed and contains the text "123456".
 
-### TC-11 (UI): oob_confirming_renders_4_emoji_words_and_yes_no_buttons
+### TC-11 (UI): oob_confirming_renders_the_numeric_code_and_yes_no_buttons
 
 **Given** PairingScreen rendered with state `OobConfirming(listOf("a", "b", "c", "d"))`.
 **When** the rule composes.

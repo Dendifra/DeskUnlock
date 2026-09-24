@@ -23,6 +23,8 @@
 pub mod bond;
 pub mod frame;
 pub mod mac;
+pub mod pair_recovery;
+pub mod pair_transaction;
 pub mod replay;
 pub mod secrets;
 pub mod sign;

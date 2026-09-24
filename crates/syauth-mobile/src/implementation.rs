@@ -23,8 +23,9 @@ use hkdf::Hkdf;
 use rand::{RngCore, rngs::OsRng};
 use sha2::Sha256;
 use syauth_core::{
-    BOND_KEY_BYTES, Frame, MAC_TAG_LEN, NONCE_LEN, SYAUTH_WIRE_VERSION_V1, Signature, SigningKey, VerifyingKey, compute_tag, sign_frame,
-    verify_frame, verify_tag,
+    BOND_KEY_BYTES, Frame, MAC_TAG_LEN, NONCE_LEN, SYAUTH_WIRE_VERSION_V1, Signature, SigningKey, VerifyingKey, bond::PUBKEY_LEN,
+    compute_tag, pair_transaction::{LocalEvent, Message, Operation, Role, StatusMessage, Transaction},
+    peer_id_from_pubkey as core_peer_id_from_pubkey, sign_frame, verify_frame, verify_tag,
 };
 use thiserror::Error;
 
@@ -66,14 +67,19 @@ pub const MOBILE_BOND_KEY_LEN: usize = BOND_KEY_BYTES;
 
 /// HKDF info string for the v1 OOB derivation. Byte-identical to
 /// `crates/syauth-cli/src/oob.rs::HKDF_INFO_OOB_V1` — the in-crate test
-/// `oob_byte_identical_to_cli_fixture` pins the produced word tuple for
+/// `oob_code_is_byte_identical_to_cli_fixture` pins the produced code for
 /// a fixed bond key so a regression in either place fails loudly.
 pub const HKDF_INFO_OOB_V1: &[u8] = b"syauth-oob-v1";
 
-/// Number of OOB words returned. Four bytes of HKDF output yield ~32 bits
-/// of confirmation entropy (256^4 ≈ 4.3 × 10^9), comfortably above the
-/// threshold for rubber-stamp resistance under UX time pressure.
-pub const OOB_WORD_COUNT: usize = 4;
+/// Digits in the displayed OOB code. Eight decimal digits ≈ 26.6 bits, the
+/// same order as the six-digit Bluetooth numeric comparison it complements.
+pub const OOB_CODE_DIGITS: usize = 8;
+
+/// Size of the displayed code space (`10^OOB_CODE_DIGITS`).
+pub const OOB_CODE_SPACE: u32 = 100_000_000;
+
+/// Bytes of HKDF output consumed by the code.
+const OOB_CODE_BYTES: usize = 4;
 
 /// Length in bytes of a v1 Ed25519 signature (`ed25519_dalek::SIGNATURE_LENGTH`).
 pub const ED25519_SIGNATURE_LEN: usize = 64;
@@ -411,42 +417,39 @@ pub fn build_response_frame(
 // 4. oob_code_for_bond
 // ---------------------------------------------------------------------------
 
-/// Derive the 4-word emoji-prefixed OOB code for `bond_key`.
+/// Derive the OOB confirmation code for `bond_key`.
 ///
-/// Mirrors `crates/syauth-cli/src/oob.rs::oob_code_for_bond` byte for
-/// byte:
+/// Mirrors `crates/syauth-cli/src/oob.rs::oob_code_for_bond` exactly:
 ///
 /// ```text
-/// HKDF<Sha256>(salt=None, ikm=bond_key, info=HKDF_INFO_OOB_V1)[0..OOB_WORD_COUNT]
+/// HKDF<Sha256>(salt=None, ikm=bond_key, info=HKDF_INFO_OOB_V1)[0..4] → 8 digits
 /// ```
 ///
-/// Each of the four output bytes indexes into `OOB_WORDS` (a 256-entry
-/// table of emoji-prefixed nouns, duplicated from
-/// `crates/syauth-cli/src/oob.rs::OOB_WORDS` because the CLI crate pulls
-/// in `bluer`, `clap`, and other deps that would bloat the AAR — the
-/// `oob_byte_identical_to_cli_fixture` test pins a known key→words
-/// tuple to catch any future drift).
+/// The desktop renders the same number, so the operator compares one value
+/// across the two screens. The derivation is duplicated here because the CLI
+/// crate pulls in `bluer`, `clap` and other deps that would bloat the AAR —
+/// the `oob_code_is_byte_identical_to_cli_fixture` test pins a known
+/// key→code pair to catch any future drift.
 ///
 /// # Errors
 ///
 /// - [`MobileError::InvalidKey`] if `bond_key.len() != MOBILE_BOND_KEY_LEN`.
-pub fn oob_code_for_bond(bond_key: Vec<u8>) -> Result<Vec<String>, MobileError> {
+pub fn oob_code_for_bond(bond_key: Vec<u8>) -> Result<String, MobileError> {
     let bond_key_arr = bond_key_array(&bond_key)?;
     let hk = Hkdf::<Sha256>::new(None, &bond_key_arr);
-    let mut out = [0u8; OOB_WORD_COUNT];
+    let mut out = [0u8; OOB_CODE_BYTES];
     // `expand` only errors when the requested output exceeds 255*32 = 8160
-    // bytes; OOB_WORD_COUNT (4) is far below that bound so this is
+    // bytes; OOB_CODE_BYTES (4) is far below that bound so this is
     // unreachable. We still surface the error rather than `unwrap` per the
     // AGENTS.md non-negotiable.
     hk.expand(HKDF_INFO_OOB_V1, &mut out).map_err(|_| MobileError::InvalidKey {
         reason: "hkdf expand failed (unreachable in production)".to_owned(),
     })?;
-    Ok(vec![
-        OOB_WORDS[out[0] as usize].to_owned(),
-        OOB_WORDS[out[1] as usize].to_owned(),
-        OOB_WORDS[out[2] as usize].to_owned(),
-        OOB_WORDS[out[3] as usize].to_owned(),
-    ])
+    Ok(format!(
+        "{:0width$}",
+        u32::from_be_bytes(out) % OOB_CODE_SPACE,
+        width = OOB_CODE_DIGITS
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -491,6 +494,26 @@ pub fn session_uuid_for_bond(bond_key: Vec<u8>, minute: i64) -> Result<Vec<u8>, 
 }
 
 // ---------------------------------------------------------------------------
+// 6. peer_id_from_pubkey
+// ---------------------------------------------------------------------------
+
+/// Derive the desktop's 32-hex-character peer id for a phone Ed25519
+/// public key. Mirrors `syauth_core::peer_id_from_pubkey` byte-for-
+/// byte; the phone calls it to name itself in day-2 frames (the
+/// `Revoke` op) with the same identity the desktop's bond store uses.
+///
+/// # Errors
+///
+/// - [`MobileError::InvalidKey`] if `pubkey.len() != PUBKEY_LEN`.
+pub fn peer_id_from_pubkey(pubkey: Vec<u8>) -> Result<String, MobileError> {
+    let received_len = pubkey.len();
+    let arr: [u8; PUBKEY_LEN] = pubkey.try_into().map_err(|_| MobileError::InvalidKey {
+        reason: format!("pubkey must be {PUBKEY_LEN} bytes, got {received_len}"),
+    })?;
+    Ok(core_peer_id_from_pubkey(&arr))
+}
+
+// ---------------------------------------------------------------------------
 // Helpers.
 // ---------------------------------------------------------------------------
 
@@ -512,6 +535,116 @@ fn bond_key_array(bond_key: &[u8]) -> Result<[u8; MOBILE_BOND_KEY_LEN], MobileEr
 /// anchor for the contract "the returned bytes are an Ed25519 signature
 /// you can give to `Signature::from_bytes`".
 #[doc(hidden)]
+/// Create secret-free Rust-authoritative transaction metadata.
+pub fn pair_transaction_create(transaction_id: Vec<u8>, role: u8) -> Result<Vec<u8>, MobileError> {
+    if transaction_id.len() != 16 {
+        return Err(MobileError::InvalidKey {
+            reason: "transaction id must be 16 bytes".to_owned(),
+        });
+    }
+    let role = match role {
+        0 => Role::Coordinator,
+        1 => Role::Participant,
+        _ => {
+            return Err(MobileError::InvalidKey {
+                reason: "invalid transaction role".to_owned(),
+            });
+        }
+    };
+    let mut id = [0; 16];
+    id.copy_from_slice(&transaction_id);
+    Ok(Transaction::new(id, role).serialize())
+}
+
+/// Apply one local transaction fact using the Rust state machine.
+pub fn pair_transaction_apply_local(state: Vec<u8>, event: u8) -> Result<Vec<u8>, MobileError> {
+    let mut tx = Transaction::restore(&state).map_err(|e| MobileError::BadFrame { reason: e.to_string() })?;
+    let event = match event {
+        0 => LocalEvent::Capability,
+        1 => LocalEvent::VerifiedExchange,
+        2 => LocalEvent::Confirm,
+        3 => LocalEvent::Prepared,
+        4 => LocalEvent::Commit,
+        5 => LocalEvent::CommitAck,
+        6 => LocalEvent::Committed,
+        7 => LocalEvent::Disconnected,
+        8 => LocalEvent::Abort(Operation::Reject),
+        9 => LocalEvent::Abort(Operation::Cancel),
+        10 => LocalEvent::Abort(Operation::Timeout),
+        11 => LocalEvent::Abort(Operation::Error),
+        _ => {
+            return Err(MobileError::BadFrame {
+                reason: "invalid local transaction event".to_owned(),
+            });
+        }
+    };
+    tx.local(event).map_err(|e| MobileError::BadFrame { reason: e.to_string() })?;
+    Ok(tx.serialize())
+}
+
+/// Apply one authenticated remote V2 message using the Rust state machine.
+pub fn pair_transaction_apply_remote(state: Vec<u8>, message: Vec<u8>) -> Result<Vec<u8>, MobileError> {
+    let mut tx = Transaction::restore(&state).map_err(|e| MobileError::BadFrame { reason: e.to_string() })?;
+    let message = Message::decode(&message).map_err(|e| MobileError::BadFrame { reason: e.to_string() })?;
+    tx.remote(message).map_err(|e| MobileError::BadFrame { reason: e.to_string() })?;
+    Ok(tx.serialize())
+}
+
+/// Validate and return secret-free transaction metadata for durable recovery.
+pub fn pair_transaction_restore(state: Vec<u8>) -> Result<Vec<u8>, MobileError> {
+    Ok(Transaction::restore(&state)
+        .map_err(|e| MobileError::BadFrame { reason: e.to_string() })?
+        .serialize())
+}
+
+/// Build a nonce-bound authenticated status query.
+pub fn pair_transaction_status_query(transaction_id: Vec<u8>, nonce: i64) -> Result<Vec<u8>, MobileError> {
+    if transaction_id.len() != 16 || nonce < 0 {
+        return Err(MobileError::InvalidKey {
+            reason: "invalid status query".to_owned(),
+        });
+    }
+    let mut id = [0; 16];
+    id.copy_from_slice(&transaction_id);
+    Ok(StatusMessage::query(id, nonce as u64).encode().to_vec())
+}
+
+/// Apply one nonce-bound status response using Rust's state machine.
+pub fn pair_transaction_apply_status(state: Vec<u8>, response: Vec<u8>, nonce: i64) -> Result<Vec<u8>, MobileError> {
+    if nonce < 0 {
+        return Err(MobileError::InvalidKey {
+            reason: "invalid status nonce".to_owned(),
+        });
+    }
+    let mut tx = Transaction::restore(&state).map_err(|e| MobileError::BadFrame { reason: e.to_string() })?;
+    let response = StatusMessage::decode(&response).map_err(|e| MobileError::BadFrame { reason: e.to_string() })?;
+    if response.state.is_none() {
+        return Err(MobileError::BadFrame {
+            reason: "status query is not a response".to_owned(),
+        });
+    }
+    tx.apply_status_response(response, nonce as u64)
+        .map_err(|e| MobileError::BadFrame { reason: e.to_string() })?;
+    Ok(tx.serialize())
+}
+
+/// Return the stable phase code from Rust's transaction state.
+pub fn pair_transaction_phase(state: Vec<u8>) -> Result<u8, MobileError> {
+    let tx = Transaction::restore(&state).map_err(|e| MobileError::BadFrame { reason: e.to_string() })?;
+    Ok(match tx.phase() {
+        syauth_core::pair_transaction::Phase::Negotiating => 0,
+        syauth_core::pair_transaction::Phase::OobPending => 1,
+        syauth_core::pair_transaction::Phase::Preparing => 2,
+        syauth_core::pair_transaction::Phase::Prepared => 3,
+        syauth_core::pair_transaction::Phase::CommitPending => 4,
+        syauth_core::pair_transaction::Phase::Committed => 5,
+        syauth_core::pair_transaction::Phase::Bonded => 6,
+        syauth_core::pair_transaction::Phase::Aborted(_) => 7,
+        syauth_core::pair_transaction::Phase::Uncertain => 8,
+    })
+}
+
+/// Test helper that reconstructs a signature from fixed-size bytes.
 pub fn _signature_from_bytes(bytes: &[u8; ED25519_SIGNATURE_LEN]) -> Signature {
     Signature::from_bytes(bytes)
 }
@@ -537,277 +670,6 @@ pub fn _verify_frame_for_test(pubkey: &VerifyingKey, frame: &Frame, sig: &Signat
 }
 
 // ---------------------------------------------------------------------------
-// OOB_WORDS — 256-entry table, BYTE-IDENTICAL to
-// `crates/syauth-cli/src/oob.rs::OOB_WORDS`. Duplicated to keep the
-// `syauth-mobile` crate's dep tree small (AAR size) — the cross-crate
-// determinism is pinned by the `oob_byte_identical_to_cli_fixture` test
-// below.
-// ---------------------------------------------------------------------------
-
-/// 256-entry table of short emoji-prefixed English nouns. One entry per
-/// byte value 0x00..=0xFF, indexed by the corresponding byte of the
-/// HKDF expand output. Byte-identical to `OOB_WORDS` in
-/// `crates/syauth-cli/src/oob.rs` — the in-crate fixture
-/// `oob_byte_identical_to_cli_fixture` pins the produced word tuple for
-/// a fixed bond key so a drift in either place fails loudly.
-pub static OOB_WORDS: [&str; 256] = [
-    "\u{1F34E} apple",
-    "\u{1F41D} bee",
-    "\u{1F3AF} dart",
-    "\u{1F30D} earth",
-    "\u{1F525} fire",
-    "\u{1F347} grape",
-    "\u{1F3E0} home",
-    "\u{1F9CA} ice",
-    "\u{1FA80} jojo",
-    "\u{1FA81} kite",
-    "\u{1F981} lion",
-    "\u{1F319} moon",
-    "\u{1F330} nut",
-    "\u{1F419} octo",
-    "\u{1F95E} pancake",
-    "\u{1FAA8} quartz",
-    "\u{1F339} rose",
-    "\u{2B50} star",
-    "\u{1F333} tree",
-    "\u{2602}\u{FE0F} umbrella",
-    "\u{1F3BB} violin",
-    "\u{1F30A} wave",
-    "\u{1F993} zebra",
-    "\u{1F34C} banana",
-    "\u{1F335} cactus",
-    "\u{1F42C} dolphin",
-    "\u{1F33D} ear",
-    "\u{1F342} fern",
-    "\u{1F381} gift",
-    "\u{1FA96} helmet",
-    "\u{1F994} iguana",
-    "\u{1F48E} jewel",
-    "\u{1F511} key",
-    "\u{1F34B} lemon",
-    "\u{1F96D} mango",
-    "\u{1F32E} taco",
-    "\u{1F989} owl",
-    "\u{1F967} pie",
-    "\u{1F451} crown",
-    "\u{1F407} rabbit",
-    "\u{1F9C2} salt",
-    "\u{1F345} tomato",
-    "\u{1F984} unicorn",
-    "\u{1F690} van",
-    "\u{1F337} wattle",
-    "\u{1F3B7} sax",
-    "\u{1F36A} cookie",
-    "\u{1F3A8} art",
-    "\u{1F98B} butterfly",
-    "\u{1F408} cat",
-    "\u{1F436} dog",
-    "\u{1F418} elephant",
-    "\u{1F98A} fox",
-    "\u{1F410} goat",
-    "\u{1F439} hamster",
-    "\u{1F994} ivy",
-    "\u{1FABC} jelly",
-    "\u{1F428} koala",
-    "\u{1F999} llama",
-    "\u{1F42D} mouse",
-    "\u{1F9A2} swan",
-    "\u{1F402} ox",
-    "\u{1F427} penguin",
-    "\u{1F424} chick",
-    "\u{1F426} robin",
-    "\u{1F40D} snake",
-    "\u{1F422} turtle",
-    "\u{1F9A6} otter",
-    "\u{1F405} tiger",
-    "\u{1F985} eagle",
-    "\u{1F40B} whale",
-    "\u{1F988} shark",
-    "\u{1F992} giraffe",
-    "\u{1F40A} croc",
-    "\u{1F421} puffer",
-    "\u{1F99C} parrot",
-    "\u{1F413} hen",
-    "\u{1F99B} hippo",
-    "\u{1F40E} horse",
-    "\u{1F403} buffalo",
-    "\u{1F33B} sunflower",
-    "\u{1F344} mushroom",
-    "\u{1F336}\u{FE0F} chili",
-    "\u{1F951} avocado",
-    "\u{1F966} broccoli",
-    "\u{1F952} cucumber",
-    "\u{1F33D} corn",
-    "\u{1F954} potato",
-    "\u{1F346} eggplant",
-    "\u{1F955} carrot",
-    "\u{1F330} acorn",
-    "\u{1F965} coconut",
-    "\u{1F352} cherry",
-    "\u{1F353} strawberry",
-    "\u{1F351} peach",
-    "\u{1F350} pear",
-    "\u{1F34A} orange",
-    "\u{1F349} melon",
-    "\u{1F95D} kiwi",
-    "\u{1F34D} pineapple",
-    "\u{1F96D} papaya",
-    "\u{1FAD0} berry",
-    "\u{1F955} root",
-    "\u{1F96F} bagel",
-    "\u{1F956} baguette",
-    "\u{1F968} pretzel",
-    "\u{1F950} croissant",
-    "\u{1F35E} bread",
-    "\u{1F9C0} cheese",
-    "\u{1F95A} egg",
-    "\u{1F357} drumstick",
-    "\u{1F969} steak",
-    "\u{1F32D} hotdog",
-    "\u{1F354} burger",
-    "\u{1F35F} fries",
-    "\u{1F355} pizza",
-    "\u{1F96A} sub",
-    "\u{1F32F} wrap",
-    "\u{1F959} falafel",
-    "\u{1F363} sushi",
-    "\u{1F366} sundae",
-    "\u{1F367} sorbet",
-    "\u{1F368} gelato",
-    "\u{1F36B} choco",
-    "\u{1F36C} candy",
-    "\u{1F36E} flan",
-    "\u{1F361} dango",
-    "\u{1F9C1} cupcake",
-    "\u{2615} coffee",
-    "\u{1F375} tea",
-    "\u{1F376} sake",
-    "\u{1F37E} bubbly",
-    "\u{1F377} wine",
-    "\u{1F378} martini",
-    "\u{1F379} mojito",
-    "\u{1F37A} beer",
-    "\u{1FA90} saturn",
-    "\u{1F31F} nova",
-    "\u{1FAA8} boulder",
-    "\u{1F3D4}\u{FE0F} peak",
-    "\u{1F3D5}\u{FE0F} camp",
-    "\u{1F3D6}\u{FE0F} beach",
-    "\u{1F3DC}\u{FE0F} dune",
-    "\u{1F3DD}\u{FE0F} atoll",
-    "\u{26F0}\u{FE0F} mount",
-    "\u{1F30B} volcano",
-    "\u{1F6E4}\u{FE0F} rail",
-    "\u{1F6E3}\u{FE0F} road",
-    "\u{1F309} bridge",
-    "\u{1F3DE}\u{FE0F} park",
-    "\u{1F3DF}\u{FE0F} stadium",
-    "\u{1F3DB}\u{FE0F} forum",
-    "\u{1F3D7}\u{FE0F} crane",
-    "\u{1F9F1} brick",
-    "\u{1F3D8}\u{FE0F} homes",
-    "\u{1F3DA}\u{FE0F} shack",
-    "\u{1F3E4} post",
-    "\u{1F3E5} clinic",
-    "\u{1F3E6} bank",
-    "\u{1F3E8} hotel",
-    "\u{1F3E9} inn",
-    "\u{1F3EA} store",
-    "\u{1F3EB} school",
-    "\u{1F3EC} mall",
-    "\u{1F3ED} plant",
-    "\u{1F3EF} keep",
-    "\u{1F3F0} castle",
-    "\u{1F5FC} tower",
-    "\u{1F5FD} statue",
-    "\u{26E9}\u{FE0F} shrine",
-    "\u{1F54C} dome",
-    "\u{1F54D} hall",
-    "\u{26EA} chapel",
-    "\u{1F6D5} temple",
-    "\u{1F54B} cube",
-    "\u{26F2} fountain",
-    "\u{26FA} tent",
-    "\u{1F301} mist",
-    "\u{1F303} night",
-    "\u{1F304} dawn",
-    "\u{1F305} sunrise",
-    "\u{1F306} dusk",
-    "\u{1F307} sunset",
-    "\u{1F30C} galaxy",
-    "\u{1F3A0} carousel",
-    "\u{1F3A1} wheel",
-    "\u{1F3A2} coaster",
-    "\u{1F488} barber",
-    "\u{1F3AA} circus",
-    "\u{1F9F3} trunk",
-    "\u{1F680} rocket",
-    "\u{1F6F8} saucer",
-    "\u{2708}\u{FE0F} jet",
-    "\u{1F681} chopper",
-    "\u{1F6F6} canoe",
-    "\u{26F5} yacht",
-    "\u{1F6A4} boat",
-    "\u{1F6F3}\u{FE0F} liner",
-    "\u{26F4}\u{FE0F} ferry",
-    "\u{1F6E5}\u{FE0F} cruiser",
-    "\u{1F682} train",
-    "\u{1F683} car",
-    "\u{1F684} bullet",
-    "\u{1F685} tgv",
-    "\u{1F686} metro",
-    "\u{1F687} subway",
-    "\u{1F688} light",
-    "\u{1F689} station",
-    "\u{1F68A} tram",
-    "\u{1F69D} mono",
-    "\u{1F69E} mountain",
-    "\u{1F68B} cable",
-    "\u{1F68C} bus",
-    "\u{1F68D} coach",
-    "\u{1F68E} trolley",
-    "\u{1F68F} stop",
-    "\u{1F690} mini",
-    "\u{1F691} amb",
-    "\u{1F692} fire",
-    "\u{1F693} cop",
-    "\u{1F694} cruiser",
-    "\u{1F695} taxi",
-    "\u{1F696} cab",
-    "\u{1F697} sedan",
-    "\u{1F698} motor",
-    "\u{1F699} suv",
-    "\u{1F69A} truck",
-    "\u{1F69B} rig",
-    "\u{1F69C} tractor",
-    "\u{1F3CD}\u{FE0F} bike",
-    "\u{1F6F5} scoot",
-    "\u{1F6B2} cycle",
-    "\u{1F6F4} kick",
-    "\u{1F6F9} board",
-    "\u{1F6FC} skate",
-    "\u{1F9BD} wheel",
-    "\u{1F9BC} chair",
-    "\u{1F6A8} siren",
-    "\u{1F6A7} cone",
-    "\u{1F6A5} light",
-    "\u{1FA9C} ladder",
-    "\u{1FA9E} mirror",
-    "\u{1FA9F} window",
-    "\u{1FAA0} plunger",
-    "\u{1FAA3} bucket",
-    "\u{1FAA4} trap",
-    "\u{1FAA5} brush",
-    "\u{1FAA6} stone",
-    "\u{1F9F4} lotion",
-    "\u{1F9F5} thread",
-    "\u{1F9F6} yarn",
-    "\u{1F9F7} pin",
-    "\u{1F9F8} teddy",
-    "\u{1F9F9} broom",
-    "\u{1F9FA} basket",
-    "\u{1F9FC} soap",
-];
 
 // ---------------------------------------------------------------------------
 // Tests — at least one happy-path and one negative-path per UDL function.
@@ -1098,32 +960,20 @@ mod tests {
         let a = oob_code_for_bond(FIXTURE_BOND_KEY.to_vec()).expect("oob");
         let b = oob_code_for_bond(FIXTURE_BOND_KEY.to_vec()).expect("oob");
         assert_eq!(a, b);
-        assert_eq!(a.len(), OOB_WORD_COUNT);
+        assert_eq!(OOB_CODE_DIGITS, a.len());
     }
 
     #[test]
-    fn oob_word_table_has_exactly_256_entries() {
-        assert_eq!(OOB_WORDS.len(), 256);
-        for (i, w) in OOB_WORDS.iter().enumerate() {
-            assert!(!w.is_empty(), "OOB_WORDS[{i}] is empty");
-        }
-    }
-
-    #[test]
-    fn oob_byte_identical_to_cli_fixture() {
-        // The HKDF expand of FIXTURE_BOND_KEY against info="syauth-oob-v1"
-        // is byte-deterministic. We pin the first four output bytes (the
-        // indices into OOB_WORDS) so a regression in either the
-        // syauth-mobile copy of OOB_WORDS or the HKDF info string fails
-        // loudly.
-        //
-        // The actual word values are derived dynamically by re-running
-        // HKDF (the test is self-checking — same inputs, same outputs,
-        // every CI run).
+    fn oob_code_is_byte_identical_to_cli_fixture() {
+        // The HKDF expand of FIXTURE_BOND_KEY against info="syauth-oob-v1" is
+        // byte-deterministic, and both crates render those four bytes as an
+        // 8-digit decimal. Recomputing the expected code here pins the
+        // rendering: a regression in either the mobile copy or the HKDF info
+        // string fails loudly.
         let hk = Hkdf::<Sha256>::new(None, &FIXTURE_BOND_KEY);
-        let mut indices = [0u8; OOB_WORD_COUNT];
-        hk.expand(HKDF_INFO_OOB_V1, &mut indices).expect("hkdf");
-        let expected: Vec<String> = indices.iter().map(|&i| OOB_WORDS[i as usize].to_owned()).collect();
+        let mut out = [0u8; OOB_CODE_BYTES];
+        hk.expand(HKDF_INFO_OOB_V1, &mut out).expect("hkdf");
+        let expected = format!("{:0width$}", u32::from_be_bytes(out) % OOB_CODE_SPACE, width = OOB_CODE_DIGITS);
         let got = oob_code_for_bond(FIXTURE_BOND_KEY.to_vec()).expect("oob");
         assert_eq!(got, expected);
     }
@@ -1196,6 +1046,31 @@ mod tests {
         let mut expected = [0u8; SESSION_UUID_BYTES_MOBILE];
         hk.expand(&info, &mut expected).expect("hkdf");
         assert_eq!(via_mobile, expected);
+    }
+
+    // ----- peer_id_from_pubkey -----
+
+    #[test]
+    fn peer_id_from_pubkey_matches_core_for_pinned_pubkey() {
+        // Pin byte-identity with `syauth_core::peer_id_from_pubkey`: the
+        // phone names itself in day-2 frames with the same 32-hex id the
+        // desktop's bond store uses, so a drift here breaks revocation.
+        let pubkey = [0x42u8; PUBKEY_LEN];
+        let via_mobile = peer_id_from_pubkey(pubkey.to_vec()).expect("peer id");
+        let expected = core_peer_id_from_pubkey(&pubkey);
+        assert_eq!(via_mobile, expected);
+        assert_eq!(expected.len(), 32, "32 hex characters on the wire");
+        assert!(expected.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn peer_id_from_pubkey_rejects_bad_length() {
+        let short = vec![0u8; PUBKEY_LEN - 1];
+        let err = peer_id_from_pubkey(short).expect_err("short pubkey rejected");
+        match err {
+            MobileError::InvalidKey { reason } => assert!(reason.contains(&PUBKEY_LEN.to_string())),
+            other => panic!("unexpected variant: {other:?}"),
+        }
     }
 
     #[test]

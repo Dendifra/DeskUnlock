@@ -48,12 +48,20 @@ use bluer::{
     },
 };
 use futures::{FutureExt, StreamExt};
-use syauth_core::{SigningKey, bond_key_from_pubkeys};
+use syauth_core::{
+    SigningKey, bond_key_from_pubkeys,
+    pair_transaction::{LocalEvent, Message, Operation, Role, Transaction},
+};
 use syauth_transport::{
-    ADVERTISE_LOCAL_NAME, PAIR_PUBKEY_LEN, SYAUTH_PAIR_HOST_PUBKEY_CHAR_UUID, SYAUTH_PAIR_PHONE_PUBKEY_CHAR_UUID, SYAUTH_PAIR_SERVICE_UUID,
+    ADVERTISE_LOCAL_NAME, PAIR_PUBKEY_LEN, SYAUTH_PAIR_HOST_NAME_V1_CHAR_UUID, SYAUTH_PAIR_HOST_PUBKEY_CHAR_UUID,
+    SYAUTH_PAIR_PHONE_PUBKEY_CHAR_UUID, SYAUTH_PAIR_SERVICE_UUID, SYAUTH_PAIR_V2_CONTROL_CHAR_UUID, SYAUTH_PAIR_V2_STATUS_CHAR_UUID,
     session_uuid_for,
 };
-use tokio::{io::AsyncReadExt, time::timeout as tokio_timeout};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{UnixListener, UnixStream},
+    time::timeout as tokio_timeout,
+};
 
 use crate::pair::{AdapterInfo, LescOutcome, PairBackend, PairCandidate, PairError};
 
@@ -73,19 +81,28 @@ pub const PAIR_ADVERTISE_ACCEPT_WINDOW: Duration = Duration::from_secs(300);
 /// deriving the pair-mode session UUID.
 const SECONDS_PER_MINUTE: i64 = 60;
 
-/// Synthetic peer name surfaced by [`BluerPairBackend::scan_peers`]
-/// once the phone has connected to the advertised pair service. The
-/// upstream `PairBackend` contract returns a `Vec<PairCandidate>` from
-/// `scan_peers`; the advertise-based backend yields exactly one
-/// candidate representing the connected phone.
-pub const PAIR_CONNECTED_PEER_NAME: &str = "phone (LESC peer)";
+/// Fallback display label when the actual connected peer has no Bluetooth name.
+pub const PAIR_CONNECTED_PEER_NAME: &str = "Telefono Android";
 
-/// Synthetic peer address surfaced alongside [`PAIR_CONNECTED_PEER_NAME`].
-/// The advertise-based backend does not know the phone's MAC at the
-/// time it returns the candidate (the phone's address is observed
-/// later via the `Device` table); the constant is a placeholder the
-/// CLI prints verbatim.
-pub const PAIR_CONNECTED_PEER_ADDRESS: &str = "(advertised)";
+/// Convert an untrusted Bluetooth label to a single TSV-safe display name.
+/// Names are presentation only; the GATT request supplies the device address
+/// and the existing public-key derivation supplies the application peer_id.
+fn friendly_peer_name(name: &str, address: &str) -> String {
+    let display: String = name.chars().take(128).map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let display = display.trim();
+    if display.is_empty() || display.eq_ignore_ascii_case(address) {
+        PAIR_CONNECTED_PEER_NAME.to_owned()
+    } else {
+        display.to_owned()
+    }
+}
+
+/// Bounded presentation metadata; truncation never splits a UTF-8 code point.
+/// Shared with the daemon-owned pair service so desktop and phone agree on
+/// the authenticated identity payload.
+fn host_name_payload(name: &str) -> Vec<u8> {
+    syauth_transport::host_name_payload(name)
+}
 
 /// Operator-supplied y/N confirmation callback. Returns `true` to accept
 /// the 6-digit numeric comparison code, `false` to reject (which
@@ -124,6 +141,14 @@ pub struct BluerPairBackend {
     /// LE advertisement handle registered in `scan_peers` and dropped
     /// at session end.
     adv_handle: Arc<Mutex<Option<bluer::adv::AdvertisementHandle>>>,
+    /// V2 control writes received from the authenticated Android peer.
+    protocol_inbox: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// Bluetooth address bound by the authenticated phone-pubkey write.
+    protocol_peer_address: Arc<Mutex<Option<String>>>,
+    /// Latest V2 status message exposed by the authenticated GATT read.
+    protocol_status: Arc<Mutex<Vec<u8>>>,
+    transaction_id: Arc<Mutex<Option<[u8; 16]>>>,
+    protocol_transaction: Arc<Mutex<Option<Transaction>>>,
 }
 
 impl BluerPairBackend {
@@ -138,6 +163,11 @@ impl BluerPairBackend {
             phone_pubkey_mailbox: Arc::new(Mutex::new(None)),
             app_handle: Arc::new(Mutex::new(None)),
             adv_handle: Arc::new(Mutex::new(None)),
+            protocol_inbox: Arc::new(Mutex::new(Vec::new())),
+            protocol_peer_address: Arc::new(Mutex::new(None)),
+            protocol_status: Arc::new(Mutex::new(Vec::new())),
+            transaction_id: Arc::new(Mutex::new(None)),
+            protocol_transaction: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -173,10 +203,8 @@ impl BluerPairBackend {
             // returns and the previous default re-takes the slot.
             request_default: true,
             request_confirmation: Some(Box::new(move |RequestConfirmation { passkey, .. }: RequestConfirmation| {
-                eprintln!("DEBUG AGENT: RequestConfirmation received passkey={passkey:06}");
                 let confirm = Arc::clone(&confirm);
                 Box::pin(async move {
-                    eprintln!("DEBUG AGENT: async future entered");
                     // The operator-supplied handler is synchronous and
                     // may block (the stdio prompt reads `y/N` from
                     // stdin; even the `--yes` auto-accept handler
@@ -189,19 +217,13 @@ impl BluerPairBackend {
                     // onto a blocking pool via `spawn_blocking` so
                     // the poller stays free.
                     let accepted = tokio::task::spawn_blocking(move || {
-                        eprintln!("DEBUG AGENT: spawn_blocking entered");
-                        eprintln!("DEBUG AGENT: before confirm.lock()");
                         let guard = confirm.lock().ok()?;
-                        eprintln!("DEBUG AGENT: after confirm.lock()");
-                        let result = guard.as_ref().map(|h| h(passkey));
-                        eprintln!("DEBUG AGENT: handler returned");
-                        result
+                        guard.as_ref().map(|h| h(passkey))
                     })
                     .await
                     .ok()
                     .flatten()
                     .unwrap_or(false);
-                    eprintln!("DEBUG AGENT: confirmation decision accepted={accepted}");
                     if accepted { Ok(()) } else { Err(ReqError::Rejected) }
                 })
             })),
@@ -235,15 +257,36 @@ impl BluerPairBackend {
     pub(crate) fn build_pair_services(
         host_pubkey: [u8; PAIR_PUBKEY_LEN],
         char_handle: bluer::gatt::local::CharacteristicControlHandle,
+        protocol_handle: bluer::gatt::local::CharacteristicControlHandle,
+        host_name: &str,
+        protocol_status: Arc<Mutex<Vec<u8>>>,
     ) -> Vec<Service> {
+        let host_name = host_name_payload(host_name);
         vec![Service {
             uuid: SYAUTH_PAIR_SERVICE_UUID,
             primary: true,
             characteristics: vec![
                 Characteristic {
+                    uuid: SYAUTH_PAIR_HOST_NAME_V1_CHAR_UUID,
+                    read: Some(CharacteristicRead {
+                        read: true,
+                        encrypt_authenticated_read: true,
+                        fun: Box::new(move |request| {
+                            let result = host_name
+                                .get(usize::from(request.offset)..)
+                                .map(<[u8]>::to_vec)
+                                .ok_or(bluer::gatt::local::ReqError::InvalidOffset);
+                            async move { result }.boxed()
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                Characteristic {
                     uuid: SYAUTH_PAIR_HOST_PUBKEY_CHAR_UUID,
                     read: Some(CharacteristicRead {
                         read: true,
+                        encrypt_authenticated_read: true,
                         fun: Box::new(move |_| {
                             let bytes = host_pubkey.to_vec();
                             async move { Ok(bytes) }.boxed()
@@ -253,10 +296,39 @@ impl BluerPairBackend {
                     ..Default::default()
                 },
                 Characteristic {
+                    uuid: SYAUTH_PAIR_V2_STATUS_CHAR_UUID,
+                    read: Some(CharacteristicRead {
+                        read: true,
+                        encrypt_authenticated_read: true,
+                        fun: Box::new(move |request| {
+                            let bytes = protocol_status
+                                .lock()
+                                .map(|status| status.get(usize::from(request.offset)..).unwrap_or_default().to_vec())
+                                .unwrap_or_default();
+                            async move { Ok(bytes) }.boxed()
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                Characteristic {
+                    uuid: SYAUTH_PAIR_V2_CONTROL_CHAR_UUID,
+                    write: Some(CharacteristicWrite {
+                        write: true,
+                        write_without_response: true,
+                        encrypt_authenticated_write: true,
+                        method: CharacteristicWriteMethod::Io,
+                        ..Default::default()
+                    }),
+                    control_handle: protocol_handle,
+                    ..Default::default()
+                },
+                Characteristic {
                     uuid: SYAUTH_PAIR_PHONE_PUBKEY_CHAR_UUID,
                     write: Some(CharacteristicWrite {
                         write: true,
                         write_without_response: true,
+                        encrypt_authenticated_write: true,
                         method: CharacteristicWriteMethod::Io,
                         ..Default::default()
                     }),
@@ -284,8 +356,174 @@ impl BluerPairBackend {
     }
 }
 
+impl BluerPairBackend {
+    fn publish_protocol(&self, message: Message) -> Result<(), PairError> {
+        let mut status = self.protocol_status.lock().map_err(|_| PairError::Backend {
+            reason: "pair status mailbox poisoned".to_owned(),
+        })?;
+        *status = message.encode().to_vec();
+        Ok(())
+    }
+
+    fn publish_status(&self, transaction: [u8; 16]) -> Result<(), PairError> {
+        let state = self
+            .protocol_transaction
+            .lock()
+            .map_err(|_| PairError::Backend {
+                reason: "pair transaction state poisoned".to_owned(),
+            })?
+            .as_ref()
+            .map(Transaction::status)
+            .unwrap_or(syauth_core::pair_transaction::StatusState::Unknown);
+        let response = syauth_core::pair_transaction::StatusMessage::response(transaction, 0, state).encode();
+        *self.protocol_status.lock().map_err(|_| PairError::Backend {
+            reason: "pair status mailbox poisoned".to_owned(),
+        })? = response.to_vec();
+        Ok(())
+    }
+
+    fn take_protocol(&self, transaction: [u8; 16]) -> Result<Option<Operation>, PairError> {
+        let mut inbox = self.protocol_inbox.lock().map_err(|_| PairError::Backend {
+            reason: "pair control mailbox poisoned".to_owned(),
+        })?;
+        let Some(index) = inbox
+            .iter()
+            .position(|bytes| Message::decode(bytes).map(|m| m.transaction == transaction).unwrap_or(false))
+        else {
+            // A valid message for another transaction is never accepted.
+            return Ok(None);
+        };
+        let bytes = inbox.remove(index);
+        Ok(Message::decode(&bytes).ok().map(|message| message.operation))
+    }
+
+    async fn wait_protocol(&self, transaction: [u8; 16], wanted: Operation) -> Result<(), PairError> {
+        let result = tokio_timeout(PAIR_ADVERTISE_ACCEPT_WINDOW, async {
+            loop {
+                if let Some(operation) = self.take_protocol(transaction)? {
+                    if operation == Operation::StatusQuery {
+                        // The query is accepted only from the already-bound
+                        // authenticated GATT peer. A response is a snapshot,
+                        // never a commit decision.
+                        self.publish_status(transaction)?;
+                        continue;
+                    }
+                    if operation == wanted {
+                        return Ok(());
+                    }
+                    if matches!(
+                        operation,
+                        Operation::Reject | Operation::Cancel | Operation::Timeout | Operation::Error
+                    ) {
+                        let _ = self.apply_remote(transaction, operation);
+                        return Err(PairError::RemoteAbort);
+                    }
+                    // Duplicate/replayed or out-of-order messages do not
+                    // advance the transaction and remain a protocol error.
+                    return Err(PairError::Backend {
+                        reason: "invalid pairing transaction message".to_owned(),
+                    });
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        match result {
+            Ok(result) => result,
+            Err(_) => {
+                let _ = self.apply_local(LocalEvent::Disconnected);
+                Err(PairError::ProtocolTimeout)
+            }
+        }
+    }
+}
+
+impl BluerPairBackend {
+    fn apply_local(&self, event: LocalEvent) -> Result<(), PairError> {
+        let mut state = self.protocol_transaction.lock().map_err(|_| PairError::Backend {
+            reason: "pair transaction state poisoned".to_owned(),
+        })?;
+        state
+            .as_mut()
+            .ok_or_else(|| PairError::Backend {
+                reason: "pair transaction not initialized".to_owned(),
+            })?
+            .local(event)
+            .map_err(|error| PairError::Backend { reason: error.to_string() })
+    }
+
+    fn apply_remote(&self, transaction: [u8; 16], operation: Operation) -> Result<(), PairError> {
+        let mut state = self.protocol_transaction.lock().map_err(|_| PairError::Backend {
+            reason: "pair transaction state poisoned".to_owned(),
+        })?;
+        state
+            .as_mut()
+            .ok_or_else(|| PairError::Backend {
+                reason: "pair transaction not initialized".to_owned(),
+            })?
+            .remote(Message { transaction, operation })
+            .map_err(|error| PairError::Backend { reason: error.to_string() })
+    }
+}
+
 #[async_trait]
 impl PairBackend for BluerPairBackend {
+    fn set_transaction_id(&self, transaction: [u8; 16]) {
+        if let Ok(mut id) = self.transaction_id.lock() {
+            *id = Some(transaction);
+        }
+        if let Ok(mut state) = self.protocol_transaction.lock() {
+            *state = Some(Transaction::new(transaction, Role::Coordinator));
+        }
+        let _ = self.publish_status(transaction);
+    }
+
+    async fn coordinate_v2(&self, transaction: [u8; 16]) -> Result<(), PairError> {
+        self.publish_protocol(Message {
+            transaction,
+            operation: Operation::Capability,
+        })?;
+        self.wait_protocol(transaction, Operation::Capability).await?;
+        self.apply_remote(transaction, Operation::Capability)?;
+        self.apply_local(LocalEvent::Capability)?;
+        self.apply_local(LocalEvent::VerifiedExchange)?;
+        self.apply_local(LocalEvent::Confirm)?;
+        self.publish_protocol(Message {
+            transaction,
+            operation: Operation::Confirm,
+        })?;
+        self.wait_protocol(transaction, Operation::Confirm).await?;
+        self.apply_remote(transaction, Operation::Confirm)?;
+        self.apply_local(LocalEvent::Prepared)?;
+        self.publish_protocol(Message {
+            transaction,
+            operation: Operation::Prepared,
+        })?;
+        self.wait_protocol(transaction, Operation::Prepared).await?;
+        self.apply_remote(transaction, Operation::Prepared)?;
+        self.apply_local(LocalEvent::Commit)?;
+        self.publish_protocol(Message {
+            transaction,
+            operation: Operation::Commit,
+        })?;
+        if self.wait_protocol(transaction, Operation::CommitAck).await.is_err() {
+            let _ = self.apply_local(LocalEvent::Disconnected);
+            return Err(PairError::ProtocolUncertain);
+        }
+        self.apply_remote(transaction, Operation::CommitAck)?;
+        self.publish_protocol(Message {
+            transaction,
+            operation: Operation::Committed,
+        })?;
+        if self.wait_protocol(transaction, Operation::Committed).await.is_err() {
+            let _ = self.apply_local(LocalEvent::Disconnected);
+            return Err(PairError::ProtocolUncertain);
+        }
+        self.apply_remote(transaction, Operation::Committed)?;
+        self.apply_local(LocalEvent::Committed)?;
+        Ok(())
+    }
+
     async fn adapter_info(&self, adapter_id: &str) -> Result<AdapterInfo, PairError> {
         let session = bluer::Session::new().await.map_err(map_bluer)?;
         let adapter = session.adapter(adapter_id).map_err(|err| match err.kind {
@@ -323,18 +561,27 @@ impl PairBackend for BluerPairBackend {
             .set_powered(true)
             .await
             .map_err(|err| PairError::Backend { reason: err.to_string() })?;
-        adapter
-            .set_discoverable(true)
-            .await
-            .map_err(|err| PairError::Backend { reason: err.to_string() })?;
+        // Pairable is required for the LESC agent to answer the phone's SMP
+        // request. The adapter's global `Discoverable` flag is deliberately
+        // left alone: the pair service is published as an LE advertisement
+        // below, which BlueZ serves independently of that flag, and making the
+        // whole desktop generically discoverable would change its Bluetooth
+        // role for every other device.
         adapter
             .set_pairable(true)
             .await
             .map_err(|err| PairError::Backend { reason: err.to_string() })?;
 
         let (char_control, char_handle) = characteristic_control();
+        let (protocol_control, protocol_handle) = characteristic_control();
         let app = Application {
-            services: Self::build_pair_services(self.host_pubkey, char_handle),
+            services: Self::build_pair_services(
+                self.host_pubkey,
+                char_handle,
+                protocol_handle,
+                &std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default(),
+                Arc::clone(&self.protocol_status),
+            ),
             ..Default::default()
         };
         let app_handle = adapter.serve_gatt_application(app).await.map_err(|err| PairError::Backend {
@@ -351,6 +598,58 @@ impl PairBackend for BluerPairBackend {
             *g = Some(app_handle);
         }
 
+        // Keep the authenticated v2 control channel alive for the rest of
+        // the pairing transaction. Control writes contain no secrets.
+        let inbox = Arc::clone(&self.protocol_inbox);
+        let protocol_peer_address = Arc::clone(&self.protocol_peer_address);
+        let transaction_id = Arc::clone(&self.transaction_id);
+        let protocol_transaction = Arc::clone(&self.protocol_transaction);
+        let protocol_status = Arc::clone(&self.protocol_status);
+        tokio::spawn(async move {
+            let mut control = Box::pin(protocol_control);
+            while let Some(CharacteristicControlEvent::Write(req)) = control.next().await {
+                let address = req.device_address().to_string();
+                let mut reader = match req.accept() {
+                    Ok(reader) => reader,
+                    Err(_) => continue,
+                };
+                let mut bytes = Vec::new();
+                if reader.read_to_end(&mut bytes).await.is_ok() && bytes.len() <= 64 {
+                    let allowed = protocol_peer_address
+                        .lock()
+                        .map(|peer| peer.as_deref() == Some(address.as_str()))
+                        .unwrap_or(false);
+                    if !allowed {
+                        continue;
+                    }
+                    // STATUS_QUERY is a separate nonce-bound format. It is
+                    // answered on the authenticated session and never enters
+                    // the commit event mailbox.
+                    if let Ok(query) = syauth_core::pair_transaction::StatusMessage::decode(&bytes) {
+                        if query.state.is_none() {
+                            let current_id = transaction_id.lock().ok().and_then(|id| *id);
+                            if current_id == Some(query.transaction) {
+                                let state = protocol_transaction
+                                    .lock()
+                                    .ok()
+                                    .and_then(|tx| tx.as_ref().map(Transaction::status))
+                                    .unwrap_or(syauth_core::pair_transaction::StatusState::Unknown);
+                                if let Ok(mut status) = protocol_status.lock() {
+                                    *status = syauth_core::pair_transaction::StatusMessage::response(query.transaction, query.nonce, state)
+                                        .encode()
+                                        .to_vec();
+                                }
+                            }
+                        }
+                    } else if let Ok(mut pending) = inbox.lock() {
+                        // Malformed status/control input is ignored and can
+                        // never advance the transaction state machine.
+                        pending.push(bytes);
+                    }
+                }
+            }
+        });
+
         // Drive the phone's `phone-pubkey` write into the mailbox while
         // rotating the advertised pair-mode UUID at each wall-clock
         // minute boundary. Rotation is required because (a) the
@@ -366,6 +665,7 @@ impl PairBackend for BluerPairBackend {
         // capture 32 bytes, stash the active advertisement handle
         // into `self.adv_handle`, and the function returns.
         let mailbox = Arc::clone(&self.phone_pubkey_mailbox);
+        let protocol_peer_address_for_phone = Arc::clone(&self.protocol_peer_address);
         let final_adv_slot: Arc<Mutex<Option<bluer::adv::AdvertisementHandle>>> = Arc::new(Mutex::new(None));
         let final_adv_slot_inner = Arc::clone(&final_adv_slot);
         let drained = tokio_timeout(PAIR_ADVERTISE_ACCEPT_WINDOW, async move {
@@ -379,6 +679,9 @@ impl PairBackend for BluerPairBackend {
                 tokio::select! {
                     evt = control.next() => match evt {
                         Some(CharacteristicControlEvent::Write(req)) => {
+                            // Use the identity on this write request, never a
+                            // name search through unrelated bonded devices.
+                            let address = req.device_address();
                             let mut reader = match req.accept() {
                                 Ok(r) => r,
                                 Err(err) => {
@@ -399,10 +702,19 @@ impl PairBackend for BluerPairBackend {
                             if let Ok(mut g) = mailbox.lock() {
                                 *g = Some(buf);
                             }
+                            if let Ok(mut g) = protocol_peer_address_for_phone.lock() {
+                                *g = Some(address.to_string());
+                            }
                             if let Ok(mut g) = final_adv_slot_inner.lock() {
                                 *g = current_adv.take();
                             }
-                            return Ok(());
+                            let device = adapter.device(address).map_err(map_bluer)?;
+                            let alias = device.alias().await.unwrap_or_default();
+                            let address = address.to_string();
+                            return Ok(PairCandidate {
+                                name: friendly_peer_name(&alias, &address),
+                                address,
+                            });
                         }
                         Some(_) => continue,
                         None => return Err(PairError::NoPeers),
@@ -442,10 +754,7 @@ impl PairBackend for BluerPairBackend {
             }
         }
         match drained {
-            Ok(Ok(())) => Ok(vec![PairCandidate {
-                name: PAIR_CONNECTED_PEER_NAME.to_owned(),
-                address: PAIR_CONNECTED_PEER_ADDRESS.to_owned(),
-            }]),
+            Ok(Ok(peer)) => Ok(vec![peer]),
             Ok(Err(e)) => Err(e),
             Err(_elapsed) => Err(PairError::NoPeers),
         }
@@ -466,6 +775,16 @@ impl PairBackend for BluerPairBackend {
             g.take().ok_or(PairError::NoPeers)?
         };
         let bond_key = bond_key_from_pubkeys(&self.host_pubkey, &phone_pubkey);
+        let transaction = self.transaction_id.lock().ok().and_then(|id| *id).unwrap_or([0; 16]);
+        let capability = Message {
+            transaction,
+            operation: Operation::Capability,
+        }
+        .encode();
+        if let Ok(mut status) = self.protocol_status.lock() {
+            *status = capability.to_vec();
+        }
+        self.apply_local(LocalEvent::Capability)?;
         Ok(LescOutcome {
             peer_pubkey: phone_pubkey,
             bond_key,
@@ -500,6 +819,29 @@ pub fn make_stdio_confirm_handler() -> OsConfirmHandler {
 /// Auto-accept handler used by `--yes`. The 6-digit code is still
 /// printed to stdout so an operator running with `--yes` against an
 /// untrusted phone can read the code from the log post-hoc.
+/// GUI confirmation handler: emits the LESC code as JSON and accepts only an
+/// explicit structured command. EOF, malformed input and every other command
+/// reject by default.
+pub fn make_gui_confirm_handler() -> OsConfirmHandler {
+    Box::new(|passkey: u32| {
+        let mut stdout = io::stdout().lock();
+        let _ = writeln!(stdout, "{{\"event\":\"lesc_code\",\"code\":\"{passkey:06}\"}}");
+        let _ = writeln!(stdout, "{{\"event\":\"waiting_lesc_confirmation\"}}");
+        let _ = stdout.flush();
+        let stdin = io::stdin();
+        let mut line = String::new();
+        if stdin.lock().read_line(&mut line).is_err() {
+            return false;
+        }
+        serde_json::from_str::<serde_json::Value>(&line)
+            .ok()
+            .and_then(|value| value.get("command").and_then(serde_json::Value::as_str).map(str::to_owned))
+            .as_deref()
+            == Some("confirm")
+    })
+}
+
+#[cfg(test)]
 pub fn make_auto_accept_confirm_handler() -> OsConfirmHandler {
     Box::new(|passkey: u32| {
         eprintln!("BT pairing code: {passkey:06}  auto-accept (--yes)");
@@ -514,6 +856,134 @@ pub fn make_auto_accept_confirm_handler() -> OsConfirmHandler {
 /// `XDG_RUNTIME_DIR`, so the privileged desktop pair process writes
 /// to the same directory the unprivileged applet polls.
 pub const PAIR_IPC_DIR_SUBPATH: &str = "syauth";
+
+/// Run the GUI as the sole local confirmation client of syauth-presenced.
+/// The daemon remains the only BlueZ agent, GATT owner and pair-engine
+/// driver.
+///
+/// Two distinct decisions are rendered here and they are not equivalent:
+///
+/// - a **BlueZ LESC** numeric comparison (`lesc_code`) is a transport
+///   confirmation, and
+/// - the **DeskUnlock** application-level OOB words (`oob_ready`) are the
+///   trust confirmation.
+///
+/// No waiting event is emitted before a real request arrives, and `bonded`
+/// is emitted only after the daemon reports `TrustEstablished`.
+pub async fn run_daemon_gui_confirmation() -> Result<(), PairError> {
+    let path = syauth_transport::pairing_confirmation_socket().ok_or_else(|| PairError::Backend {
+        reason: "XDG_RUNTIME_DIR is not set".to_owned(),
+    })?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| PairError::Backend { reason: err.to_string() })?;
+    }
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path).map_err(|err| PairError::Backend { reason: err.to_string() })?;
+    set_private_socket(&path)?;
+    // Announce the pair session. The daemon scopes its BlueZ default-agent
+    // ownership to this connection and releases it when we disconnect, so
+    // DeskUnlock never holds the general Bluetooth pairing role.
+    let _session = connect_pair_session().await;
+    println!("{{\"event\":\"preparing\"}}");
+    let result = async {
+        loop {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .map_err(|err| PairError::Backend { reason: err.to_string() })?;
+            let bytes = syauth_transport::read_frame(&mut stream).await.ok_or_else(|| PairError::Backend {
+                reason: "invalid daemon pairing frame".to_owned(),
+            })?;
+            if let Some(request) = syauth_transport::PairingRequest::decode(&bytes) {
+                // Transport confirmation (BlueZ LESC). Real, but not trust.
+                let name = serde_json::to_string(&request.peer).unwrap_or_else(|_| "\"unknown\"".to_owned());
+                println!("{{\"event\":\"device_found\",\"name\":{name}}}");
+                println!("{{\"event\":\"lesc_code\",\"code\":\"{:06}\"}}", request.passkey);
+                println!("{{\"event\":\"waiting_lesc_confirmation\"}}");
+                let accepted = read_operator_decision().await?;
+                stream
+                    .write_all(&[u8::from(accepted)])
+                    .await
+                    .map_err(|err| PairError::Backend { reason: err.to_string() })?;
+                if !accepted {
+                    return Err(PairError::Revoked {
+                        reason: crate::pair::RevokeReason::OperatorReject,
+                    });
+                }
+                continue;
+            }
+            if let Some(request) = syauth_transport::OobRequest::decode(&bytes) {
+                // DeskUnlock application-level confirmation: the real trust
+                // decision. The OOB words are derived locally from the public
+                // keys exchanged over authenticated GATT.
+                let words = crate::oob::oob_code_for_bond(&bond_key_from_pubkeys(&request.host_pubkey, &request.phone_pubkey));
+                let name = serde_json::to_string(&request.peer).unwrap_or_else(|_| "\"unknown\"".to_owned());
+                let words_json = serde_json::to_string(&words).unwrap_or_else(|_| "\"\"".to_owned());
+                println!("{{\"event\":\"device_found\",\"name\":{name}}}");
+                println!("{{\"event\":\"oob_ready\",\"code\":{words_json}}}");
+                let accepted = read_operator_decision().await?;
+                stream
+                    .write_all(&[u8::from(accepted)])
+                    .await
+                    .map_err(|err| PairError::Backend { reason: err.to_string() })?;
+                if !accepted {
+                    return Err(PairError::Revoked {
+                        reason: crate::pair::RevokeReason::OperatorReject,
+                    });
+                }
+                continue;
+            }
+            if let Some(notice) = syauth_transport::BondedNotice::decode(&bytes) {
+                // Terminal trust notice: only now may the GUI render
+                // "associated".
+                let name = serde_json::to_string(&notice.peer).unwrap_or_else(|_| "\"unknown\"".to_owned());
+                println!("{{\"event\":\"bonded\",\"device\":{name}}}");
+                return Ok(());
+            }
+        }
+    }
+    .await;
+    let _ = std::fs::remove_file(&path);
+    result
+}
+
+/// Read one structured operator decision from stdin. EOF, malformed input and
+/// every other command reject by default.
+async fn read_operator_decision() -> Result<bool, PairError> {
+    tokio::task::spawn_blocking(|| {
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).is_ok()
+            && serde_json::from_str::<serde_json::Value>(&line)
+                .ok()
+                .and_then(|value| value.get("command").and_then(serde_json::Value::as_str).map(str::to_owned))
+                .as_deref()
+                == Some("confirm")
+    })
+    .await
+    .map_err(|err| PairError::Backend { reason: err.to_string() })
+}
+
+/// Connect to the daemon's pair-session socket and hold the connection for the
+/// lifetime of this client. Returns `None` when the daemon is not listening;
+/// pairing still works, it just does not scope the LESC agent.
+async fn connect_pair_session() -> Option<UnixStream> {
+    let path = syauth_transport::pairing_session_socket()?;
+    match tokio_timeout(std::time::Duration::from_secs(1), UnixStream::connect(path)).await {
+        Ok(Ok(stream)) => Some(stream),
+        _ => None,
+    }
+}
+
+#[cfg(unix)]
+fn set_private_socket(path: &std::path::Path) -> Result<(), PairError> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|err| PairError::Backend { reason: err.to_string() })
+}
+
+#[cfg(not(unix))]
+fn set_private_socket(_path: &std::path::Path) -> Result<(), PairError> {
+    Ok(())
+}
 
 /// Filename of the pending pair-confirm request written by the
 /// desktop's waybar handler.
@@ -728,6 +1198,29 @@ mod tests {
     }
 
     #[test]
+    fn host_name_metadata_is_versioned_bounded_and_not_an_advertisement() {
+        assert_eq!(host_name_payload(" workstation-test\n"), b"\x01workstation-test");
+        assert_eq!(host_name_payload(""), b"\x01Computer DeskUnlock");
+        let long = host_name_payload(&"è".repeat(100));
+        assert_eq!(long.len(), 129);
+        assert!(std::str::from_utf8(&long[1..]).is_ok());
+        assert!(!host_name_payload("host\n\tname").contains(&b'\n'));
+        assert_eq!(
+            BluerPairBackend::build_advertisement(TEST_MINUTE_ANCHOR).local_name.as_deref(),
+            Some("DeskUnlock")
+        );
+    }
+
+    #[test]
+    fn actual_peer_name_is_vendor_independent_and_not_an_identity_filter() {
+        assert_eq!(friendly_peer_name("Galaxy S26", "test-address"), "Galaxy S26");
+        assert_eq!(friendly_peer_name("Fairphone", "test-address"), "Fairphone");
+        assert_eq!(friendly_peer_name("\tGalaxy\nS26\r", "test-address"), "Galaxy S26");
+        assert_eq!(friendly_peer_name("", "test-address"), PAIR_CONNECTED_PEER_NAME);
+        assert_eq!(friendly_peer_name("test-address", "test-address"), PAIR_CONNECTED_PEER_NAME);
+    }
+
+    #[test]
     fn new_records_host_pubkey_from_signing_key() {
         let sk = fixed_signing_key();
         let expected: [u8; 32] = sk.verifying_key().to_bytes();
@@ -771,11 +1264,25 @@ mod tests {
         let sk = fixed_signing_key();
         let host_pubkey: [u8; 32] = sk.verifying_key().to_bytes();
         let (_control, handle) = characteristic_control();
-        let services = BluerPairBackend::build_pair_services(host_pubkey, handle);
+        let (_protocol_control, protocol_handle) = characteristic_control();
+        let services = BluerPairBackend::build_pair_services(
+            host_pubkey,
+            handle,
+            protocol_handle,
+            "workstation-test",
+            Arc::new(Mutex::new(Vec::new())),
+        );
         assert_eq!(services.len(), 1, "exactly one pair service");
         let svc = &services[0];
         assert_eq!(svc.uuid, SYAUTH_PAIR_SERVICE_UUID);
         assert!(svc.primary);
+        let name_char = svc
+            .characteristics
+            .iter()
+            .find(|c| c.uuid == SYAUTH_PAIR_HOST_NAME_V1_CHAR_UUID)
+            .expect("hostname metadata missing");
+        assert!(name_char.read.as_ref().expect("metadata readable").encrypt_authenticated_read);
+        assert!(name_char.write.is_none());
         let host_char = svc
             .characteristics
             .iter()
@@ -783,6 +1290,10 @@ mod tests {
             .expect("host-pubkey characteristic missing");
         let read_block = host_char.read.as_ref().expect("host-pubkey must declare read");
         assert!(read_block.read, "host-pubkey.read must be true");
+        assert!(
+            read_block.encrypt_authenticated_read,
+            "host-pubkey must require authenticated encryption"
+        );
         let phone_char = svc
             .characteristics
             .iter()
@@ -790,6 +1301,10 @@ mod tests {
             .expect("phone-pubkey characteristic missing");
         let write_block = phone_char.write.as_ref().expect("phone-pubkey must declare write");
         assert!(write_block.write, "phone-pubkey.write must be true");
+        assert!(
+            write_block.encrypt_authenticated_write,
+            "phone-pubkey must require authenticated encryption"
+        );
         match write_block.method {
             CharacteristicWriteMethod::Io => (),
             _ => panic!("phone-pubkey write method must be Io"),

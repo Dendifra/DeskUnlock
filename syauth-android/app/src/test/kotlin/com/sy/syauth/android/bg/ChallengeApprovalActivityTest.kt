@@ -14,7 +14,7 @@
 //      equal to `DENIED_FRAME_BYTES`.
 //   3. `hostname_shown_in_prompt` — reads the package-internal
 //      `lastPromptText` recording field and asserts it equals
-//      `"alex-desktop is requesting sudo (peer_id DD:EE:FF)"`.
+//      `"alex-desktop requests authentication (peer_id DD:EE:FF)"`.
 //
 // Journey: specs/journeys/JOURNEY-S-014-challenge-approval-activity.md
 package com.sy.syauth.android.bg
@@ -35,7 +35,7 @@ private const val FIXTURE_HOSTNAME: String = "alex-desktop"
 private const val FIXTURE_PEER_ID: String = "AA:BB:CC:DD:EE:FF"
 private const val FIXTURE_CHALLENGE_LEN: Int = 33
 private const val EXPECTED_PROMPT_TEXT: String =
-    "alex-desktop is requesting sudo (peer_id DD:EE:FF)"
+    "alex-desktop requests authentication (peer_id DD:EE:FF)"
 
 private class RecordingCancelSink : CancelSink {
     val calls: MutableList<Pair<String, ByteArray>> = mutableListOf()

@@ -18,7 +18,49 @@
 
 ## Open deviations
 
-_(none — all DEV-NNN rows are closed)_
+### `DEV-006` — pam_syauth in the login greeter (opened 2026-09-24)
+
+**SPEC clause:** §3.2 D7 — "Module is `auth required` for `sudo` and
+`gdm-password`; on `PAM_AUTHINFO_UNAVAIL` (peer offline) the stack falls
+through to `pam_unix.so` (password) which preserves the lockout-recovery
+story" — and its rejected alternative, verbatim: "`auth sufficient` (would
+weaken the stack)".
+
+**Shipped behaviour.** `scripts/enable-greeter-unlock.sh` installs
+`auth sufficient pam_syauth.so timeout=8000` at the top of
+`/etc/pam.d/plasmalogin` (the Plasma Login Manager greeter), above the stock
+`auth include system-login`. Phone approval short-circuits to success; any
+failure falls through to the password stack, so manual login is preserved.
+This contradicts D7's `auth required` preference and its explicit rejection of
+`auth sufficient` for a login-guarding stack. The session lock screen keeps
+using the out-of-band `syauth unlock-request` path (no PAM).
+
+**Source locations (deviation):**
+- `scripts/enable-greeter-unlock.sh` — the reproducible installer, marker at
+the top of the file.
+- `/etc/pam.d/plasmalogin` — the runtime service file the installer edits
+(carries the `# SPEC-DEVIATION: DEV-006` comment).
+- `crates/syauth-cli/src/install_pam.rs` — unchanged; its `DEFAULT_CONTROL_FLAG
+= "sufficient"` is the flag this row relies on.
+
+**Authorized by:** operator, 2026-09-24 — "fprint non e la soluzione ... voglio
+esattamente come ora ma che mandi notifica di sblocco e sblocchi all avvio
+inserimento manuale non deve essere toccato".
+
+**Status:** open — hardware-verified 2026-09-24 that phone approval unlocks
+the greeter: `pam.authenticate("denis", <wrong password>,
+service="plasmalogin")` returned `Success` in 3.9 s, i.e. `pam_syauth`
+granted it (a wrong password cannot pass `pam_unix`). Still pending: the
+password fallback confirmed on a real logout, and the dissociate +
+re-associate case (same or a different phone).
+
+**Closure condition:** a hermetic test or documented hardware run proves
+(a) phone approval at `plasmalogin` grants the session, (b) an absent/denied
+phone falls through to the password within the module timeout, and (c) the
+behaviour survives a dissociate + re-associate of the paired phone. The
+operator then decides whether to keep the deviation (row moves to Closed with
+the verification pointer) or revert it (row is removed and the installer is
+dropped).
 
 ---
 

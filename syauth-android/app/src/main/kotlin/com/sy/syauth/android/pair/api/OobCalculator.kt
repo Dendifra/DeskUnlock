@@ -9,11 +9,11 @@
 package com.sy.syauth.android.pair.api
 
 /**
- * Computes the 4-word emoji OOB code from a bond key.
+ * Computes the OOB confirmation code from a bond key.
  *
  * The contract is byte-identical to the desktop CLI's output (SPEC §4.1
  * "Why a second OOB confirmation after BT pairing"). The byte-identity
- * is pinned by `oob_byte_identical_to_cli_fixture` in
+ * is pinned by `oob_code_is_byte_identical_to_cli_fixture` in
  * `crates/syauth-mobile/src/implementation.rs`.
  *
  * Production wiring (S-018) feeds the negotiated bond key into this
@@ -21,12 +21,13 @@ package com.sy.syauth.android.pair.api
  */
 fun interface OobCalculator {
     /**
-     * Compute the OOB code for [bondKey]. Implementations MAY throw if
-     * the bond key length is wrong, but the ViewModel only ever passes
-     * lengths produced by [PairBackend], so a length error is a wiring
+     * Compute the OOB confirmation code for [bondKey]. Implementations MAY
+     * throw if the bond key length is wrong, but the ViewModel only ever
+     * passes lengths produced by [PairBackend], so a length error is a wiring
      * bug, not a user error.
      *
-     * Returns exactly four words (the syauth-mobile OOB contract).
+     * Returns the decimal code the operator compares with the desktop
+     * (the syauth-mobile OOB contract).
      */
-    fun compute(bondKey: ByteArray): List<String>
+    fun compute(bondKey: ByteArray): String
 }

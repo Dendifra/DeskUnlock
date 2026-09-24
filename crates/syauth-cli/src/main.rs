@@ -23,9 +23,11 @@ use syauth_cli::{
     install_presenced::{self, InstallPresencedOpts, InstallPresencedOutcome},
     list::run_list,
     pair::{ListOpts, PairOpts, run_pair},
+    reconcile::{ReconcileOpts, run_reconcile_cli},
     revoke::{RevokeOpts, run_revoke},
     status::{StatusOpts, run_status},
     uninstall_pam::{self, UninstallOpts, UninstallOutcome},
+    unlock_request::{UnlockRequestOpts, run as run_unlock_request},
 };
 
 #[derive(Debug, Parser)]
@@ -46,10 +48,17 @@ enum Cmd {
     Pair(PairOpts),
     /// Print the bonds file as TSV: id\tname\tstatus\tcreated_at.
     List(ListOpts),
+    /// Reconcile a persisted pairing transaction over authenticated GATT.
+    Reconcile(ReconcileOpts),
     /// Mark a bond as revoked (idempotent). The bond record itself is
     /// preserved so the audit trail survives; the PAM module refuses
     /// unlock attempts from revoked peers.
     Revoke(RevokeOpts),
+    /// Ask the bonded phone to approve, then unlock this session out of
+    /// band with `loginctl unlock-session`. Never touches PAM: the lock
+    /// screen keeps its stock password path, so a DeskUnlock failure can
+    /// only ever mean "nothing happens".
+    UnlockRequest(UnlockRequestOpts),
     /// Print adapter state, advertising state, bond count, and the most
     /// recent unlock outcome. Read-only — never writes to the host.
     Status(StatusOpts),
@@ -100,7 +109,9 @@ async fn dispatch(cli: Cli) -> Result<()> {
     match cli.cmd {
         Cmd::Pair(opts) => run_pair_cli(&opts).await,
         Cmd::List(opts) => run_list_cli(&opts),
+        Cmd::Reconcile(opts) => run_reconcile_cli(&opts).await.map_err(Into::into),
         Cmd::Revoke(opts) => run_revoke_cli(&opts),
+        Cmd::UnlockRequest(opts) => run_unlock_request(&opts).map_err(Into::into),
         Cmd::Status(opts) => run_status_cli(&opts).await,
         Cmd::InstallPam(opts) => run_install(&opts),
         Cmd::UninstallPam(opts) => run_uninstall(&opts),
@@ -112,9 +123,13 @@ async fn dispatch(cli: Cli) -> Result<()> {
 async fn run_pair_cli(opts: &PairOpts) -> Result<()> {
     use rand::{RngCore, rngs::OsRng};
     use syauth_cli::pair_backend::{
-        BluerPairBackend, make_auto_accept_confirm_handler, make_stdio_confirm_handler, make_waybar_confirm_handler,
+        BluerPairBackend, make_stdio_confirm_handler, make_waybar_confirm_handler, run_daemon_gui_confirmation,
     };
     use syauth_core::SigningKey;
+
+    if opts.gui {
+        return run_daemon_gui_confirmation().await.map_err(Into::into);
+    }
 
     let mut seed = [0u8; 32];
     OsRng.fill_bytes(&mut seed);
@@ -124,14 +139,21 @@ async fn run_pair_cli(opts: &PairOpts) -> Result<()> {
 
     if opts.waybar {
         backend.install_confirm_handler(make_waybar_confirm_handler());
-    } else if opts.yes {
-        backend.install_confirm_handler(make_auto_accept_confirm_handler());
     } else {
+        // `--yes` keeps peer-selection/OOB automation for compatibility,
+        // but never bypasses the real Bluetooth MITM numeric comparison.
         backend.install_confirm_handler(make_stdio_confirm_handler());
     }
 
-    run_pair(opts, &backend).await?;
-    Ok(())
+    match run_pair(opts, &backend).await {
+        Ok(_) => Ok(()),
+        Err(error) if opts.gui => {
+            let message = serde_json::to_string(&error.to_string()).unwrap_or_else(|_| "\"pairing failed\"".to_owned());
+            println!("{{\"event\":\"error\",\"message\":{message}}}");
+            Err(error.into())
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn run_doctor_cli(opts: &DoctorOpts) -> Result<()> {

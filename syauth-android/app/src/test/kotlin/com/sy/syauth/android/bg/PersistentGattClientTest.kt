@@ -245,7 +245,11 @@ class PersistentGattClientTest {
         // wedged forever in a never-completing background scan. The
         // desktop then saw notifier_slot=None on every unlock. start()
         // must arm the watchdog itself so a stalled initial connect is
-        // retried after RECONNECT_INTERVAL_MS with no user action.
+        // retried with no user action. The arm uses the cold-start
+        // cadence (START_CONNECT_WATCHDOG_MS): a slow cold scan must not
+        // be torn down before it can complete (observed 2026-09-23: the
+        // 2 s post-disconnect cadence looped "forcing reconnect" forever
+        // and the phone never subscribed).
         val handle = newShadowGatt()
         val opener = RecordingOpener(handle)
         val client = PersistentGattClient(
@@ -261,13 +265,49 @@ class PersistentGattClientTest {
         assertEquals("initial connectGatt issued", 1, opener.openCalls)
 
         // No connection callback fires (the autoConnect scan never
-        // matches the peer). Advance the main looper past the watchdog
-        // cadence — the watchdog must re-issue connectGatt on its own.
+        // matches the peer). Advance the main looper past the cold-start
+        // watchdog cadence — the watchdog must re-issue connectGatt.
         shadowOf(Looper.getMainLooper())
-            .idleFor(PersistentGattClient.RECONNECT_INTERVAL_MS, TimeUnit.MILLISECONDS)
+            .idleFor(PersistentGattClient.START_CONNECT_WATCHDOG_MS, TimeUnit.MILLISECONDS)
 
         assertEquals(
             "watchdog re-issues connectGatt when the initial autoConnect never completes",
+            2,
+            opener.openCalls,
+        )
+    }
+
+    @Test
+    fun discovery_watchdog_reconnects_when_services_discovered_never_fires() {
+        // Field reality (2026-09-24): after a dissociate + re-associate the
+        // fresh client connected and called discoverServices(), but
+        // onServicesDiscovered never fired — the client sat wedged for
+        // minutes, no subscription, no RSSI, proximity dead. The disconnect
+        // watchdog was cancelled on STATE_CONNECTED, so nothing recovered it.
+        // A stalled discovery must force a fresh handshake.
+        val handle = newShadowGatt()
+        val opener = RecordingOpener(handle)
+        val client = PersistentGattClient(
+            context = ctx(),
+            adapter = BluetoothAdapter.getDefaultAdapter(),
+            peerId = TEST_PEER_ID,
+            deviceMac = TEST_DEVICE_MAC,
+            onChallenge = { _, _ -> },
+            gattOpener = opener,
+        )
+        client.start()
+        val callback = opener.lastCallback!!
+        callback.onConnectionStateChange(
+            handle,
+            BluetoothGatt.GATT_SUCCESS,
+            BluetoothProfile.STATE_CONNECTED,
+        )
+        // No onServicesDiscovered callback fires.
+        shadowOf(Looper.getMainLooper())
+            .idleFor(PersistentGattClient.DISCOVERY_WATCHDOG_MS, TimeUnit.MILLISECONDS)
+
+        assertEquals(
+            "a stalled discovery must force a fresh connectGatt",
             2,
             opener.openCalls,
         )
@@ -521,12 +561,19 @@ class PersistentGattClientTest {
     }
 
     @Test
-    fun failed_fresh_discovery_does_not_reconnect_again() {
+    fun failed_fresh_discovery_keeps_retrying_on_a_slow_cadence() {
+        // Field reality (2026-09-24): after the one-shot discovery recovery
+        // was spent the client went silent forever, so a desktop that was
+        // away for minutes (master OFF, daemon restart) never got the phone
+        // back — no presence, no RSSI, proximity dead until an app restart.
+        // It must keep retrying on a slow cadence instead.
         val firstHandle = newShadowGatt()
         val secondHandle = newShadowGatt()
+        val thirdHandle = newShadowGatt()
         shadowGattAddService(firstHandle, makeServiceWithChallengeOnly())
         shadowGattAddService(secondHandle, makeServiceWithChallengeOnly())
-        val opener = SequenceOpener(ArrayDeque(listOf(firstHandle, secondHandle)))
+        shadowGattAddService(thirdHandle, makeServiceWithChallengeOnly())
+        val opener = SequenceOpener(ArrayDeque(listOf(firstHandle, secondHandle, thirdHandle)))
         val client = PersistentGattClient(
             context = ctx(),
             adapter = BluetoothAdapter.getDefaultAdapter(),
@@ -560,8 +607,16 @@ class PersistentGattClientTest {
             secondCallback.onServicesDiscovered(secondHandle, BluetoothGatt.GATT_SUCCESS)
         }
         shadowOf(Looper.getMainLooper()).idleFor(5_000L, TimeUnit.MILLISECONDS)
-        assertEquals("fresh recovery is the final reconnect", 2, opener.callbacks.size)
+        assertEquals("the retry has not fired yet", 2, opener.callbacks.size)
         assertEquals(false, client.writeResponse(byteArrayOf(4)))
+
+        shadowOf(Looper.getMainLooper())
+            .idleFor(PersistentGattClient.DISCOVERY_RECOVERY_RETRY_MS, TimeUnit.MILLISECONDS)
+        assertEquals(
+            "the client keeps retrying instead of going silent",
+            3,
+            opener.callbacks.size,
+        )
     }
 
     @Test

@@ -16,6 +16,8 @@
 // [KeystoreKeygenError.UnsupportedApi] and the pair flow aborts with
 // a typed "phone too old for syauth" reason that surfaces on the
 // pairing screen.
+@file:Suppress("MissingPermission", "NewApi")
+
 package com.sy.syauth.android.pair.impl
 
 import android.os.Build
@@ -98,7 +100,7 @@ public interface KeystoreKeyGenerator {
 }
 
 /**
- * Substring the StrongBox EC validator on Pixel / Galaxy SoCs surfaces
+ * Substring some OEM StrongBox validators surface
  * inside an `InvalidAlgorithmParameterException` when StrongBox lacks
  * an Ed25519 implementation (e.g. Galaxy S25 Ultra). The fallback path
  * matches case-insensitively on this substring before reissuing the
@@ -196,7 +198,7 @@ public class AndroidKeystoreKeyGenerator : KeystoreKeyGenerator {
         } catch (e: java.security.NoSuchProviderException) {
             throw KeystoreKeygenError.CryptoFailure("AndroidKeyStore provider missing", e)
         }
-        // StrongBox on many Pixel/Galaxy SoCs rejects Ed25519 with
+        // Some StrongBox implementations reject Ed25519 with
         // `InvalidAlgorithmParameterException: Unsupported StrongBox EC:
         // Ed25519` rather than `StrongBoxUnavailableException`; retry
         // without StrongBox when the message points at that path.
@@ -248,7 +250,7 @@ public class AndroidKeystoreKeyGenerator : KeystoreKeyGenerator {
 
     /**
      * True iff [e] is the message pattern the StrongBox EC validator on
-     * Pixel / Galaxy SoCs raises when StrongBox lacks an Ed25519
+     * Some OEM implementations raise when StrongBox lacks an Ed25519
      * implementation (instead of the StrongBoxUnavailableException
      * surface). Pulled out so the unit test can pin the predicate.
      */

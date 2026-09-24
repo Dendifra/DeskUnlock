@@ -23,7 +23,7 @@
 
 When **a syauth operator wires their first phone to a Linux desktop**, I want
 to **run `syauth pair` on the desktop and the syauth app on the phone, see a
-6-digit pairing code on both screens, confirm it matches, then see a 4-word
+6-digit pairing code on both screens, confirm it matches, then see a numeric
 app-level OOB code on both screens and confirm THAT matches**, so I can
 **trust that the bonded peer key has not been MitM'd by a relay during
 pairing and that any future unlock through `pam_syauth` is talking to the
@@ -46,9 +46,11 @@ before any pairing UI appears.
 
 **Actions:**
 - Desktop: operator runs `syauth pair --adapter hci0`. The CLI calls
-  `bluer::Adapter::set_powered(true)` and `set_discoverable(true)`, then
+  `bluer::Adapter::set_powered(true)` and `set_pairable(true)`, then
   registers a BlueZ Agent (`org.bluez.Agent1`) with capability
-  `DisplayYesNo`.
+  `DisplayYesNo`. The adapter's global `Discoverable` flag is left alone:
+  the pair service is published as an LE advertisement, which BlueZ serves
+  independently of that flag.
 - Phone: operator opens the app. `PairingScreen` requests
   `BLUETOOTH_SCAN` / `BLUETOOTH_CONNECT` at runtime if not yet granted.
 
@@ -128,7 +130,7 @@ becomes encrypted (`Device1::Connected = true`,
 
 ### Phase 4: App-level OOB confirmation
 
-**User Intent:** confirm via the syauth-app-derived 4-word code that the OS
+**User Intent:** confirm via the syauth-app-derived numeric code that the OS
 pairing did not silently complete with a wrong key (defense-in-depth above
 §3.2 D5's "+ out-of-band confirmation in syauth UI").
 
@@ -141,8 +143,8 @@ pairing did not silently complete with a wrong key (defense-in-depth above
     ikm=ECDH(LE-keys, derived during LESC) || host_pubkey ||
     phone_pubkey, info="syauth-bond-v1", len=32)`.
 - Both sides feed `bond_key` into `syauth_core::oob_code_for_bond` and
-  display the same 4 emoji-prefixed words (already implemented).
-- Desktop prompts `Confirm phrase on phone matches: [emoji1 word1 …
+  display the same numeric code (already implemented).
+- Desktop prompts `Confirm code on phone matches: <eight digits> [
   emoji4 word4] [y/N]`. Phone shows the same phrase with two buttons.
 
 **Pain / Risk:**
@@ -153,7 +155,7 @@ pairing did not silently complete with a wrong key (defense-in-depth above
   phone_pubkey, info="syauth-bond-v1")` — both sides converge to the same
   32 bytes without needing the LTK.
 - An attacker who completes Phase 3 MitM (impossibly hard given LESC
-  numeric-comparison) would still see different 4-word codes on each end
+  numeric-comparison) would still see different numeric codes on each end
   if they substituted a pubkey. Mismatch → N on both → bond not written.
 - User confirms Y on the desktop but N on the phone (or vice versa). Both
   sides must reach Bonded; if either side denies, both sides record the

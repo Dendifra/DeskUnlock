@@ -79,10 +79,8 @@ fn main() -> Result<(), MobileError> {
 
     // 4. oob_code_for_bond.
     let oob = oob_code_for_bond(bond_key)?;
-    assert_eq!(oob.len(), 4);
-    for word in &oob {
-        assert!(!word.is_empty());
-    }
+    assert_eq!(oob.len(), 8);
+    assert!(oob.chars().all(|c| c.is_ascii_digit()));
 
     println!("OK");
     Ok(())

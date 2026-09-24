@@ -33,7 +33,7 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::time::timeout;
 
-use crate::oob::{OOB_BOND_KEY_BYTES, OOB_WORD_COUNT, oob_code_for_bond};
+use crate::oob::{OOB_BOND_KEY_BYTES, oob_code_for_bond};
 
 // ---------------------------------------------------------------------------
 // Named constants — every magic number a test would otherwise hand-type.
@@ -118,9 +118,9 @@ pub struct PairOpts {
     #[arg(long, default_value = DEFAULT_BOND_DIR)]
     pub bond_dir: PathBuf,
 
-    /// Skip the interactive `[y/N]` OOB confirmation prompt. Tests only.
-    /// Does NOT skip any safety-relevant gate (adapter LESC check, ambiguous
-    /// peer check).
+    /// Automate peer selection and the app-level OOB prompt where supported.
+    /// The real Bluetooth LESC numeric comparison ALWAYS remains interactive;
+    /// `--yes` never bypasses the MITM confirmation.
     #[arg(long)]
     pub yes: bool,
 
@@ -143,6 +143,11 @@ pub struct PairOpts {
     /// record.
     #[arg(long)]
     pub force: bool,
+
+    /// Drive the pairing flow with JSON Lines events and structured commands.
+    /// This is the desktop GUI seam; it never reads a terminal prompt.
+    #[arg(long, conflicts_with = "yes")]
+    pub gui: bool,
 
     /// S-019 e2e seam: accept the OOB hex code directly and bypass the
     /// interactive `[y/N]` prompt entirely. Hidden from `--help` so an
@@ -223,6 +228,15 @@ pub trait PairBackend: Send + Sync {
     /// Drive LESC numeric comparison with `peer`. In production this wraps
     /// `bluer::Device::pair()` with MITM protection required.
     async fn initiate_lesc_with_peer(&self, peer: &PairCandidate) -> Result<LescOutcome, PairError>;
+
+    /// Bind the fresh transaction id before discovery/key exchange.
+    fn set_transaction_id(&self, _transaction: [u8; 16]) {}
+
+    /// Complete the versioned bilateral transaction after local OOB approval.
+    /// The default rejects GUI completion: a legacy backend cannot claim v2.
+    async fn coordinate_v2(&self, _transaction: [u8; 16]) -> Result<(), PairError> {
+        Err(PairError::ProtocolUnsupported)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -235,9 +249,10 @@ pub trait PairBackend: Send + Sync {
 pub enum RevokeReason {
     /// `--timeout-secs` elapsed before the operator confirmed.
     Timeout,
-    /// Operator answered `N` (or anything other than `y`/`Y`) at the OOB
-    /// confirmation prompt.
+    /// Operator answered `N` at the OOB confirmation prompt.
     OperatorReject,
+    /// Operator explicitly cancelled the graphical transaction.
+    OperatorCancel,
 }
 
 /// In-process pairing state machine. `/bt` SKILL Phase 2 mandates an explicit
@@ -249,10 +264,10 @@ pub enum PairingPhase {
     Scanning,
     /// LESC numeric comparison is in flight.
     AwaitingLesc,
-    /// LESC completed; operator must confirm the 4-word OOB code.
+    /// LESC completed; operator must confirm the OOB code.
     AwaitingOobConfirmation {
-        /// The 4-word emoji OOB code derived from the negotiated bond key.
-        code: [String; OOB_WORD_COUNT],
+        /// The OOB confirmation code derived from the negotiated bond key.
+        code: String,
     },
     /// Operator confirmed; bond is in memory but not yet on disk.
     ProvisionalBonded {
@@ -338,6 +353,22 @@ pub enum PairError {
         /// The duplicate `peer_id` (32-char lowercase hex).
         peer_id: String,
     },
+
+    /// The peer does not implement the required coordinated GUI protocol.
+    #[error("questa versione di DeskUnlock deve essere aggiornata prima dell'associazione")]
+    ProtocolUnsupported,
+
+    /// The bilateral transaction did not complete before the deadline.
+    #[error("associazione non completata: timeout della transazione")]
+    ProtocolTimeout,
+
+    /// The remote user explicitly rejected or cancelled the transaction.
+    #[error("associazione rifiutata o annullata dall'altro dispositivo")]
+    RemoteAbort,
+
+    /// Commit was sent but bilateral completion could not be verified.
+    #[error("verifica dell'associazione in corso: esito remoto non determinato")]
+    ProtocolUncertain,
 
     /// Backend reported a failure that is not one of the typed variants.
     #[error("pair backend error: {reason}")]
@@ -470,16 +501,35 @@ pub fn parse_yes_no(line: &str) -> OobConfirmation {
 /// Print the OOB banner and prompt; read one line from `reader`. With
 /// `auto_accept = true`, returns [`OobConfirmation::Accept`] without reading
 /// any input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuiDecision {
+    Confirm,
+    Reject,
+    Cancel,
+}
+
+fn read_gui_confirmation(reader: &mut dyn BufRead) -> Result<GuiDecision, PairError> {
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    let command = serde_json::from_str::<serde_json::Value>(&line)
+        .ok()
+        .and_then(|value| value.get("command").and_then(serde_json::Value::as_str).map(str::to_owned));
+    Ok(match command.as_deref() {
+        Some("confirm") => GuiDecision::Confirm,
+        Some("reject") => GuiDecision::Reject,
+        Some("cancel") => GuiDecision::Cancel,
+        _ => GuiDecision::Reject,
+    })
+}
+
 fn read_oob_confirmation(
     writer: &mut dyn Write,
     reader: &mut dyn BufRead,
-    code: &[String; OOB_WORD_COUNT],
+    code: &str,
     auto_accept: bool,
 ) -> Result<OobConfirmation, PairError> {
     writeln!(writer, "app-level OOB code (must match the phone):")?;
-    for word in code.iter() {
-        writeln!(writer, "  {word}")?;
-    }
+    writeln!(writer, "  {code}")?;
     write!(writer, "OOB matches your phone? [y/N]: ")?;
     writer.flush()?;
     if auto_accept {
@@ -559,6 +609,13 @@ pub fn build_bond_with_time(outcome: &LescOutcome, peer: &PairCandidate, now: Of
 }
 
 /// Same as [`build_bond_with_time`] using `OffsetDateTime::now_utc()`.
+fn new_transaction_id() -> [u8; 16] {
+    use rand::{RngCore, rngs::OsRng};
+    let mut id = [0; 16];
+    OsRng.fill_bytes(&mut id);
+    id
+}
+
 fn build_bond(outcome: &LescOutcome, peer: &PairCandidate) -> Bond {
     build_bond_with_time(outcome, peer, OffsetDateTime::now_utc())
 }
@@ -569,7 +626,104 @@ fn build_bond(outcome: &LescOutcome, peer: &PairCandidate) -> Bond {
 
 /// Path inside `bond_dir` where the bonds file lives.
 pub fn bonds_path(bond_dir: &Path) -> PathBuf {
-    bond_dir.join(BONDS_FILE_NAME)
+    syauth_core::pair_recovery::bonds_path(bond_dir)
+}
+
+/// Secret-free durable marker for an in-flight v2 commit.
+pub fn transaction_journal_path(bond_dir: &Path) -> PathBuf {
+    syauth_core::pair_recovery::journal_path(bond_dir)
+}
+
+fn pending_bond_path(bond_dir: &Path) -> PathBuf {
+    syauth_core::pair_recovery::pending_bond_path(bond_dir)
+}
+
+fn pending_bond_key_path(bond_dir: &Path, peer_id: &str) -> PathBuf {
+    syauth_core::pair_recovery::pending_key_path(bond_dir, peer_id)
+}
+
+fn write_transaction_journal(bond_dir: &Path, transaction: [u8; 16], peer_id: &str, peer_address: &str) -> Result<(), PairError> {
+    // The terminal CLI stages and immediately runs the full V2 exchange, so it
+    // records the commit decision up front (legacy recovery semantics).
+    syauth_core::pair_recovery::write_journal(
+        bond_dir,
+        transaction,
+        peer_id,
+        peer_address,
+        syauth_core::pair_recovery::JournalState::CommitPending,
+    )
+    .map_err(|err| match err {
+        syauth_core::pair_recovery::RecoveryError::Io(io) => PairError::Io(io),
+        other => PairError::Backend { reason: other.to_string() },
+    })
+}
+
+fn clear_transaction_journal(bond_dir: &Path) {
+    syauth_core::pair_recovery::discard_all(bond_dir);
+}
+
+async fn coordinate_staged_bond(
+    opts: &PairOpts,
+    backend: &dyn PairBackend,
+    transaction_id: [u8; 16],
+    bond: &Bond,
+    bond_key: &[u8],
+    peer_address: &str,
+    writer: &mut dyn Write,
+) -> Result<(), PairError> {
+    let active_path = bonds_path(&opts.bond_dir);
+    let active = BondStore::load(&active_path)?;
+    if let Some(existing) = active.list().iter().find(|item| item.peer_id == bond.peer_id) {
+        if !opts.force {
+            return Err(PairError::PeerAlreadyBonded {
+                peer_id: existing.peer_id.clone(),
+            });
+        }
+    }
+
+    let mut pending = BondStore::empty();
+    pending.add(bond.clone())?;
+    pending.save(&pending_bond_path(&opts.bond_dir))?;
+    let staged_key = pending_bond_key_path(&opts.bond_dir, &bond.peer_id);
+    std::fs::create_dir_all(staged_key.parent().ok_or_else(|| PairError::Backend {
+        reason: "invalid pending key path".to_owned(),
+    })?)?;
+    let staged_tmp = staged_key.with_extension("bin.tmp");
+    std::fs::write(&staged_tmp, bond_key)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&staged_tmp, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    std::fs::rename(&staged_tmp, &staged_key)?;
+    write_transaction_journal(&opts.bond_dir, transaction_id, &bond.peer_id, peer_address)?;
+
+    if let Err(error) = backend.coordinate_v2(transaction_id).await {
+        if !matches!(error, PairError::ProtocolUncertain) {
+            clear_transaction_journal(&opts.bond_dir);
+        }
+        return Err(error);
+    }
+
+    let mut committed = active;
+    let replaced = committed
+        .list()
+        .iter()
+        .map(|item| item.peer_id.clone())
+        .find(|id| id == &bond.peer_id);
+    if let Some(existing) = &replaced {
+        committed.remove(existing)?;
+    }
+    committed.add(bond.clone())?;
+    if committed.save(&active_path).is_err() {
+        return Err(PairError::ProtocolUncertain);
+    }
+    if write_pam_bond_key(&opts.bond_dir, &bond.peer_id, bond_key).is_err() {
+        return Err(PairError::ProtocolUncertain);
+    }
+    clear_transaction_journal(&opts.bond_dir);
+    if let Some(existing) = replaced {
+        writeln!(writer, "replaced existing bond peer_id={existing}")?;
+    }
+    writeln!(writer, "pairing transaction committed")?;
+    Ok(())
 }
 
 /// Path `pam_syauth` reads the raw 32-byte bond_key from for a given
@@ -588,6 +742,17 @@ pub fn pam_bond_key_path(bond_dir: &Path, peer_id: &str) -> PathBuf {
 /// permission-mask gate.
 fn write_pam_bond_key(bond_dir: &Path, peer_id: &str, bond_key: &[u8]) -> Result<(), PairError> {
     use std::os::unix::fs::PermissionsExt as _;
+    // A key of the wrong length is worse than no key at all: the bond record
+    // still says `bonded`, `syauth list` looks healthy, but the daemon loads
+    // an empty peer set and refuses every challenge with `unknown-peer` — with
+    // nothing in the UI explaining why. Observed 2026-09-23: a 0-byte
+    // `keys/<peer_id>.bin` for the active bond made phone unlock impossible
+    // while the bond read as `bonded`. Refuse before writing anything.
+    if bond_key.len() != OOB_BOND_KEY_BYTES {
+        return Err(PairError::Backend {
+            reason: format!("refusing to write a {}-byte bond key", bond_key.len()),
+        });
+    }
     let keys_dir = bond_dir.join(PAM_BOND_KEY_DIR_NAME);
     std::fs::create_dir_all(&keys_dir).map_err(PairError::Io)?;
     let _ = std::fs::set_permissions(&keys_dir, std::fs::Permissions::from_mode(0o700));
@@ -612,12 +777,17 @@ pub async fn run_pair_with_io(
     writer: &mut dyn Write,
 ) -> Result<PairingPhase, PairError> {
     let info = backend.adapter_info(&opts.adapter).await?;
-    writeln!(
-        writer,
-        "adapter {} ready (LE Secure Connections: {})",
-        info.name,
-        if info.supports_lesc { "yes" } else { "no" }
-    )?;
+    if opts.gui {
+        writeln!(writer, "{{\"event\":\"preparing\"}}")?;
+        writeln!(writer, "{{\"event\":\"capabilities\",\"version\":2}}")?;
+    } else {
+        writeln!(
+            writer,
+            "adapter {} ready (LE Secure Connections: {})",
+            info.name,
+            if info.supports_lesc { "yes" } else { "no" }
+        )?;
+    }
     // Safety gate #1: refuse to pair on a non-LESC adapter regardless of
     // `--yes`.
     if !info.supports_lesc {
@@ -627,22 +797,35 @@ pub async fn run_pair_with_io(
         });
     }
 
+    let transaction_id = new_transaction_id();
+    backend.set_transaction_id(transaction_id);
+
     // Phase 1: Scanning. The state machine reads top-to-bottom; each
     // transition is the local variable being shadowed (not reassigned),
     // which keeps clippy/unused-assignments happy and makes the
     // dataflow visible to readers.
     let _phase_scanning = PairingPhase::Scanning;
+    if opts.gui {
+        writeln!(writer, "{{\"event\":\"scan_started\"}}")?;
+    }
     let candidates = backend.scan_peers().await?;
     if candidates.is_empty() {
         return Err(PairError::NoPeers);
     }
     let filtered = filter_candidates(&candidates, opts.peer.as_deref());
     let chosen = pick_unambiguous(filtered, opts.yes)?;
-    writeln!(writer, "selected {} ({})", chosen.name, chosen.address)?;
+    if opts.gui {
+        let name = serde_json::to_string(&chosen.name).unwrap_or_else(|_| "\"Telefono Android\"".to_owned());
+        writeln!(writer, "{{\"event\":\"device_found\",\"name\":{name}}}")?;
+    } else {
+        writeln!(writer, "selected {} ({})", chosen.name, chosen.address)?;
+    }
 
     // Phase 2: AwaitingLesc.
     let _phase_awaiting_lesc = PairingPhase::AwaitingLesc;
-    writeln!(writer, "initiating LE Secure Connections...")?;
+    if !opts.gui {
+        writeln!(writer, "initiating LE Secure Connections...")?;
+    }
     let lesc_deadline = Duration::from_secs(opts.timeout_secs);
     let outcome = match timeout(lesc_deadline, backend.initiate_lesc_with_peer(&chosen)).await {
         Ok(Ok(o)) => o,
@@ -653,10 +836,20 @@ pub async fn run_pair_with_io(
             });
         }
     };
-    writeln!(writer, "BT numeric code: {:06}   confirm on both devices", outcome.numeric_code)?;
+    if opts.gui {
+        let code = oob_code_for_bond(&outcome.bond_key);
+        writeln!(
+            writer,
+            "{{\"event\":\"oob_ready\",\"code\":{}}}",
+            serde_json::to_string(&code).unwrap_or_else(|_| "\"\"".to_owned())
+        )?;
+    } else {
+        writeln!(writer, "BT numeric code: {:06}   confirm on both devices", outcome.numeric_code)?;
+    }
 
     // Phase 3: AwaitingOobConfirmation.
     let code = oob_code_for_bond(&outcome.bond_key);
+    let bond = build_bond(&outcome, &chosen);
     let _phase_awaiting_oob = PairingPhase::AwaitingOobConfirmation { code: code.clone() };
     // S-019 scripted-OOB seam: when the caller passed `--scripted-oob`,
     // the prompt is bypassed entirely (no read from `reader`) and a
@@ -669,44 +862,44 @@ pub async fn run_pair_with_io(
         writeln!(writer, "warning: {SCRIPTED_OOB_WARNING}")?;
     }
     let auto_accept = opts.yes || scripted;
-    let answer = read_oob_confirmation(writer, reader, &code, auto_accept)?;
-    match answer {
-        OobConfirmation::Accept => (),
-        OobConfirmation::Reject => {
-            return Err(PairError::Revoked {
-                reason: RevokeReason::OperatorReject,
-            });
+    if opts.gui {
+        writeln!(writer, "{{\"event\":\"waiting_confirmation\"}}")?;
+        match read_gui_confirmation(reader)? {
+            GuiDecision::Confirm => {
+                coordinate_staged_bond(opts, backend, transaction_id, &bond, &outcome.bond_key, &chosen.address, writer).await?;
+            }
+            GuiDecision::Reject => {
+                return Err(PairError::Revoked {
+                    reason: RevokeReason::OperatorReject,
+                });
+            }
+            GuiDecision::Cancel => {
+                return Err(PairError::Revoked {
+                    reason: RevokeReason::OperatorCancel,
+                });
+            }
+        }
+    } else {
+        match read_oob_confirmation(writer, reader, &code, auto_accept)? {
+            OobConfirmation::Accept => {
+                coordinate_staged_bond(opts, backend, transaction_id, &bond, &outcome.bond_key, &chosen.address, writer).await?;
+            }
+            OobConfirmation::Reject => {
+                return Err(PairError::Revoked {
+                    reason: RevokeReason::OperatorReject,
+                });
+            }
         }
     }
 
     // Phase 4: ProvisionalBonded → Bonded.
-    let bond = build_bond(&outcome, &chosen);
     let peer_id = bond.peer_id.clone();
-    let _phase_provisional = PairingPhase::ProvisionalBonded { peer_id: peer_id.clone() };
-    let path = bonds_path(&opts.bond_dir);
-    let mut store = BondStore::load(&path)?;
-    match store.add(bond.clone()) {
-        Ok(()) => {}
-        Err(BondError::AlreadyBonded { peer_id: existing }) => {
-            if opts.force {
-                store.remove(&existing)?;
-                store.add(bond)?;
-                writeln!(writer, "replaced existing bond peer_id={existing}")?;
-            } else {
-                return Err(PairError::PeerAlreadyBonded { peer_id: existing });
-            }
-        }
-        Err(other) => return Err(other.into()),
+    if opts.gui {
+        let name = serde_json::to_string(&chosen.name).unwrap_or_else(|_| "\"Telefono Android\"".to_owned());
+        writeln!(writer, "{{\"event\":\"bonded\",\"device\":{name}}}")?;
+    } else {
+        writeln!(writer, "bonded {} id={peer_id}; run `syauth list` to verify", chosen.name)?;
     }
-    store.save(&path)?;
-    // pam_syauth reads the raw 32-byte bond_key from
-    // `<bond_dir>/keys/<peer_id>.bin` (0600). Without this file the
-    // PAM module fails with `secret-not-found` even though the bond
-    // record itself is on disk. Write the keys file atomically beside
-    // `bonds.toml`; the OOB-confirmed bond_key from LESC is the
-    // symmetric MAC key the unlock channel needs.
-    write_pam_bond_key(&opts.bond_dir, &peer_id, &outcome.bond_key)?;
-    writeln!(writer, "bonded {} id={peer_id}; run `syauth list` to verify", chosen.name)?;
     Ok(PairingPhase::Bonded)
 }
 
@@ -841,11 +1034,11 @@ mod tests {
     fn filter_candidates_substring_filters() {
         let c = vec![
             PairCandidate {
-                name: "alex-pixel".to_owned(),
+                name: "Galaxy S26".to_owned(),
                 address: "AA".to_owned(),
             },
             PairCandidate {
-                name: "alex-spare".to_owned(),
+                name: "Galaxy S26 spare".to_owned(),
                 address: "BB".to_owned(),
             },
             PairCandidate {
@@ -853,11 +1046,11 @@ mod tests {
                 address: "CC".to_owned(),
             },
         ];
-        let got = filter_candidates(&c, Some("alex"));
+        let got = filter_candidates(&c, Some("Galaxy"));
         assert_eq!(got.len(), 2);
-        let got = filter_candidates(&c, Some("pixel"));
+        let got = filter_candidates(&c, Some("S26 spare"));
         assert_eq!(got.len(), 1);
-        assert_eq!(got[0].name, "alex-pixel");
+        assert_eq!(got[0].name, "Galaxy S26 spare");
     }
 
     #[test]
@@ -929,6 +1122,12 @@ mod tests {
                 address: "AA:BB:CC:DD:EE:01".to_owned(),
             }])
         }
+        fn set_transaction_id(&self, _transaction: [u8; 16]) {}
+
+        async fn coordinate_v2(&self, _transaction: [u8; 16]) -> Result<(), PairError> {
+            Ok(())
+        }
+
         async fn initiate_lesc_with_peer(&self, _peer: &PairCandidate) -> Result<LescOutcome, PairError> {
             Ok(LescOutcome {
                 peer_pubkey: SCRIPTED_TEST_PUBKEY,
@@ -936,6 +1135,48 @@ mod tests {
                 numeric_code: SCRIPTED_TEST_NUMERIC_CODE,
             })
         }
+    }
+
+    #[tokio::test]
+    async fn gui_mode_emits_machine_events_and_accepts_structured_oob() {
+        use std::io::Cursor;
+        let td = tempfile::tempdir().expect("tempdir for gui pair");
+        let opts = PairOpts {
+            adapter: DEFAULT_ADAPTER_NAME.to_owned(),
+            peer: None,
+            timeout_secs: DEFAULT_TIMEOUT_SECS,
+            bond_dir: td.path().join("syauth"),
+            yes: false,
+            waybar: false,
+            gui: true,
+            scripted_oob: None,
+            force: false,
+        };
+        let mut reader = Cursor::new(
+            br#"{"command":"confirm"}
+"#
+            .to_vec(),
+        );
+        let mut writer = Vec::new();
+        let phase = run_pair_with_io(&opts, &ScriptedTestBackend, &mut reader, &mut writer)
+            .await
+            .expect("GUI pair must accept structured confirmation");
+        assert_eq!(phase, PairingPhase::Bonded);
+        let out = String::from_utf8(writer).expect("JSON lines are UTF-8");
+        for event in [
+            "preparing",
+            "scan_started",
+            "device_found",
+            "oob_ready",
+            "waiting_confirmation",
+            "bonded",
+        ] {
+            assert!(
+                out.lines().any(|line| line.contains(&format!("\"event\":\"{event}\""))),
+                "missing {event}: {out}"
+            );
+        }
+        assert!(!out.contains("[y/N]"));
     }
 
     #[tokio::test]
@@ -956,6 +1197,7 @@ mod tests {
             bond_dir: td.path().join("syauth"),
             yes: false,
             waybar: false,
+            gui: false,
             scripted_oob: Some(SCRIPTED_TEST_OOB_HEX.to_owned()),
             force: false,
         };
@@ -992,6 +1234,7 @@ mod tests {
             bond_dir: td.path().join("syauth"),
             yes: true,
             waybar: false,
+            gui: false,
             scripted_oob: None,
             force,
         }
@@ -1085,6 +1328,23 @@ mod tests {
         let store_after = BondStore::load(&bonds_file).expect("store loads after --force re-pair");
         assert_eq!(store_after.list().len(), 1, "exactly one bond after --force re-pair");
         assert_eq!(store_after.list()[0].peer_id, expected_peer_id);
+    }
+
+    /// A bond key of the wrong length must never reach the `keys/`
+    /// directory: the bond record would still read as `bonded` while the
+    /// daemon loads an empty peer set and refuses every challenge with
+    /// `unknown-peer`, with nothing in the UI explaining why. Observed on
+    /// 2026-09-23 with a 0-byte `keys/<peer_id>.bin` on the active bond.
+    #[test]
+    fn an_empty_bond_key_is_refused_before_it_reaches_the_keys_dir() {
+        let td = tempfile::tempdir().expect("tempdir for bonds");
+        let peer_id = peer_id_from_pubkey(&SCRIPTED_TEST_PUBKEY);
+        let err = write_pam_bond_key(td.path(), &peer_id, &[]).expect_err("must refuse an empty key");
+        assert!(matches!(err, PairError::Backend { .. }), "got {err:?}");
+        assert!(
+            !pam_bond_key_path(td.path(), &peer_id).exists(),
+            "no key file may be written for an empty key"
+        );
     }
 
     /// `run_pair_with_io` must write the per-peer bond_key file

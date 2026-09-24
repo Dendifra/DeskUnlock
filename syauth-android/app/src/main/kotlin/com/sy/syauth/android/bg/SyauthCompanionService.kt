@@ -31,6 +31,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import com.sy.syauth.android.bond.BOND_RECORD_FILE_NAME
 import android.os.IBinder
 import android.media.RingtoneManager
 import android.util.Log
@@ -60,7 +61,7 @@ public const val NOTIFICATION_CHANNEL_ID: String = "syauth-presence"
  * notification is the "service is alive" chip, not an actionable
  * prompt.
  */
-public const val NOTIFICATION_CHANNEL_NAME: String = "syauth phone-as-key active"
+public const val NOTIFICATION_CHANNEL_NAME: String = "DeskUnlock active"
 
 /**
  * Channel description shown under the name in the system UI. Tells
@@ -91,7 +92,7 @@ internal const val FOREGROUND_SERVICE_TYPE: Int =
  * Notification title. The operator can mute the channel from the
  * notification's long-press menu once they have seen the chip.
  */
-internal const val NOTIFICATION_TITLE: String = "syauth phone-as-key active"
+internal const val NOTIFICATION_TITLE: String = "DeskUnlock active"
 
 /**
  * Notification body. Short, plain text — no actionable affordances.
@@ -176,6 +177,27 @@ public class UniffiChallengeVerifier : ChallengeVerifier {
 }
 
 /**
+ * Derives the desktop-side peer id (32 hex characters) for this phone's
+ * Ed25519 public key, mirroring `syauth_core::peer_id_from_pubkey`. The
+ * phone needs that identity to name itself in the `Revoke` frame — the
+ * desktop's bond store keys bonds by it, not by the Bluetooth MAC the
+ * `BondRecord.peerId` field carries (observed 2026-09-23: the app built
+ * the frame from the MAC, `revokeFrame` rejected it as malformed, and
+ * the desktop never learned the association was over).
+ *
+ * Production wires UniFFI's `peerIdFromPubkey`; tests inject a fixed
+ * mapping so JVM tests never load the native AAR.
+ */
+public fun interface PeerIdComputer {
+    public fun peerIdFor(pubkey: ByteArray): String?
+}
+
+/** UniFFI-backed production [PeerIdComputer]; never throws across the FFI. */
+public fun defaultPeerIdComputer(): PeerIdComputer = PeerIdComputer { pubkey ->
+    runCatching { uniffi.syauth_mobile.peerIdFromPubkey(pubkey) }.getOrNull()
+}
+
+/**
  * Opaque handle for a managed GATT client the service owns. The
  * service constructs one instance per bonded peer at `onCreate` and
  * calls `stop()` on every instance at `onDestroy`.
@@ -190,6 +212,52 @@ public interface ManagedClient {
 
     /** Tear down the underlying GATT link. Idempotent. */
     public fun stop()
+
+    /**
+     * Send one raw control frame to the desktop, best effort.
+     *
+     * Returns `true` when the frame was handed to the radio. The default is a
+     * no-op so test doubles do not have to implement a path they never use.
+     */
+    public fun send(frameBytes: ByteArray): Boolean = false
+}
+
+/** Wire version of the 18-byte transaction message (`[version][id:16][op]`). */
+public const val TRANSACTION_WIRE_VERSION: Byte = 2
+
+/** Day-2 revocation op: "the association is over". Mirrors `Operation::Revoke`. */
+public const val OP_REVOKE: Byte = 14
+
+/** Length of the fixed transaction message: version + 16-byte id + op. */
+public const val TRANSACTION_MESSAGE_LENGTH: Int = 18
+
+/**
+ * `true` when the frame is the day-2 `Revoke` op: the desktop is telling this
+ * phone that the association is over, so the app must drop its own bond
+ * instead of the operator having to dissociate twice (2026-09-23).
+ */
+public fun isRevokeFrame(frameBytes: ByteArray): Boolean =
+    frameBytes.size == TRANSACTION_MESSAGE_LENGTH &&
+        frameBytes[0] == TRANSACTION_WIRE_VERSION &&
+        frameBytes[17] == OP_REVOKE
+
+/**
+ * Build the frame that tells the desktop this phone dropped the association.
+ *
+ * The 16 bytes after the version carry the phone's `peer_id` (32 hex
+ * characters) — a revocation is not part of any pairing transaction, so that
+ * field is where the desktop reads *which* bond to revoke. Returns `null` when
+ * the id is not a 32-character hex string, so a malformed record can never put
+ * a bogus frame on the wire.
+ */
+public fun revokeFrame(peerId: String): ByteArray? {
+    if (peerId.length != 32) return null
+    val id = ByteArray(16)
+    for (index in 0 until 16) {
+        val value = peerId.substring(index * 2, index * 2 + 2).toIntOrNull(16) ?: return null
+        id[index] = value.toByte()
+    }
+    return byteArrayOf(TRANSACTION_WIRE_VERSION) + id + byteArrayOf(OP_REVOKE)
 }
 
 /**
@@ -217,6 +285,8 @@ public class PersistentManagedClient(
     override fun stop() {
         client.stop()
     }
+
+    override fun send(frameBytes: ByteArray): Boolean = client.writeResponse(frameBytes)
 }
 
 /**
@@ -237,6 +307,18 @@ public class SyauthCompanionService : Service() {
      * deployments scale without refactor.
      */
     private val clients: ConcurrentHashMap<String, ManagedClient> =
+        ConcurrentHashMap()
+
+    /**
+     * The bond each live client was built from. A re-pair keeps the same
+     * Bluetooth MAC (`BondRecord.peerId`) but mints a new bond key and phone
+     * pubkey, so the MAC alone cannot tell a stale client from a live one.
+     * Without this map the reconciliation sees the same key and keeps the
+     * old client, which stays wedged against the desktop's torn-down GATT
+     * service and never reconnects — proximity lock and phone unlock went
+     * dead after a dissociate + re-associate (observed 2026-09-24).
+     */
+    private val clientBonds: ConcurrentHashMap<String, BondRecord> =
         ConcurrentHashMap()
 
     /**
@@ -317,19 +399,72 @@ public class SyauthCompanionService : Service() {
         // The service is "sticky" — if the OS kills the process, the
         // system tries to recreate it. `onCreate` will re-run the
         // bond-injection path on every recreate.
+        //
+        // `ACTION_RELOAD_BONDS` is the day-2 path: after the operator pairs
+        // or dissociates in the app UI the bond set changes on disk while
+        // this service keeps running. Without a reload the service kept
+        // serving the *previous* bond, so the desktop saw `Connected: no`,
+        // presence samples stopped arriving and both the proximity lock and
+        // the phone unlock went dead until the app was restarted by hand
+        // (observed 2026-09-23).
+        if (intent?.action == ACTION_RELOAD_BONDS) {
+            Log.i(SYAUTH_BG_LOG_TAG, "onStartCommand: reloading clients for the current bonds")
+            injectClientsForBonds()
+        }
+        if (intent?.action == ACTION_REVOKE_BOND) {
+            sendRevoke(intent.getStringExtra(EXTRA_PEER_ID))
+        }
         return START_STICKY
+    }
+
+    /**
+     * Send one `Revoke` frame so the desktop drops this bond.
+     *
+     * Best effort and deliberately narrow: the frame goes out over the live
+     * GATT link the service already owns, and nothing else changes here. The
+     * app UI owns the local cleanup (bond file, keystore entry, reload) so
+     * there is exactly one owner for it.
+     */
+    private fun sendRevoke(peerId: String?) {
+        val clientKey = peerId ?: clients.keys.firstOrNull()
+        val client = clientKey?.let { clients[it] }
+        if (clientKey == null || client == null) {
+            Log.w(SYAUTH_BG_LOG_TAG, "revoke requested with no client to send it on")
+            return
+        }
+        val record = runCatching { loadPersistedBond(filesDir) }.getOrNull()
+        if (record == null) {
+            Log.w(SYAUTH_BG_LOG_TAG, "revoke requested without a persisted bond record")
+            return
+        }
+        // The frame must carry the id the desktop's bond store actually
+        // uses — the pubkey-derived 32-hex id — not the MAC in
+        // `BondRecord.peerId` (which names the GATT link only).
+        val ownId = (peerIdComputer ?: defaultPeerIdComputer()).peerIdFor(record.phonePubkey)
+        if (ownId == null || ownId.length != 32) {
+            Log.w(SYAUTH_BG_LOG_TAG, "revoke requested but the own peer id cannot be derived")
+            return
+        }
+        val frame = revokeFrame(ownId)
+        if (frame == null) {
+            Log.w(SYAUTH_BG_LOG_TAG, "revoke requested with a malformed derived peer id")
+            return
+        }
+        val sent = client.send(frame)
+        Log.i(SYAUTH_BG_LOG_TAG, "revoke: frame handed to the radio sent=$sent peer=$clientKey")
     }
 
     override fun onDestroy() {
         runCatching { unregisterReceiver(bluetoothStateReceiver) }
 
-        for ((peerId, client) in clients) {
+        for ((_, client) in clients) {
             runCatching { client.stop() }
                 .onFailure {
                     Log.w(SYAUTH_BG_LOG_TAG, "onDestroy: client.stop failed", it)
                 }
         }
         clients.clear()
+        clientBonds.clear()
         isRunning.set(false)
         Log.i(SYAUTH_BG_LOG_TAG, "onDestroy: clients torn down")
         super.onDestroy()
@@ -338,8 +473,6 @@ public class SyauthCompanionService : Service() {
     private fun ensureNotificationChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java) ?: return
-        val existing = manager.getNotificationChannel(NOTIFICATION_CHANNEL_ID)
-        if (existing != null) return
         val channel = NotificationChannel(
             NOTIFICATION_CHANNEL_ID,
             NOTIFICATION_CHANNEL_NAME,
@@ -348,9 +481,12 @@ public class SyauthCompanionService : Service() {
             description = NOTIFICATION_CHANNEL_DESCRIPTION
             setShowBadge(false)
         }
+        // Re-registering an existing channel updates its user-visible
+        // name and description while preserving the stable channel ID
+        // and the user's notification preferences.
         manager.createNotificationChannel(channel)
         if (channelCreatedLogged.compareAndSet(false, true)) {
-            Log.i(SYAUTH_BG_LOG_TAG, "channel created id=$NOTIFICATION_CHANNEL_ID")
+            Log.i(SYAUTH_BG_LOG_TAG, "channel registered id=$NOTIFICATION_CHANNEL_ID")
         }
     }
 
@@ -359,6 +495,7 @@ public class SyauthCompanionService : Service() {
             .setContentTitle(NOTIFICATION_TITLE)
             .setContentText(NOTIFICATION_BODY)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setOngoing(true)
             .setSmallIcon(NOTIFICATION_ICON)
             .build()
@@ -375,9 +512,37 @@ public class SyauthCompanionService : Service() {
     private fun injectClientsForBonds() {
         val factory = gattClientFactory ?: return
         val provider = bondListProvider ?: defaultBondListProvider()
-        for (bond in provider.bonds()) {
+        val desired = provider.bonds().associateBy { it.peerId }
+
+        // Drop a client whose bond is gone, or whose bond changed under the
+        // same MAC. A re-pair mints a new bond key, so the old GATT link is
+        // dead even though `peerId` is unchanged; keeping it left proximity
+        // and phone unlock dead until the app was restarted by hand.
+        for (peerId in clients.keys.toList()) {
+            val bond = desired[peerId]
+            val built = clientBonds[peerId]
+            if (bond != null && built == bond) continue
+            val client = clients.remove(peerId) ?: continue
+            clientBonds.remove(peerId)
+            runCatching { client.stop() }
+                .onFailure { Log.w(SYAUTH_BG_LOG_TAG, "stale client.stop failed peer=$peerId", it) }
+            Log.i(
+                SYAUTH_BG_LOG_TAG,
+                if (bond == null) {
+                    "dropped client for a bond that is gone peer=$peerId"
+                } else {
+                    "rebuilt client for a re-paired bond peer=$peerId"
+                },
+            )
+        }
+
+        // Start a client only for bonds that do not have one yet: a reload
+        // must never churn the connection that already works.
+        for ((peerId, bond) in desired) {
+            if (clients.containsKey(peerId)) continue
             val client = factory.create(bond)
-            clients[bond.peerId] = client
+            clients[peerId] = client
+            clientBonds[peerId] = bond
             runCatching { client.start() }
                 .onFailure {
                     Log.w(SYAUTH_BG_LOG_TAG, "client.start failed", it)
@@ -414,19 +579,14 @@ public class SyauthCompanionService : Service() {
             return
         }
         val appContext = applicationContext
-        gattClientFactory = GattClientFactory { bond ->
+        SyauthCompanionService.gattClientFactory = GattClientFactory { bond ->
             val client = PersistentGattClient(
                 context = appContext,
                 adapter = adapter,
                 peerId = bond.peerId,
                 deviceMac = bond.peerId,
                 onChallenge = { peerId, frameBytes ->
-                    val challengeBody = if (frameBytes.size > 16) {
-                        frameBytes.copyOfRange(0, frameBytes.size - 16)
-                    } else {
-                        frameBytes
-                    }
-                    launchApprovalActivity(appContext, peerId, challengeBody)
+                    handleIncomingFrame(appContext, peerId, frameBytes)
                 },
             )
             PersistentGattClientRegistry.put(bond.peerId, client)
@@ -525,6 +685,38 @@ public class SyauthCompanionService : Service() {
         internal const val LOG_TAG: String = SYAUTH_BG_LOG_TAG
 
         /**
+         * Day-2 reload: the bond set changed on disk while this service was
+         * already running (a new pairing, or a dissociation).
+         *
+         * `injectClientsForBonds()` runs in `onCreate`, and the service is
+         * `START_STICKY`, so without this action it kept the clients it built
+         * for the previous bond: the desktop stayed `Connected: no`, presence
+         * samples stopped and proximity lock plus phone unlock both went dead
+         * until the app was restarted by hand (observed 2026-09-23).
+         */
+        public const val ACTION_RELOAD_BONDS: String = "com.sy.syauth.android.action.RELOAD_BONDS"
+
+        /**
+         * Day-2 revocation from the app UI: send one `Revoke` frame to the
+         * desktop so it stops serving this bond.
+         *
+         * Without it, dissociating in the app left the desktop advertising a
+         * peer the phone had already forgotten (observed 2026-09-23: "if I
+         * dissociate in the app the PC stays active").
+         */
+        public const val ACTION_REVOKE_BOND: String = "com.sy.syauth.android.action.REVOKE_BOND"
+
+        /** Extra carrying the `peer_id` to revoke. */
+        public const val EXTRA_PEER_ID: String = "com.sy.syauth.android.extra.PEER_ID"
+
+        /**
+         * Broadcast sent after a desktop-initiated revoke dropped the local
+         * bond, so the UI can stop showing "associated" without a manual
+         * refresh.
+         */
+        public const val ACTION_BOND_DROPPED: String = "com.sy.syauth.android.action.BOND_DROPPED"
+
+        /**
          * Latches the "channel created" log so it appears at most once
          * per process lifetime — first creation logs, every subsequent
          * `ensureNotificationChannel` call no-ops silently.
@@ -545,6 +737,10 @@ public class SyauthCompanionService : Service() {
         /** Bond-key provider seam; see [BondKeyProvider]. */
         @Volatile
         public var bondKeyProvider: BondKeyProvider? = null
+
+        /** Peer-id derivation seam; see [PeerIdComputer]. */
+        @Volatile
+        public var peerIdComputer: PeerIdComputer? = null
 
         /** Hostname resolver seam; see [HostnameResolver]. */
         @Volatile
@@ -592,6 +788,67 @@ public class SyauthCompanionService : Service() {
             challengeVerifier = null
             gattClientFactory = null
             bondListProvider = null
+            peerIdComputer = null
+        }
+
+        /**
+         * Single entry point for every frame the desktop notifies on the
+         * challenge characteristic. Both factories (the service's default
+         * one and MainActivity's) must route here so a desktop-side revoke
+         * is handled identically no matter who installed the factory
+         * (observed 2026-09-23: only the default factory recognised the
+         * frame; opening the app swapped in a factory that didn't).
+         */
+        public fun handleIncomingFrame(context: Context, peerId: String, frameBytes: ByteArray) {
+            if (!isRevokeFrame(frameBytes)) {
+                // Strip the trailing 16-byte MAC tag so the signature is
+                // computed over the frame body only (version || nonce ||
+                // payload), matching the daemon's verify_frame contract.
+                val challengeBody = if (frameBytes.size > 16) {
+                    frameBytes.copyOfRange(0, frameBytes.size - 16)
+                } else {
+                    frameBytes
+                }
+                launchApprovalActivity(context, peerId, challengeBody)
+                return
+            }
+            // A revoke must be bound to the current bond: the 16 id bytes
+            // after the version must name THIS phone the way the desktop's
+            // bond store does (the pubkey-derived id). Anything else is a
+            // stale, replayed or wrong-peer frame and is dropped.
+            val record = runCatching { loadPersistedBond(context.filesDir) }.getOrNull()
+            val ownId = record?.let { (peerIdComputer ?: defaultPeerIdComputer()).peerIdFor(it.phonePubkey) }
+            val frameId = hexOf(frameBytes, 1, 17)
+            if (record != null && ownId != null && ownId.equals(frameId, ignoreCase = true)) {
+                dropLocalBond(context, record)
+            } else {
+                Log.w(SYAUTH_BG_LOG_TAG, "revoke frame rejected: the peer id does not match this phone's bond")
+            }
+        }
+
+        /**
+         * Delete the local bond because the desktop said the association is
+         * over, then reconcile clients and tell the UI.
+         */
+        public fun dropLocalBond(context: Context, record: BondRecord) {
+            Log.i(SYAUTH_BG_LOG_TAG, "desktop revoked the association: dropping the local bond peer=${record.peerId}")
+            runCatching { java.io.File(context.filesDir, BOND_RECORD_FILE_NAME).delete() }
+                .onFailure { Log.w(SYAUTH_BG_LOG_TAG, "revoke: bond file delete failed", it) }
+            runCatching {
+                val ks = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+                if (ks.containsAlias(record.keystoreAlias)) ks.deleteEntry(record.keystoreAlias)
+            }.onFailure { Log.w(SYAUTH_BG_LOG_TAG, "revoke: keystore entry delete failed", it) }
+            runCatching {
+                context.startService(
+                    Intent(context, SyauthCompanionService::class.java)
+                        .setAction(ACTION_RELOAD_BONDS),
+                )
+            }.onFailure { Log.w(SYAUTH_BG_LOG_TAG, "revoke: reload dispatch failed", it) }
+            runCatching {
+                context.sendBroadcast(
+                    Intent(ACTION_BOND_DROPPED).putExtra(EXTRA_PEER_ID, record.peerId),
+                )
+            }.onFailure { Log.w(SYAUTH_BG_LOG_TAG, "revoke: dropped-broadcast failed", it) }
         }
 
         /**
@@ -693,6 +950,13 @@ public class SyauthCompanionService : Service() {
         }
     }
 }
+
+/**
+ * 16 bytes at [from..to) as a lowercase hex string. Used to compare the
+ * id inside a revoke frame against the phone's own derived id.
+ */
+private fun hexOf(bytes: ByteArray, from: Int, to: Int): String =
+    bytes.copyOfRange(from, to).joinToString("") { "%02x".format(it.toInt() and 0xFF) }
 
 /**
  * Roadmap item S-014 — request code passed to

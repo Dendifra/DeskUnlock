@@ -20,6 +20,6 @@ import uniffi.syauth_mobile.oobCodeForBond
  * `oobCodeForBond` binding. NEVER reimplement the HKDF in Kotlin.
  */
 class UniffiOobCalculator : OobCalculator {
-    override fun compute(bondKey: ByteArray): List<String> =
+    override fun compute(bondKey: ByteArray): String =
         oobCodeForBond(bondKey)
 }

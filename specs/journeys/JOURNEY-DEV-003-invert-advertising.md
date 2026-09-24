@@ -769,7 +769,7 @@ closure; the manifest is already in the unified state.
 
 - **Pair flow e2e** — completed end-to-end against R5CY214FQHM
   earlier in this `/march` run. The runtime evidence (desktop's 6-digit
-  numeric-comparison code, 4-word app-OOB phrase, phone-side `BOND_BONDED`
+  numeric-comparison code, numeric app-OOB code, phone-side `BOND_BONDED`
   broadcast, `post-bond exchange complete` logcat line, desktop's
   "peer already bonded" rejection on re-pair) is captured in
   `specs/journeys/JOURNEY-DEV-001-real-lesc.md` Closure Appendix

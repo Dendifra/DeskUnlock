@@ -114,8 +114,26 @@ impl TestEnv {
         self.runtime_dir.join("syauth").join("presenced.pid")
     }
 
+    /// Open the pairing window the daemon requires when no phone is associated
+    /// yet.
+    ///
+    /// The daemon now refuses to serve with no associated phone (operator's rule,
+    /// 2026-09-23: nothing to unlock means nothing to serve), and pairing is the
+    /// one exception — signalled by this marker, exactly like `syauth-control on`
+    /// does in production. The lifecycle tests drive a daemon with an empty bond
+    /// store, so they need it. The "exits without a bond" behaviour itself is
+    /// covered by the unit tests in `main.rs`.
+    fn open_pairing_window(&self) {
+        let dir = self.pidfile_path().parent().expect("pidfile parent").to_path_buf();
+        std::fs::create_dir_all(&dir).expect("runtime subdir create");
+        std::fs::write(dir.join("pairing-mode"), b"").expect("pairing-mode marker");
+    }
+
     fn spawn_daemon(&self) -> Child {
         let bin = daemon_bin_path();
+        // These tests drive a daemon with an empty bond store: open the pairing
+        // window so the startup gate lets it serve.
+        self.open_pairing_window();
         Command::new(&bin)
             .arg("--socket")
             .arg(&self.socket)

@@ -11,8 +11,6 @@ package com.sy.syauth.android.bg
 
 import android.app.NotificationManager
 import android.content.Context
-import android.content.Intent
-import android.util.Base64
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -60,7 +58,7 @@ class ApproveNotificationTest {
     }
 
     @Test
-    fun build_approve_intent_carries_all_three_extras_and_action_view() {
+    fun build_approve_intent_targets_challenge_activity_with_current_extras() {
         val context = ctx()
         val intent = ApproveNotification.buildApproveIntent(
             context = context,
@@ -69,13 +67,17 @@ class ApproveNotificationTest {
             peerId = TEST_PEER_ID,
         )
 
-        assertEquals(Intent.ACTION_VIEW, intent.action)
-        val b64 = intent.getStringExtra(APPROVE_EXTRA_CHALLENGE_B64)
-        assertNotNull("APPROVE_EXTRA_CHALLENGE_B64 missing", b64)
-        val decoded = Base64.decode(b64, B64_FLAGS)
-        assertTrue("challenge must round-trip", decoded.contentEquals(TEST_CHALLENGE))
-        assertEquals(TEST_HOSTNAME, intent.getStringExtra(APPROVE_EXTRA_HOSTNAME))
-        assertEquals(TEST_PEER_ID, intent.getStringExtra(APPROVE_EXTRA_PEER_ID))
+        assertEquals(
+            ChallengeApprovalActivity::class.java.name,
+            intent.component?.className,
+        )
+        assertTrue(
+            "challenge bytes must round-trip",
+            intent.getByteArrayExtra(EXTRA_CHALLENGE_BYTES)
+                ?.contentEquals(TEST_CHALLENGE) == true,
+        )
+        assertEquals(TEST_HOSTNAME, intent.getStringExtra(EXTRA_HOSTNAME))
+        assertEquals(TEST_PEER_ID, intent.getStringExtra(EXTRA_PEER_ID))
     }
 
     @Test

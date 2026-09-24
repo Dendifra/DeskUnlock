@@ -71,7 +71,13 @@ sealed class PairingState {
      * `uniffi.syauth_mobile.oobCodeForBond(bondKey)`. We display it; the
      * user compares it against the desktop CLI's display and taps Yes/No.
      */
-    data class OobConfirming(val emoji: List<String>) : PairingState()
+    data class OobConfirming(val code: String) : PairingState()
+
+    /** Local persistence is staged while the remote commit is verified. */
+    data object Finalizing : PairingState()
+
+    /** The link ended after a commit decision; success is deliberately withheld. */
+    data class Uncertain(val reason: String) : PairingState()
 
     /**
      * Terminal success. `name` is the peer's display name; the screen

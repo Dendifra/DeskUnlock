@@ -116,4 +116,46 @@ interface PairBackend {
      * observes the system bond state; tests resolve this synchronously.
      */
     fun awaitLescResult(): LescResult
+
+    /**
+     * Complete v2 over the same authenticated GATT session. The callback is
+     * invoked only after the remote COMMIT is received and before COMMIT_ACK
+     * is sent, so local persistence is durable before either side succeeds.
+     */
+    fun coordinateTransaction(persistCommitted: () -> Boolean): Result<String> =
+        Result.failure(IllegalStateException("coordinated pairing v2 unavailable"))
+
+    /** Persist the committed bond through the protocol/backend boundary. */
+    fun persistBond(record: BondRecord): Result<Unit> =
+        Result.failure(IllegalStateException("bond persistence unavailable"))
+
+    /** Send an explicit REJECT (false) or CANCEL (true) over v2. */
+    fun abortTransaction(cancel: Boolean) {}
+
+    /** Reconcile a durable transaction after process death; never guesses success. */
+    fun recoverTransaction(): Result<Boolean> = Result.failure(IllegalStateException("transaction recovery unavailable"))
+
+    /**
+     * Mark the provisional CDM association of the current session as
+     * committed because the pair reached BONDED. Committed associations
+     * are never removed by [abandonProvisionalAssociation]. Default
+     * no-op for backends without a CDM association.
+     */
+    fun commitProvisionalAssociation() {}
+
+    /**
+     * Drop the provisional CDM association created by the current
+     * session after a pre-BONDED cancel, reject, error, or timeout.
+     * Idempotent; never touches associations from other sessions,
+     * devices, or apps. Default no-op for backends without a CDM
+     * association.
+     */
+    fun abandonProvisionalAssociation() {}
+
+    /**
+     * Release backend-held platform resources (broadcast receivers,
+     * open GATT sessions). Called once from the ViewModel's
+     * `onCleared()`. Default no-op for backends without platform state.
+     */
+    fun cleanup() {}
 }

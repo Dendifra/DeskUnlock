@@ -27,6 +27,103 @@ use syauth_presenced::{
 };
 use tracing_subscriber::EnvFilter;
 
+#[cfg(test)]
+mod idle_gate_tests {
+    use std::fs;
+
+    use syauth_core::{Bond, BondStatus, BondStore, SigningKey, peer_id_from_pubkey};
+    use tempfile::TempDir;
+    use time::OffsetDateTime;
+
+    use super::*;
+
+    fn bond(seed: u8, status: BondStatus) -> Bond {
+        let pubkey = SigningKey::from_bytes(&[seed; 32]).verifying_key().to_bytes();
+        Bond {
+            peer_id: peer_id_from_pubkey(&pubkey),
+            pubkey,
+            name: format!("phone-{seed}"),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            status,
+        }
+    }
+
+    fn config_with(td: &TempDir, bonds: &[Bond]) -> Config {
+        let dir = td.path();
+        fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700)).expect("chmod");
+        let mut cfg = Config::with_runtime_dir(dir);
+        let bonds_file = dir.join("bonds.toml");
+        let mut store = BondStore::empty();
+        for entry in bonds {
+            store.add(entry.clone()).expect("add");
+        }
+        store.save(&bonds_file).expect("save");
+        cfg.bonds_file = bonds_file;
+        cfg
+    }
+
+    /// The operator's rule (2026-09-23): with no associated phone the daemon
+    /// must stop instead of serving nothing.
+    #[test]
+    fn an_empty_store_stops_the_daemon() {
+        let td = TempDir::new().expect("tempdir");
+        let cfg = config_with(&td, &[]);
+        assert!(idle_without_a_bond(&cfg).is_some());
+    }
+
+    /// A store full of revoked bonds is an unassociated phone: history, not an
+    /// association.
+    #[test]
+    fn only_revoked_bonds_stop_the_daemon() {
+        let td = TempDir::new().expect("tempdir");
+        let cfg = config_with(&td, &[bond(1, BondStatus::Revoked { reason: "test".to_string() })]);
+        assert!(idle_without_a_bond(&cfg).is_some());
+    }
+
+    #[test]
+    fn a_bonded_peer_keeps_the_daemon_running() {
+        let td = TempDir::new().expect("tempdir");
+        let cfg = config_with(&td, &[bond(1, BondStatus::Bonded)]);
+        assert!(idle_without_a_bond(&cfg).is_none());
+    }
+
+    /// Pairing is the one reason to run without a bond, and it must be an
+    /// explicit signal: otherwise the first pairing could never happen.
+    #[test]
+    fn the_pairing_marker_allows_the_daemon_to_run_without_a_bond() {
+        let td = TempDir::new().expect("tempdir");
+        let cfg = config_with(&td, &[]);
+        let marker = pairing_mode_marker(&cfg);
+        fs::create_dir_all(marker.parent().expect("marker parent")).expect("mkdir");
+        fs::write(&marker, b"").expect("marker");
+        assert!(prepare_startup(&cfg).is_none());
+        assert!(marker.exists(), "a pairing window must survive the restart it is meant to allow");
+    }
+
+    /// Once a bond exists the pairing window is spent: a later start with no
+    /// bond must be quiet again without anyone cleaning up by hand.
+    #[test]
+    fn startup_with_a_bond_clears_the_pairing_marker() {
+        let td = TempDir::new().expect("tempdir");
+        let cfg = config_with(&td, &[bond(1, BondStatus::Bonded)]);
+        let marker = pairing_mode_marker(&cfg);
+        fs::create_dir_all(marker.parent().expect("marker parent")).expect("mkdir");
+        fs::write(&marker, b"").expect("marker");
+
+        assert!(prepare_startup(&cfg).is_none());
+        assert!(!marker.exists(), "the marker must be cleared once the phone is associated");
+    }
+
+    /// The operator's rule again, through the real entry point: with no bond
+    /// and no pairing window the daemon exits.
+    #[test]
+    fn startup_without_a_bond_and_without_a_window_exits() {
+        let td = TempDir::new().expect("tempdir");
+        let cfg = config_with(&td, &[]);
+        assert!(prepare_startup(&cfg).is_some());
+    }
+}
+
 /// Syslog tag for every line emitted by this binary, per
 /// `specs/unlock-proximity/SPEC.md` §3 Approach.
 const SYSLOG_TAG: &str = "syauth-presenced";
@@ -110,6 +207,16 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // An associated phone is the whole point of this daemon. With none there is
+    // nothing to unlock, and the operator asked explicitly (2026-09-23) that it
+    // be quiet in that state rather than keep a GATT advertisement and a socket
+    // alive for a device that does not exist. Pairing is the one case that needs
+    // the daemon *before* a bond exists, so the activation paths drop the
+    // `pairing-mode` marker in the runtime dir first.
+    if let Some(reason) = prepare_startup(&config) {
+        tracing::info!(reason, "no associated phone: exiting without serving");
+        return ExitCode::SUCCESS;
+    }
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(rt) => rt,
         Err(err) => {
@@ -129,8 +236,70 @@ fn main() -> ExitCode {
     }
 }
 
-fn init_tracing(filter: &str) -> Result<()> {
-    let env_filter = EnvFilter::try_new(filter).with_context(|| format!("invalid --log-level filter: {filter}"))?;
+/// Marker the activation paths create so the daemon may run before the first
+/// bond exists. Removed as soon as a bond is promoted.
+pub const PAIRING_MODE_MARKER: &str = "pairing-mode";
+
+/// Why the daemon should exit immediately, or `None` when it has something to
+/// serve.
+///
+/// "Nothing to serve" means: no *associated* phone — a store holding only
+/// revoked bonds is the same as an empty one, because the operator has no phone
+/// associated — and no pairing in progress. Pairing is the only reason to run
+/// without a bond, so it is signalled explicitly by the activation paths rather
+/// than guessed here.
+fn idle_without_a_bond(config: &Config) -> Option<&'static str> {
+    if pairing_mode_marker(config).exists() {
+        return None;
+    }
+    match syauth_core::BondStore::load(&config.bonds_file) {
+        Ok(store) => {
+            let bonded = store
+                .list()
+                .iter()
+                .any(|bond| matches!(bond.status, syauth_core::BondStatus::Bonded));
+            if bonded {
+                None
+            } else {
+                Some("no bonded peer in the store")
+            }
+        }
+        Err(_) => Some("bonds store unreadable"),
+    }
+}
+
+/// `pairing-mode` lives next to the pidfile, i.e. in the daemon's runtime dir.
+fn pairing_mode_marker(config: &Config) -> PathBuf {
+    config
+        .pidfile
+        .parent()
+        .map_or_else(|| PathBuf::from(PAIRING_MODE_MARKER), |dir| dir.join(PAIRING_MODE_MARKER))
+}
+
+/// Startup gate: `Some(reason)` means "exit now", `None` means "serve".
+///
+/// When a bond does exist the pairing window is over, so the marker is cleared:
+/// a later start with no bond (the operator dissociated) must be quiet again
+/// without anyone having to remember to clean up.
+fn prepare_startup(config: &Config) -> Option<&'static str> {
+    let idle = idle_without_a_bond(config);
+    if idle.is_none() && has_bonded_peer(config) {
+        let _ = std::fs::remove_file(pairing_mode_marker(config));
+    }
+    idle
+}
+
+/// `true` when the store holds at least one `Bonded` record.
+fn has_bonded_peer(config: &Config) -> bool {
+    syauth_core::BondStore::load(&config.bonds_file).is_ok_and(|store| {
+        store
+            .list()
+            .iter()
+            .any(|bond| matches!(bond.status, syauth_core::BondStatus::Bonded))
+    })
+}
+
+fn init_tracing(filter: &str) -> Result<()> {    let env_filter = EnvFilter::try_new(filter).with_context(|| format!("invalid --log-level filter: {filter}"))?;
     // The `fmt` layer prefixes every line with the `target` value
     // (defaults to the emitting module path). We want a fixed syslog
     // tag instead so `journalctl -t syauth-presenced` filters

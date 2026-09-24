@@ -5,9 +5,9 @@
 //   Idle ──[onStartScanTapped]──▶ Scanning
 //   Scanning ──[onPeerPicked, adapter supports LESC]──▶ LescNegotiating(code)
 //   Scanning ──[onPeerPicked, LESC unsupported]──▶ Failed("adapter $name …")
-//   LescNegotiating ──[onLescBondCompleted(bondKey)]──▶ OobConfirming(emoji)
+//   LescNegotiating ──[onLescBondCompleted(bondKey)]──▶ OobConfirming(code)
 //   LescNegotiating ──[onLescBondFailed(reason)]──▶ Failed(reason)
-//   OobConfirming ──[onOobYesTapped]──▶ Bonded(name) [bondPersister.persist]
+//   OobConfirming ──[onOobYesTapped]──▶ Bonded(name) [backend commit]
 //   OobConfirming ──[onOobNoTapped]──▶ Failed("OOB code did not match …")
 //                                      [bondRemover.remove(peerId)]
 //   Scanning|… ──[onCancelTapped]──▶ Idle
@@ -15,8 +15,8 @@
 // Architectural notes (mirrors prrr-android's QRScanViewModel):
 //   - `StateFlow<PairingState>` is the single source of truth.
 //   - Side-effect dependencies (`backend`, `oobCalculator`,
-//     `bondPersister`, `bondRemover`) are injected as interfaces so the
-//     unit test wires hand-rolled fakes (no mockk, per the brief).
+//     `bondRemover`) are injected as interfaces so the unit test wires
+//     hand-rolled fakes (no mockk, per the brief).
 //   - All transitions happen synchronously on the caller's thread; async
 //     I/O (BT scan, LESC handshake) is the backend's job. This keeps the
 //     test on `UnconfinedTestDispatcher` and asserts behavior, not timing.
@@ -35,7 +35,6 @@ package com.sy.syauth.android.pair
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sy.syauth.android.pair.api.BluetoothBondRemover
-import com.sy.syauth.android.pair.api.BondPersister
 import com.sy.syauth.android.pair.api.BondRecord
 import com.sy.syauth.android.pair.api.CompanionAssociationError
 import com.sy.syauth.android.pair.api.CompanionAssociator
@@ -43,7 +42,6 @@ import com.sy.syauth.android.pair.api.LescResult
 import com.sy.syauth.android.pair.api.OobCalculator
 import com.sy.syauth.android.pair.api.PairBackend
 import com.sy.syauth.android.pair.api.PeerHandle
-import com.sy.syauth.android.pair.api.PersistError
 import com.sy.syauth.android.pair.api.PickPeerResult
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -100,10 +98,10 @@ internal class NoopCompanionAssociator : CompanionAssociator {
 class PairingViewModel(
     private val backend: PairBackend,
     private val oobCalculator: OobCalculator,
-    private val bondPersister: BondPersister,
     private val bondRemover: BluetoothBondRemover,
     private val companionAssociator: CompanionAssociator = NoopCompanionAssociator(),
     private val associateDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
+    private val transactionDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : ViewModel() {
 
     private val _state: MutableStateFlow<PairingState> =
@@ -111,6 +109,17 @@ class PairingViewModel(
 
     /** Observable state for the screen. */
     val state: StateFlow<PairingState> = _state.asStateFlow()
+
+    init {
+        // A persisted transaction is evidence that the previous process did
+        // not finish. Ask the backend to reconnect and reconcile it; any
+        // transport or status ambiguity remains recoverable, never success.
+        viewModelScope.launch(transactionDispatcher) {
+            backend.recoverTransaction().onSuccess { bonded ->
+                _state.value = if (bonded) PairingState.Bonded("") else PairingState.Uncertain("authenticated recovery is incomplete")
+            }
+        }
+    }
 
     /**
      * Provisional pick: the peer the user tapped in the scan list. Held
@@ -138,8 +147,13 @@ class PairingViewModel(
      */
     fun onCancelTapped() {
         when (_state.value) {
-            is PairingState.Scanning, is PairingState.LescNegotiating -> {
+            is PairingState.Scanning, is PairingState.LescNegotiating, is PairingState.OobConfirming -> {
                 backend.stopScan()
+                backend.abortTransaction(cancel = true)
+                // The CDM association created by the picker is provisional
+                // until BONDED. Drop it so cancelling does not leave a
+                // stale OS association behind.
+                backend.abandonProvisionalAssociation()
                 pickedPeer = null
                 _state.value = PairingState.Idle
             }
@@ -155,37 +169,54 @@ class PairingViewModel(
     fun onPeerPicked(peer: PeerHandle) {
         if (_state.value !is PairingState.Scanning) return
         pickedPeer = peer
-        _state.value = when (val r = backend.pickPeer(peer)) {
-            is PickPeerResult.LescStarted -> PairingState.LescNegotiating(r.code)
-            is PickPeerResult.LescUnsupported -> PairingState.Failed(
-                PairingReasons.ADAPTER_NO_LESC_PREFIX +
-                    r.adapterName +
-                    PairingReasons.ADAPTER_NO_LESC_SUFFIX,
-            )
-            is PickPeerResult.Failed -> PairingState.Failed(r.reason)
+        when (val result = backend.pickPeer(peer)) {
+            is PickPeerResult.LescStarted -> {
+                _state.value = PairingState.LescNegotiating(result.code)
+            }
+            is PickPeerResult.LescUnsupported -> {
+                backend.abandonProvisionalAssociation()
+                _state.value = PairingState.Failed(
+                    PairingReasons.ADAPTER_NO_LESC_PREFIX +
+                        result.adapterName +
+                        PairingReasons.ADAPTER_NO_LESC_SUFFIX,
+                )
+            }
+            is PickPeerResult.Failed -> {
+                backend.abandonProvisionalAssociation()
+                _state.value = PairingState.Failed(result.reason)
+            }
         }
     }
 
     /**
-     * Drive the LESC outcome into the state machine. Called by the
-     * backend (in production) or directly by the test. On success:
-     * compute the OOB via UniFFI and transition to [OobConfirming]. On
-     * failure: transition to [Failed] and remove the BT bond.
+     * Update the displayed Bluetooth numeric-comparison code while the OS
+     * pairing request is pending. Called by the backend (in production) or
+     * directly by the test.
      */
     fun onPairingCode(code: String) {
-val current = _state.value
-if (current is PairingState.LescNegotiating) {
-_state.value = current.copy(code = code)
-}
-}
+        val current = _state.value
+        if (current is PairingState.LescNegotiating) {
+            _state.value = current.copy(code = code)
+        }
+    }
 
-fun onLescResult(result: LescResult) {
+    /**
+     * Drive the LESC outcome into the state machine. Called by the backend (in
+     * production) or directly by the test. On success: compute the OOB via
+     * UniFFI and transition to [OobConfirming]. On failure the LESC bond never
+     * completed, so the transport bond is rolled back too.
+     */
+    fun onLescResult(result: LescResult) {
         if (_state.value !is PairingState.LescNegotiating) return
         when (result) {
             is LescResult.Bonded -> {
-                pickedPeer = pickedPeer?.copy(name = result.peerName)
-                    ?: PeerHandle(id = result.peerName, name = result.peerName)
-                val emoji = oobCalculator.compute(result.bondKey)
+                val peer = pickedPeer ?: run {
+                    backend.abandonProvisionalAssociation()
+                    _state.value = PairingState.Failed("pairing peer selection was lost")
+                    return
+                }
+                pickedPeer = peer.copy(name = result.peerName)
+                val code = oobCalculator.compute(result.bondKey)
                 // Stash the bond key + Keystore fields for the eventual
                 // persist() call BEFORE emitting the new state, so a
                 // same-thread observer who immediately reacts to
@@ -194,9 +225,10 @@ fun onLescResult(result: LescResult) {
                 stashedBondKey = result.bondKey
                 stashedKeystoreAlias = result.keystoreAlias
                 stashedPhonePubkey = result.phonePubkey
-                _state.value = PairingState.OobConfirming(emoji)
+                _state.value = PairingState.OobConfirming(code)
             }
             is LescResult.Failed -> {
+                backend.abandonProvisionalAssociation()
                 removeBondBestEffort()
                 _state.value = PairingState.Failed(result.reason)
             }
@@ -213,87 +245,87 @@ fun onLescResult(result: LescResult) {
     private var stashedPhonePubkey: ByteArray = ByteArray(0)
 
     /**
-     * User tapped Yes on the OOB-match question. Persist the bond,
-     * request a CDM association (S-018), and transition to [Bonded].
+     * User tapped Yes on the OOB-match question. Commit the bond through
+     * the backend's bilateral transaction and transition to [Bonded]. The
+     * backend persists only at its commit boundary; the terminal UI action
+     * never writes storage. CDM association is completed by the picker path
+     * before this point. The blocking transaction runs on the injected dispatcher.
      *
-     * Failure modes:
-     * - Persist throws -> [Failed] with PERSIST_PREFIX reason + BT
-     *   bond removed.
-     * - Associate returns a failed [Result] -> [Failed] with
-     *   ASSOCIATE_PREFIX reason + BT bond removed AND the just-persisted
-     *   bond record is NOT rolled back at the Kotlin layer because the
-     *   `BondPersister` interface intentionally has no `remove(peerId)`
-     *   method in v0.1 (the `bonds.toml` rollback path is documented as
-     *   "lost = pair again" in SPEC §4.4). We document the residual:
-     *   the BT bond is removed (so the OS won't reuse the LESC bond)
-     *   and the next pair attempt overwrites the persister entry.
-     *
-     * The associate call is suspend, so we launch on [viewModelScope].
-     * Production wires `Dispatchers.Main.immediate` so the state
-     * updates happen on the UI thread; tests inject
-     * `Dispatchers.Unconfined` to run synchronously.
+     * On a pre-commit failure the OS-level Bluetooth bond is PRESERVED: that
+     * bond is transport, not DeskUnlock authorization, and no trust was created
+     * (nothing was persisted and the transaction aborted before its commit
+     * boundary). Dropping it would force the next attempt back through LESC.
      */
     fun onOobYesTapped() {
         if (_state.value !is PairingState.OobConfirming) return
         val peer = pickedPeer ?: return
         val bondKey = stashedBondKey ?: return
-        try {
-            bondPersister.persist(
-                BondRecord(
-                    peerId = peer.id,
-                    peerName = peer.name,
-                    bondKey = bondKey,
-                    keystoreAlias = stashedKeystoreAlias,
-                    phonePubkey = stashedPhonePubkey,
-                ),
-            )
-        } catch (e: PersistError) {
-            removeBondBestEffort()
-            _state.value = PairingState.Failed(
-                PairingReasons.PERSIST_PREFIX + (e.message ?: "unknown"),
-            )
-            return
+        _state.value = PairingState.Finalizing
+        viewModelScope.launch(transactionDispatcher) {
+            var persistFailure: String? = null
+            val transaction = backend.coordinateTransaction {
+                backend.persistBond(
+                    BondRecord(
+                        peerId = peer.id,
+                        peerName = peer.name,
+                        bondKey = bondKey,
+                        keystoreAlias = stashedKeystoreAlias,
+                        phonePubkey = stashedPhonePubkey,
+                    ),
+                ).onFailure { error ->
+                    persistFailure = error.message ?: "unknown"
+                }.isSuccess
+            }
+            if (transaction.isFailure) {
+                val transactionReason = transaction.exceptionOrNull()?.message
+                val reason = if (transactionReason?.startsWith("UNCERTAIN:") == true) transactionReason else if (persistFailure != null) PairingReasons.PERSIST_PREFIX + persistFailure else transactionReason ?: PairingReasons.PERSIST_PREFIX + "unknown"
+                if (reason.startsWith("UNCERTAIN:")) {
+                    // The remote commit decision was made; a durable local
+                    // bond may already exist. Keep the CDM association so a
+                    // committed bond is never orphaned.
+                    _state.value = PairingState.Uncertain(reason.removePrefix("UNCERTAIN: "))
+                } else {
+                    // No DeskUnlock trust was created: the transaction aborted
+                    // before its commit boundary and nothing was persisted. The
+                    // OS-level Bluetooth bond is deliberately KEPT so the next
+                    // "Associa telefono" can take the already-bonded path
+                    // instead of a fresh LESC pairing.
+                    backend.abandonProvisionalAssociation()
+                    _state.value = PairingState.Failed(reason)
+                }
+                return@launch
+            }
+            // CDM association is completed by the scanner/picker before
+            // this callback. Do not launch a second association after the
+            // bilateral commit: that would create a false-success seam.
+            // BONDED is the commit point for the provisional association.
+            backend.commitProvisionalAssociation()
+            _state.value = PairingState.Bonded(peer.name)
         }
-        viewModelScope.launch(associateDispatcher) {
-            requestAssociationAndTransition(peer)
-        }
-    }
-
-    private suspend fun requestAssociationAndTransition(peer: PeerHandle) {
-        val result: Result<com.sy.syauth.android.pair.api.AssociationHandle> = try {
-            companionAssociator.associate(peer)
-        } catch (e: CompanionAssociationError) {
-            Result.failure(e)
-        }
-        result.fold(
-            onSuccess = {
-                _state.value = PairingState.Bonded(peer.name)
-            },
-            onFailure = { throwable ->
-                removeBondBestEffort()
-                val reason = throwable.message ?: throwable::class.java.simpleName
-                _state.value = PairingState.Failed(
-                    PairingReasons.ASSOCIATE_PREFIX + reason,
-                )
-            },
-        )
     }
 
     /**
-     * User tapped No on the OOB-match question. Remove the BT bond and
-     * transition to [Failed]. The [BondPersister] is NEVER called on
-     * this path (DoD #3 / TC-07).
+     * User tapped No on the OOB-match question: the four words shown by the
+     * phone and by the desktop differ, which is exactly the MitM signal the OOB
+     * step exists to catch. The transport bond is suspect, so it is rolled back
+     * together with the transaction. The committed-bond backend is NEVER called
+     * on this path.
      */
     fun onOobNoTapped() {
         if (_state.value !is PairingState.OobConfirming) return
+        backend.abortTransaction(cancel = false)
+        backend.abandonProvisionalAssociation()
         removeBondBestEffort()
         _state.value = PairingState.Failed(PairingReasons.OOB_MISMATCH)
     }
 
     /**
-     * Best-effort BT bond cleanup. Returns silently on any failure; the
-     * BondPersister is intentionally NOT consulted here — see DoD #3 and
-     * the No-path comment in [onOobNoTapped].
+     * Best-effort BT bond cleanup, used on the two paths where unbonding is
+     * correct: an LESC failure (no successful bond exists yet) and an explicit
+     * OOB-mismatch rejection (the bond is suspect). It is deliberately NOT
+     * called when a successful bond is followed by an application-level
+     * failure. Returns silently on any failure; the committed-bond backend is
+     * intentionally NOT consulted here.
      */
     private fun removeBondBestEffort() {
         val peer = pickedPeer ?: return
@@ -302,5 +334,30 @@ fun onLescResult(result: LescResult) {
         // We deliberately ignore `removed`. The journey doc and SPEC §6
         // T-004 note both call out that BT cleanup is best-effort; the
         // app-level non-persistence is what matters.
+    }
+
+    /**
+     * The pair route can be left with the system back gesture without
+     * tapping Cancel. A session that never reached BONDED must drop its
+     * provisional CDM association or it leaks in the OS. `Finalizing`,
+     * `Uncertain`, and `Bonded` have already made the commit decision,
+     * so their association is kept. The backend then releases its
+     * receivers/session.
+     */
+    override fun onCleared() {
+        super.onCleared()
+        when (_state.value) {
+            is PairingState.Idle,
+            is PairingState.Scanning,
+            is PairingState.LescNegotiating,
+            is PairingState.OobConfirming,
+            is PairingState.Failed,
+            -> backend.abandonProvisionalAssociation()
+            is PairingState.Finalizing,
+            is PairingState.Uncertain,
+            is PairingState.Bonded,
+            -> Unit
+        }
+        backend.cleanup()
     }
 }

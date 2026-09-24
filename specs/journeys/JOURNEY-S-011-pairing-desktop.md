@@ -46,7 +46,7 @@ The key design decisions:
    `display_lesc_numeric`, and `confirm_oob`. Production wraps `bluer`; tests
    use a `MockPairBackend` driven by a scenario table.
 
-3. **A pure `oob_code_for_bond` function.** The DoD's "4-word emoji OOB code
+3. **A pure `oob_code_for_bond` function.** The DoD's "numeric OOB code
    derived from HKDF(bond, 'syauth-oob-v1')[0..4]" is implemented as a pure
    function over a 256-entry `OOB_WORDS` table. Same `bond_key` → same word
    tuple, byte-deterministic. The 256 entries are short English nouns each

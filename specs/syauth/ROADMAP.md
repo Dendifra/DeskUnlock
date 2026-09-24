@@ -524,7 +524,7 @@ Plus: `tc10_setcred_returns_pam_success` (DoD #4), `tc12_last_log_appends_one_li
 
 ## Step S-011: `syauth-cli` — `pair` subcommand with LE Secure Connections + app-level OOB
 
-**Description:** Drives the desktop side of pairing per SPEC §4.1 dataflow. Initiates LE Secure Connections via `bluer` with MitM-protection required, then displays the app-level 4-word emoji OOB code derived from `HKDF(bond, "syauth-oob-v1")[0..4]`. On user `[y/N]` confirmation, writes the bond and exits 0.
+**Description:** Drives the desktop side of pairing per SPEC §4.1 dataflow. Initiates LE Secure Connections via `bluer` with MitM-protection required, then displays the app-level numeric OOB code derived from `HKDF(bond, "syauth-oob-v1")[0..4]`. On user `[y/N]` confirmation, writes the bond and exits 0.
 
 **DoR:** S-005, S-010 complete.
 
@@ -539,7 +539,7 @@ Plus: `tc10_setcred_returns_pam_success` (DoD #4), `tc12_last_log_appends_one_li
 
 **Created / modified files:**
 - `crates/syauth-cli/src/pair.rs` — `PairBackend` trait (test seam), `PairingPhase` state machine (Scanning → AwaitingLesc → AwaitingOobConfirmation → ProvisionalBonded → Bonded | Revoked), `PairError` variants (`AdapterMissing`, `LescUnsupported { adapter, hint }`, `AmbiguousPeer { matches }`, `Revoked { reason }`), `run_pair_with_io` driver wired to `tokio::time::timeout` for the `ProvisionalBonded → Revoked` deadline.
-- `crates/syauth-cli/src/oob.rs` — pure `oob_code_for_bond(bond_key) -> [String; OOB_WORD_COUNT]` deriving 4 bytes from `HKDF<Sha256>(None, bond_key, info=HKDF_INFO_OOB_V1)`, each byte indexing into a static 256-entry `OOB_WORDS` table of short emoji-prefixed nouns.
+- `crates/syauth-cli/src/oob.rs` — pure `oob_code_for_bond(bond_key) -> String` deriving 4 bytes from `HKDF<Sha256>(None, bond_key, info=HKDF_INFO_OOB_V1)` and rendering them as an 8-digit decimal the operator compares on both screens.
 - `crates/syauth-cli/src/list.rs` — `syauth list` reads `BondStore::load(bond_dir)` and prints TSV `id\tname\tstatus\tcreated_at`; empty store prints a one-line hint.
 - `crates/syauth-cli/src/main.rs` — extended clap dispatcher: adds `Pair` and `List` subcommands alongside `InstallPam`/`UninstallPam`; async tokio runtime; stub `BluerPairBackend` that returns `PairError::Backend { reason: "real-radio path lands in S-019" }` for now.
 - `crates/syauth-cli/src/lib.rs` — declares `pub mod {oob, pair, list};`.
@@ -701,7 +701,7 @@ Plus: `tc10_setcred_returns_pam_success` (DoD #4), `tc12_last_log_appends_one_li
 - `crates/syauth-mobile/build.rs` — `uniffi::generate_scaffolding("src/mobile.udl")` + `cargo:rerun-if-changed=src/mobile.udl`.
 - `crates/syauth-mobile/src/mobile.udl` — UDL with `namespace syauth_mobile` exporting 4 `[Throws=MobileError]` functions, `[Error] interface MobileError` with 5 variants, `dictionary Invite { string host_name; sequence<u8> host_pubkey; }`.
 - `crates/syauth-mobile/src/lib.rs` — `uniffi::include_scaffolding!("mobile");`, `#![allow(unsafe_code)]` with SAFETY docstring naming UniFFI's `unsafe extern "C"` shims, re-exports from `implementation`.
-- `crates/syauth-mobile/src/implementation.rs` — the 4 functions: `parse_invite_uri` (URI scheme + host + hex-pubkey validation), `verify_challenge_frame` (bond_key length check + decode + `verify_tag`), `sign_challenge_response` (signing_key length check + `body_bytes` + Ed25519 sign), `oob_code_for_bond` (HKDF<Sha256> → 4-byte indices into a 256-entry `OOB_WORDS` table — duplicated from syauth-cli with a determinism test pinning byte-identical output to the CLI fixture).
+- `crates/syauth-mobile/src/implementation.rs` — the 4 functions: `parse_invite_uri` (URI scheme + host + hex-pubkey validation), `verify_challenge_frame` (bond_key length check + decode + `verify_tag`), `sign_challenge_response` (signing_key length check + `body_bytes` + Ed25519 sign), `oob_code_for_bond` (HKDF<Sha256> → 4 bytes rendered as an 8-digit decimal — duplicated from syauth-cli with a determinism test pinning byte-identical output to the CLI fixture).
 - `crates/syauth-mobile/examples/smoke.rs` — end-to-end Rust smoke test exercising all 4 functions.
 - `scripts/build_aar.sh` — cargo-ndk + uniffi-bindgen-kotlin + AAR packaging pipeline (requires NDK on PATH).
 - `Makefile` — adds `android-aar` (full build) and `android-aar-dry-run` (validates pipeline without NDK).
@@ -712,7 +712,7 @@ Plus: `tc10_setcred_returns_pam_success` (DoD #4), `tc12_last_log_appends_one_li
 - `verify_challenge_frame`: happy (`verify_challenge_frame_happy_path`); negative (`verify_challenge_frame_rejects_wrong_bond_key`, `verify_challenge_frame_rejects_bad_bond_key_length`, `verify_challenge_frame_rejects_bad_frame_bytes`).
 - `sign_challenge_response`: happy (`sign_challenge_response_round_trips_with_verify_frame`); negative (`sign_challenge_response_rejects_bad_key_length`, `sign_challenge_response_rejects_bad_frame_bytes`).
 - `oob_code_for_bond`: happy (`oob_code_is_deterministic_for_fixed_key`, `oob_byte_identical_to_cli_fixture`); negative (`oob_code_rejects_bad_bond_key_length`).
-- Cross-cutting: `oob_word_table_has_exactly_256_entries`, `host_pubkey_len_matches_syauth_core`, `no_secret_bytes_in_error_strings`.
+- Cross-cutting: `oob_code_is_always_exactly_eight_digits`, `host_pubkey_len_matches_syauth_core`, `no_secret_bytes_in_error_strings`.
 
 **Command outputs:**
 - `make lint` — exit 0; `make test` — exit 0; `cargo test -p syauth-mobile --lib` — 21 passed.
@@ -721,7 +721,7 @@ Plus: `tc10_setcred_returns_pam_success` (DoD #4), `tc12_last_log_appends_one_li
 
 **Deviations:**
 1. `make android-aar` is verified in dry-run mode on this developer host (no NDK installed). The full build runs on a CI host with the NDK; the script + Makefile target are in place.
-2. `OOB_WORDS` table is duplicated (not imported) from `syauth-cli/src/oob.rs` to keep the AAR's dep tree minimal. Byte-identity is pinned by `oob_byte_identical_to_cli_fixture`.
+2. The OOB derivation is duplicated (not imported) from `syauth-cli/src/oob.rs` to keep the AAR's dep tree minimal. Byte-identity is pinned by `oob_code_is_byte_identical_to_cli_fixture`.
 3. The crate-level `#![allow(unsafe_code)]` lives in `lib.rs` with a SAFETY docstring rather than as a Cargo.toml `[lints]` toggle. Keeps the workspace deny strict and surfaces the override at source-review time.
 4. The smoke "example" is a Rust binary; the Kotlin example against the AAR lands with S-015.
 
@@ -767,14 +767,14 @@ Plus: `tc10_setcred_returns_pam_success` (DoD #4), `tc12_last_log_appends_one_li
 
 ## Step S-016: Android — Pairing screen with LE Secure Connections + OOB confirm
 
-**Description:** First production-shaped screen on the phone. UX (Compose): big "Pair with computer" CTA → BluetoothLE scan picker → trigger LESC bond → display 6-digit BT code → after BT pair, display the 4-word emoji OOB code → "These match the computer? [Yes] [No]". On Yes, persist the bond via UniFFI and route to the home screen.
+**Description:** First production-shaped screen on the phone. UX (Compose): big "Pair with computer" CTA → BluetoothLE scan picker → trigger LESC bond → display 6-digit BT code → after BT pair, display the numeric OOB code → "These match the computer? [Yes] [No]". On Yes, persist the bond via UniFFI and route to the home screen.
 
 **DoR:** S-014, S-015 complete. (Desktop S-011 not strictly required, but having it makes manual testing trivial.)
 
 **DoD:**
-- [x] Pairing screen renders in Compose; states are `Idle`, `Scanning`, `LescNegotiating(code: String)`, `OobConfirming(emoji: List<String>)`, `Bonded(name: String)`, `Failed(reason: String)`.
+- [x] Pairing screen renders in Compose; states are `Idle`, `Scanning`, `LescNegotiating(code: String)`, `OobConfirming(code: String)`, `Bonded(name: String)`, `Failed(reason: String)`.
 - [x] OOB code is computed via the UniFFI surface (`oobCodeForBond`) — never reimplemented in Kotlin.
-- [x] On `Failed`, the bond is not persisted on either side. The Bluetooth bond is also removed (`BluetoothDevice.removeBond()` via reflection — Android does not expose this in the public SDK; document the reflection).
+- [x] On `Failed`, the bond is not persisted on either side. The Bluetooth bond is removed only on the two paths where that is correct: an LESC failure (no valid transport bond exists yet) and an explicit OOB-mismatch rejection (the bond is suspect). A pre-commit application failure *after* a successful bond KEEPS the transport bond — Bluetooth bonding is transport, not DeskUnlock authorization, so the next attempt can take the already-bonded path (`BluetoothDevice.removeBond()` via reflection — Android does not expose this in the public SDK; document the reflection).
 - [x] Robolectric unit tests for the state-machine transitions; Compose UI test for the rendering of each state. *(verified by inspection; test source compiles on an SDK-equipped host — this CI host has no Android SDK, `make android-test` skips cleanly per S-015 wiring)*
 - [x] Refuses to advance past `Scanning` when the adapter doesn't support LE Secure Connections — error includes the adapter name.
 
@@ -789,7 +789,7 @@ Plus: `tc10_setcred_returns_pam_success` (DoD #4), `tc12_last_log_appends_one_li
 ### Evidence
 
 **Created files:**
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/PairingState.kt` — sealed class with the six required variants (`Idle`, `Scanning`, `LescNegotiating(code)`, `OobConfirming(emoji)`, `Bonded(name)`, `Failed(reason)`); shape pinned by DoD #1.
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/PairingState.kt` — sealed class with the six required variants (`Idle`, `Scanning`, `LescNegotiating(code)`, `OobConfirming(code)`, `Bonded(name)`, `Failed(reason)`); shape pinned by DoD #1.
 - `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/PairingViewModel.kt` — state-machine driver. Injected deps: `PairBackend`, `OobCalculator`, `BondPersister`, `BluetoothBondRemover` (all interfaces in `pair.api`). Reason strings in `PairingReasons` so tests assert by constant.
 - `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/PairingScreen.kt` — pure-projection Compose surface; six render branches each with `testTag`-bearing nodes (`PairingTestTags`). The screen NEVER calls `BluetoothDevice.removeBond()` directly — only through the `BluetoothBondRemover` seam.
 - `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/api/{PairBackend,OobCalculator,BondPersister,BluetoothBondRemover}.kt` — test seams. All four are `fun interface`s (or interfaces with one method) with no Android-platform imports, so the Robolectric JVM tests compile without `android.bluetooth.*` on the classpath.
@@ -815,7 +815,7 @@ Plus: `tc10_setcred_returns_pam_success` (DoD #4), `tc12_last_log_appends_one_li
 - `idle_renders_pair_cta` — DoD #1 Idle.
 - `scanning_renders_progress_and_cancel` — DoD #1 Scanning.
 - `lesc_negotiating_renders_6_digit_code` — DoD #1 LescNegotiating.
-- `oob_confirming_renders_4_emoji_words_and_yes_no_buttons` — DoD #1 OobConfirming.
+- `oob_confirming_renders_the_numeric_code_and_yes_no_buttons` — DoD #1 OobConfirming.
 - `bonded_renders_peer_name` — DoD #1 Bonded.
 - `failed_renders_reason_and_back_button` — DoD #1 Failed.
 

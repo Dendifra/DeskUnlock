@@ -90,7 +90,7 @@ mod tests {
         let bond = Bond {
             peer_id: peer_id_from_pubkey(&FIXED_PUBKEY),
             pubkey: FIXED_PUBKEY,
-            name: "alex-pixel".to_owned(),
+            name: "Galaxy S26".to_owned(),
             created_at: datetime!(2026-05-15 12:00:00 UTC),
             status: BondStatus::Bonded,
         };
@@ -99,7 +99,7 @@ mod tests {
         let mut cur = Cursor::new(&mut buf);
         render_list_to(&mut cur, &store).expect("render");
         let s = String::from_utf8(buf).expect("utf8");
-        assert!(s.contains("alex-pixel"), "name in output: {s}");
+        assert!(s.contains("Galaxy S26"), "name in output: {s}");
         assert!(s.contains("bonded"), "status in output: {s}");
         assert_eq!(s.matches(LIST_FIELD_SEP).count(), 3, "three tab separators: {s}");
     }

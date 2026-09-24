@@ -25,6 +25,7 @@ import com.sy.syauth.android.pair.api.PairBackend
 import com.sy.syauth.android.pair.api.PeerHandle
 import com.sy.syauth.android.pair.api.PersistError
 import com.sy.syauth.android.pair.api.PickPeerResult
+import com.sy.syauth.android.pair.impl.LESC_PENDING_PLACEHOLDER
 import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -52,6 +53,15 @@ private class FakePairBackend(
         private set
     var lastPickedPeer: PeerHandle? = null
         private set
+    var persister: BondPersister? = null
+    val abortCancelValues: MutableList<Boolean> = mutableListOf()
+
+    override fun abortTransaction(cancel: Boolean) {
+        abortCancelValues.add(cancel)
+    }
+
+    override fun persistBond(record: BondRecord): Result<Unit> =
+        runCatching { persister?.persist(record) ?: error("missing test persister") }
 
     override fun startScan() {
         startScanCount += 1
@@ -67,18 +77,23 @@ private class FakePairBackend(
     }
 
     override fun awaitLescResult(): LescResult = lescResult
+
+    override fun coordinateTransaction(persistCommitted: () -> Boolean): Result<String> {
+        return if (persistCommitted()) Result.success("test-peer")
+        else Result.failure(IllegalStateException("persist failed"))
+    }
 }
 
 private const val BOND_KEY_LEN: Int = 32
 
-/** Records every input to the calculator and returns the configured words. */
+/** Records every input to the calculator and returns the configured code. */
 private class FakeOobCalculator(
-    private val words: List<String> = listOf("alpha", "beta", "gamma", "delta"),
+    private val code: String = "04231789",
 ) : OobCalculator {
     val invocations: MutableList<ByteArray> = mutableListOf()
-    override fun compute(bondKey: ByteArray): List<String> {
+    override fun compute(bondKey: ByteArray): String {
         invocations.add(bondKey.copyOf())
-        return words
+        return code
     }
 }
 
@@ -130,7 +145,6 @@ private fun newViewModel(
     val vm = PairingViewModel(
         backend = backend,
         oobCalculator = oobCalculator,
-        bondPersister = bondPersister,
         bondRemover = bondRemover,
         companionAssociator = associator,
         // `Dispatchers.Unconfined` runs `viewModelScope.launch { ... }`
@@ -138,7 +152,9 @@ private fun newViewModel(
         // visible to the assertions below happen synchronously — the
         // S-016 test contract pre-dates S-018's suspend hop.
         associateDispatcher = Dispatchers.Unconfined,
+        transactionDispatcher = Dispatchers.Unconfined,
     )
+    backend.persister = bondPersister
     return Quad(vm, backend, oobCalculator, bondPersister, bondRemover, associator)
 }
 
@@ -212,13 +228,13 @@ class PairingViewModelTest {
     // ──── TC-04 ────
     @Test
     fun lesc_then_oob_computed_transitions_to_oob_confirming() {
-        val expectedWords = listOf("alpha", "beta", "gamma", "delta")
+        val expectedCode = "04231789"
         val bondKey = ByteArray(BOND_KEY_LEN) { (it + 1).toByte() }
         val q = newViewModel(
             backend = FakePairBackend(
                 pickResult = PickPeerResult.LescStarted(code = "123456"),
             ),
-            oobCalculator = FakeOobCalculator(words = expectedWords),
+            oobCalculator = FakeOobCalculator(code = expectedCode),
         )
 
         q.vm.onStartScanTapped()
@@ -227,7 +243,7 @@ class PairingViewModelTest {
 
         val state = q.vm.state.value
         assertTrue("expected OobConfirming, got $state", state is PairingState.OobConfirming)
-        assertEquals(expectedWords, (state as PairingState.OobConfirming).emoji)
+        assertEquals(expectedCode, (state as PairingState.OobConfirming).code)
         assertEquals(1, q.oobCalculator.invocations.size)
         assertTrue("calculator must see exact bondKey",
             q.oobCalculator.invocations[0].contentEquals(bondKey))
@@ -338,7 +354,7 @@ class PairingViewModelTest {
     }
 
     @Test
-    fun persist_failure_falls_through_to_failed_and_removes_bt_bond() {
+    fun persist_failure_fails_the_transaction_and_keeps_the_bt_bond() {
         val q = newViewModel(
             backend = FakePairBackend(
                 pickResult = PickPeerResult.LescStarted(code = "123456"),
@@ -361,7 +377,50 @@ class PairingViewModelTest {
         val reason = (state as PairingState.Failed).reason
         assertTrue("reason should mention persist prefix, got: $reason",
             reason.startsWith("could not persist bond:"))
-        assertEquals(listOf(TEST_PEER.id), q.bondRemover.removed)
+        // No DeskUnlock trust exists on either side …
+        assertEquals(0, q.bondPersister.persisted.size)
+        // … and the OS-level Bluetooth bond survives. It is transport, not
+        // authorization; removing it would force a fresh LESC on the retry.
+        assertEquals(0, q.bondRemover.removed.size)
+    }
+
+    // ──── Bond preservation and retry ────
+
+    @Test
+    fun a_failed_application_transaction_leaves_the_already_bonded_retry_path_open() {
+        // Attempt 1: the OS bond succeeds, the DeskUnlock transaction fails.
+        val first = newViewModel(
+            backend = FakePairBackend(pickResult = PickPeerResult.LescStarted(code = "123456")),
+            bondPersister = FakeBondPersister(throwError = PersistError("disk full")),
+        )
+        first.vm.onStartScanTapped()
+        first.vm.onPeerPicked(TEST_PEER)
+        first.vm.onLescResult(
+            LescResult.Bonded(ByteArray(BOND_KEY_LEN) { it.toByte() }, TEST_PEER.name),
+        )
+        first.vm.onOobYesTapped()
+        assertTrue("attempt 1 must fail", first.vm.state.value is PairingState.Failed)
+        assertEquals("the transport bond survives attempt 1", 0, first.bondRemover.removed.size)
+
+        // Attempt 2: a fresh session over the surviving OS bond. The backend
+        // reports the already-bonded path, which skips createBond and drives
+        // the DeskUnlock handshake directly, so no new numeric code is needed.
+        val second = newViewModel(
+            backend = FakePairBackend(
+                pickResult = PickPeerResult.LescStarted(code = LESC_PENDING_PLACEHOLDER),
+            ),
+        )
+        second.vm.onStartScanTapped()
+        second.vm.onPeerPicked(TEST_PEER)
+        second.vm.onLescResult(
+            LescResult.Bonded(ByteArray(BOND_KEY_LEN) { it.toByte() }, TEST_PEER.name),
+        )
+        second.vm.onOobYesTapped()
+
+        val state = second.vm.state.value
+        assertTrue("expected Bonded on retry, got $state", state is PairingState.Bonded)
+        assertEquals(1, second.bondPersister.persisted.size)
+        assertEquals("the retry must not unbond either", 0, second.bondRemover.removed.size)
     }
 
     @Test
@@ -374,6 +433,23 @@ class PairingViewModelTest {
 
         assertEquals(PairingState.Idle, q.vm.state.value)
         assertEquals(1, q.backend.stopScanCount)
+        assertEquals(listOf(true), q.backend.abortCancelValues)
+    }
+
+    @Test
+    fun cancel_from_oob_sends_cancel_and_returns_to_idle() {
+        val q = newViewModel()
+        q.vm.onStartScanTapped()
+        q.vm.onPeerPicked(TEST_PEER)
+        q.vm.onLescResult(
+            LescResult.Bonded(ByteArray(BOND_KEY_LEN), TEST_PEER.name),
+        )
+
+        q.vm.onCancelTapped()
+
+        assertEquals(PairingState.Idle, q.vm.state.value)
+        assertEquals(listOf(true), q.backend.abortCancelValues)
+        assertEquals(0, q.bondPersister.persisted.size)
     }
 
     @Test

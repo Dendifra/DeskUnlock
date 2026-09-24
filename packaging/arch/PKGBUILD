@@ -1,6 +1,6 @@
 pkgname=deskunlock
 pkgver=0.1.0
-pkgrel=18
+pkgrel=55
 provides=('syauth-suite=0.1.0')
 conflicts=('syauth-suite')
 replaces=('syauth-suite')
@@ -10,7 +10,6 @@ license=('MIT')
 depends=('bash' 'bluez' 'bluez-utils' 'dbus' 'dms-shell' 'pam' 'polkit' 'pyside6' 'python' 'systemd' 'wayland')
 makedepends=('cargo' 'go' 'git' 'wayland')
 source=()
-install=deskunlock.install
 
 build() {
     cd "$startdir/../.."
@@ -36,19 +35,16 @@ package() {
         "$pkgdir/usr/lib/syauth/syauth-idle-lock-bin"
 
     for file in desktop/bin/*; do
+        [[ -f "$file" ]] || continue
         install -Dm755 "$file" "$pkgdir/usr/bin/$(basename "$file")"
     done
     for file in desktop/libexec/*; do
+        [[ -f "$file" ]] || continue
         install -Dm755 "$file" "$pkgdir/usr/lib/syauth/$(basename "$file")"
     done
     for file in desktop/systemd/*.service desktop/systemd/*.timer desktop/systemd/*.path; do
         install -Dm644 "$file" "$pkgdir/usr/lib/systemd/user/$(basename "$file")"
     done
-    install -Dm644 desktop/systemd/dms.service.d/syauth.conf \
-        "$pkgdir/usr/lib/systemd/user/dms.service.d/syauth.conf"
-    install -Dm644 desktop/pam/syauth-dms "$pkgdir/etc/pam.d/syauth-dms"
-    install -Dm644 desktop/hooks/syauth-pam.hook \
-        "$pkgdir/usr/share/libalpm/hooks/syauth-pam.hook"
     install -Dm644 desktop/applications/syauth.desktop \
         "$pkgdir/usr/share/applications/syauth.desktop"
     install -Dm644 assets/deskunlock-logo.png \

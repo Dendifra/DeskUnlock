@@ -65,6 +65,8 @@ reset_case() {
     SYAUTH_TEST_NOW_MS=1000000
     load_config
     load_runtime
+    LEFT_NEAR_SINCE_MS=0
+    NEAR_SEEN_SINCE_LOCK=1
 }
 
 write_sample_values() {
@@ -97,7 +99,97 @@ far_lock() {
     bootstrap_near
     tick_sample -61 1000
     tick_sample -61 8000
+    # Leaving NEAR arms the 5 s countdown: a stable FAR departure locks after
+    # it elapses (2026-09-24), no longer instantly on the state change.
+    tick_sample -61 1000
+    tick_sample -61 1000
+    tick_sample -61 1000
+    tick_sample -61 1000
+    tick_sample -61 1000
     assert_eq 1 "$(grep -c '^LOCK$' "$SYAUTH_TEST_ACTION_LOG")" "stable FAR lock"
+}
+
+test_mid_departure_locks_after_five_seconds() {
+    bootstrap_near
+    tick_sample -58 1000
+    tick_sample -58 2000
+    assert_eq MID "$PROXIMITY_STATE" "left NEAR into MID"
+    tick_sample -58 1000
+    tick_sample -58 1000
+    tick_sample -58 1000
+    assert_no_actions "3 s after leaving NEAR the lock must not fire yet"
+    tick_sample -58 1000
+    tick_sample -58 1000
+    assert_eq 1 "$(grep -c '^LOCK$' "$SYAUTH_TEST_ACTION_LOG")" "MID departure locks 5 s after leaving NEAR"
+}
+
+test_mid_return_within_five_seconds_does_not_lock() {
+    bootstrap_near
+    tick_sample -58 1000
+    tick_sample -58 2000
+    assert_eq MID "$PROXIMITY_STATE" "left NEAR into MID"
+    tick_sample -53 1000
+    tick_sample -53 4000
+    assert_no_actions "coming straight back must not lock"
+    assert_eq NEAR "$PROXIMITY_STATE" "the phone is back"
+}
+
+test_unlock_while_phone_still_away_mid_does_not_relock() {
+    bootstrap_near
+    tick_sample -58 1000
+    tick_sample -58 2000
+    tick_sample -58 5000
+    assert_eq 1 "$(grep -c '^LOCK$' "$SYAUTH_TEST_ACTION_LOG")" "MID departure locks"
+    # The lock is observed while it is on screen (LockedHint=yes), then the
+    # operator unlocks. An unlock while the phone is still away must not be
+    # undone.
+    tick_sample -58 1000
+    SYAUTH_TEST_LOCKED=0
+    tick_sample -58 1000
+    tick_sample -58 1000
+    assert_eq 1 "$(grep -c '^LOCK$' "$SYAUTH_TEST_ACTION_LOG")" "an unlock while away must not be undone"
+    tick_sample -53 1000
+    tick_sample -53 4000
+    assert_eq NEAR "$PROXIMITY_STATE" "back near"
+    tick_sample -58 1000
+    tick_sample -58 1000
+    tick_sample -58 1000
+    tick_sample -58 1000
+    tick_sample -58 1000
+    tick_sample -58 1000
+    tick_sample -58 1000
+    tick_sample -58 1000
+    assert_eq 2 "$(grep -c '^LOCK$' "$SYAUTH_TEST_ACTION_LOG")" "a new departure locks again"
+}
+
+# A proximity lock is one-per-departure. Hardware run 2026-09-23: the phone
+# stayed away, the operator unlocked the session, and the watcher locked again
+# one second later — a lock-screen loop that risks locking the operator out for
+# good. An unlock while the phone is still away must NOT be undone, and the
+# watcher re-arms only after the phone has been seen again.
+test_absent_lock_is_not_re_requested_after_a_manual_unlock() {
+    bootstrap_near
+    SYAUTH_TEST_HEARTBEAT_AGE_MS=$((HEARTBEAT_STALE_AFTER_MS + 1))
+    engine_tick
+    engine_tick
+    assert_eq 1 "$(grep -c '^LOCK$' "$SYAUTH_TEST_ACTION_LOG")" "one lock when the phone departs"
+
+    # The operator unlocks while the phone is still away.
+    SYAUTH_TEST_LOCKED=0
+    engine_tick
+    engine_tick
+    engine_tick
+    assert_eq 1 "$(grep -c '^LOCK$' "$SYAUTH_TEST_ACTION_LOG")" "an unlock must not be undone by another proximity lock"
+
+    # The phone comes back, then departs again: that is a new departure.
+    SYAUTH_TEST_HEARTBEAT_AGE_MS=0
+    tick_sample -53 1000
+    tick_sample -53 4000
+    assert_eq NEAR "$PROXIMITY_STATE" "the phone is back"
+    SYAUTH_TEST_HEARTBEAT_AGE_MS=$((HEARTBEAT_STALE_AFTER_MS + 1))
+    engine_tick
+    engine_tick
+    assert_eq 2 "$(grep -c '^LOCK$' "$SYAUTH_TEST_ACTION_LOG")" "a new departure locks again"
 }
 
 test_near_baseline_bootstrap() {
@@ -171,7 +263,7 @@ test_normal_near_signal_stays_near_after_strong_samples() {
         tick_sample -51 1000
     done
     for _ in {1..8}; do
-        tick_sample -60 1000
+        tick_sample -59 1000
     done
     assert_eq NEAR "$PROXIMITY_STATE" "normal NEAR signal became FAR after strong samples"
 }
@@ -191,6 +283,7 @@ test_mid_hysteresis_avoids_flap() {
     assert_eq MID "$PROXIMITY_STATE" "mid transition"
     tick_sample -57 1000
     assert_eq MID "$PROXIMITY_STATE" "mid to near persistence"
+    tick_sample -53 4000
     tick_sample -53 4000
     assert_eq NEAR "$PROXIMITY_STATE" "near return persistence"
 }
@@ -602,6 +695,11 @@ test_return_settling_blocks_stale_filtered_relock() {
     SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 8000))
     write_sample_values -61 -61 "$SYAUTH_TEST_NOW_MS"
     engine_tick
+    # Leaving NEAR arms the 5 s countdown (2026-09-24): the relock fires after
+    # it, not on the state change itself.
+    SYAUTH_TEST_NOW_MS=$((SYAUTH_TEST_NOW_MS + 5000))
+    write_sample_values -61 -61 "$SYAUTH_TEST_NOW_MS"
+    engine_tick
     assert_eq 2 "$(grep -c '^LOCK$' "$SYAUTH_TEST_ACTION_LOG")" "new departure relock"
 }
 
@@ -738,6 +836,9 @@ tests=(
     test_mid_hysteresis_avoids_flap
     test_departure_behavior_remains_conservative
     test_far_persistence_locks_once
+    test_mid_departure_locks_after_five_seconds
+    test_mid_return_within_five_seconds_does_not_lock
+    test_unlock_while_phone_still_away_mid_does_not_relock
     test_proximity_lock_reason_starts_proximity
     test_proximity_lock_reason_survives_pending_locked_tick
     test_proximity_lock_reason_survives_multiple_locked_ticks
@@ -767,6 +868,7 @@ tests=(
     test_manual_absent_armed_return_sends_one_auth
     test_manual_wait_near_samples_never_auth
     test_unlock_resets_proximity_provenance
+    test_absent_lock_is_not_re_requested_after_a_manual_unlock
     test_manual_lock_explicit_trigger_remains_dms_owned
     test_auth_cancellation_guards_remain_present
     test_no_late_notification_contract_remains_present

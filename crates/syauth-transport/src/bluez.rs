@@ -40,7 +40,10 @@ use bluer::{AdapterEvent, gatt::remote::Characteristic};
 use futures::{StreamExt, stream::BoxStream};
 use hkdf::Hkdf;
 use sha2::Sha256;
-use syauth_core::Frame;
+use syauth_core::{
+    Frame,
+    pair_transaction::{STATUS_MESSAGE_LEN, StatusMessage},
+};
 use tokio::{
     sync::{Mutex, mpsc},
     time::timeout as tokio_timeout,
@@ -126,6 +129,17 @@ pub const SYAUTH_PAIR_HOST_PUBKEY_CHAR_UUID: Uuid = Uuid::from_u128(0x5a4e8e3c_1
 /// DEV-001 pair-service characteristic: the phone's Ed25519 phone pubkey
 /// (32 bytes). Phone writes after LESC pairing succeeds.
 pub const SYAUTH_PAIR_PHONE_PUBKEY_CHAR_UUID: Uuid = Uuid::from_u128(0x5a4e8e3c_1c4c_4a17_9c81_d518a55a0103);
+
+/// Optional display metadata, version 1: `[1][UTF-8 hostname, 1..128 bytes]`.
+/// Requires an authenticated encrypted read. Never advertised, never used as
+/// identity or as evidence of coordinated-commit capability.
+pub const SYAUTH_PAIR_HOST_NAME_V1_CHAR_UUID: Uuid = Uuid::from_u128(0x5a4e8e3c_1c4c_4a17_9c81_d518a55a0104);
+
+/// V2 control messages written by Android to the desktop.
+pub const SYAUTH_PAIR_V2_CONTROL_CHAR_UUID: Uuid = Uuid::from_u128(0x5a4e8e3c_1c4c_4a17_9c81_d518a55a0105);
+
+/// V2 status messages read by Android from the desktop.
+pub const SYAUTH_PAIR_V2_STATUS_CHAR_UUID: Uuid = Uuid::from_u128(0x5a4e8e3c_1c4c_4a17_9c81_d518a55a0106);
 
 /// Length in bytes of an Ed25519 public key on the pair-service
 /// characteristics. Sized identically to `syauth_core::bond::PUBKEY_LEN`.
@@ -629,6 +643,59 @@ pub async fn connect_pair_service(
     let mut out = [0u8; PAIR_PUBKEY_LEN];
     out.copy_from_slice(&phone_bytes);
     Ok(out)
+}
+
+/// Reconnect to a bonded pair peer and perform an authenticated V2 status exchange.
+/// The characteristic permissions enforce the encrypted authenticated link;
+/// the caller additionally binds the connection to the journaled address.
+pub async fn query_pair_status(device: &bluer::Device, query: StatusMessage) -> Result<StatusMessage, TransportError> {
+    device.connect().await.map_err(|err| TransportError::Backend {
+        reason: format!("device.connect: {err}"),
+    })?;
+    let services = device.services().await.map_err(|err| TransportError::Backend {
+        reason: format!("device.services: {err}"),
+    })?;
+    let mut control = None;
+    let mut status = None;
+    for service in services {
+        if service.uuid().await.map_err(|err| TransportError::Backend {
+            reason: format!("service.uuid: {err}"),
+        })? != SYAUTH_PAIR_SERVICE_UUID
+        {
+            continue;
+        }
+        for characteristic in service.characteristics().await.map_err(|err| TransportError::Backend {
+            reason: format!("service.characteristics: {err}"),
+        })? {
+            match characteristic.uuid().await.map_err(|err| TransportError::Backend {
+                reason: format!("characteristic.uuid: {err}"),
+            })? {
+                SYAUTH_PAIR_V2_CONTROL_CHAR_UUID => control = Some(characteristic),
+                SYAUTH_PAIR_V2_STATUS_CHAR_UUID => status = Some(characteristic),
+                _ => {}
+            }
+        }
+    }
+    let control = control.ok_or(TransportError::Unreachable)?;
+    let status = status.ok_or(TransportError::Unreachable)?;
+    control.write(&query.encode()).await.map_err(|err| TransportError::Backend {
+        reason: format!("status query write: {err}"),
+    })?;
+    let bytes = status.read().await.map_err(|err| TransportError::Backend {
+        reason: format!("status response read: {err}"),
+    })?;
+    if bytes.len() != STATUS_MESSAGE_LEN {
+        return Err(TransportError::BadFrame(syauth_core::FrameError::TooShort {
+            needed: STATUS_MESSAGE_LEN,
+            got: bytes.len(),
+        }));
+    }
+    StatusMessage::decode(&bytes).map_err(|_| {
+        TransportError::BadFrame(syauth_core::FrameError::TooShort {
+            needed: STATUS_MESSAGE_LEN,
+            got: bytes.len(),
+        })
+    })
 }
 
 /// Wait on the discovery stream for a `DeviceAdded` whose advertised

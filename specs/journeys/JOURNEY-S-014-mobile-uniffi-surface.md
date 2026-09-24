@@ -28,7 +28,7 @@ Two design forces dominate the step:
 **Pain / Risk:**
 - UniFFI's `generate_scaffolding` runs in `build.rs`; if the UDL is malformed the build fails with a parser error rather than a Rust error. Mitigation: the UDL file is short (four functions, one error enum), reviewed in this journey, and matches the `prrr-mobile` syntax line-for-line.
 - The crate-type triple (`cdylib`, `staticlib`, `lib`) means three different link artifacts. On hosts without `ld` configured for `cdylib`, the build can fail. Mitigation: the workspace already builds the `syauth-pam` cdylib on the CI host, so the linker path is proven.
-- Cyclic dep risk: `syauth-mobile` imports `OOB_WORDS` from `syauth-cli`. Mitigation: we duplicate the OOB derivation in the mobile crate rather than depend on `syauth-cli` (which would pull in `bluer`, `clap`, etc., bloating the AAR). The duplication is annotated with a comment naming `crates/syauth-cli/src/oob.rs` as the source of truth and asserted by a deterministic-fixture round-trip test in `tests/oob_cross_crate.rs` (out of scope for this step but documented).
+- Cyclic dep risk: `syauth-mobile` needs the OOB derivation from `syauth-cli`. Mitigation: we duplicate the OOB derivation in the mobile crate rather than depend on `syauth-cli` (which would pull in `bluer`, `clap`, etc., bloating the AAR). The duplication is annotated with a comment naming `crates/syauth-cli/src/oob.rs` as the source of truth and asserted by a deterministic-fixture round-trip test in `tests/oob_cross_crate.rs` (out of scope for this step but documented).
 
 **Success Signal:** `make build` exits 0, producing both `target/release/libsyauth_mobile.so` (cdylib) and `target/release/libsyauth_mobile.a` (staticlib).
 
@@ -78,7 +78,7 @@ Two design forces dominate the step:
 |----------|-------|-------------|
 | Re-implementing protocol in Kotlin = wire-format drift risk | Phase 1 | UniFFI auto-generates Kotlin; drift impossible by construction. |
 | NDK absent on most developer boxes | Phase 3 | `DRY_RUN=1` mode produces a build plan; full build runs only on CI. |
-| OOB word table duplication in two crates | Phase 1 | Document `syauth-cli/src/oob.rs` as the source of truth; pin a cross-crate determinism test. |
+| OOB code derivation duplicated in two crates | Phase 1 | Document `syauth-cli/src/oob.rs` as the source of truth; pin a cross-crate determinism test. |
 | Panic across FFI = UB | Phase 2 | Every UDL function returns `Result<_, MobileError>`; no `unwrap`/`expect` outside `#[cfg(test)]`. |
 
 ### North Star Summary
@@ -101,7 +101,7 @@ The Android app developer never touches JNI, never duplicates a single line of p
 
 ### Golden Path Quality
 - [x] Happy-path tests verify the *cryptographic* round-trip (sign → verify with matching pubkey, compute_tag → verify_challenge_frame), not just non-empty output.
-- [x] The OOB word table is byte-identical to `syauth-cli/src/oob.rs::OOB_WORDS`.
+- [x] The OOB code is byte-identical to `syauth-cli/src/oob.rs::oob_code_for_bond` (`oob_code_is_byte_identical_to_cli_fixture`).
 
 ### Decision Load
 - [x] Four functions, one error enum. No optional config knobs.
@@ -150,5 +150,5 @@ This mirrors prrr-mobile's pattern: prrr-mobile commits out the `[lints.rust] un
 - [x] DoR satisfied: S-002 (frame), S-003 (replay), S-004 (sign + mac), S-005 (bond), S-006 (KeyStore) all on master.
 - [x] No production `unwrap()`/`expect()` — `cargo clippy` `-D warnings` blocks it.
 - [x] No `TODO` comments — every loose end is either filed as a follow-up roadmap item or tested.
-- [x] No emojis in source files; the OOB word table is duplicated with a comment naming `crates/syauth-cli/src/oob.rs` as the source of truth.
+- [x] The OOB derivation is duplicated with a comment naming `crates/syauth-cli/src/oob.rs` as the source of truth.
 - [ ] Open: cross-crate determinism test (assert `syauth_mobile::oob_code_for_bond` == `syauth_cli::oob::oob_code_for_bond` for a fixed key). Filed as a follow-up; not part of S-014's DoD. The in-crate fixture covers byte-determinism within syauth-mobile; the cross-crate property is enforced by both crates pinning the same fixture output.

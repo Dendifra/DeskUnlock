@@ -42,11 +42,11 @@ use bluer::{
         CharacteristicReader, CharacteristicWriter,
         local::{
             Application, ApplicationHandle, Characteristic, CharacteristicControlEvent, CharacteristicNotify, CharacteristicNotifyMethod,
-            CharacteristicRead, CharacteristicWrite, CharacteristicWriteMethod, Service, characteristic_control,
+            CharacteristicWrite, CharacteristicWriteMethod, Service, characteristic_control,
         },
     },
 };
-use futures::{FutureExt, StreamExt};
+use futures::StreamExt;
 use thiserror::Error;
 use tokio::{
     io::AsyncReadExt,
@@ -56,11 +56,12 @@ use tokio::{
 
 use crate::{
     bluez::{
-        BOND_KEY_BYTES, PAIR_PUBKEY_LEN, SYAUTH_CHALLENGE_CHAR_UUID, SYAUTH_PAIR_HOST_PUBKEY_CHAR_UUID, SYAUTH_PAIR_PHONE_PUBKEY_CHAR_UUID,
-        SYAUTH_PAIR_SERVICE_UUID, SYAUTH_RESPONSE_CHAR_UUID, map_adapter_open_error, session_uuid_for,
+        BOND_KEY_BYTES, PAIR_PUBKEY_LEN, SYAUTH_CHALLENGE_CHAR_UUID, SYAUTH_RESPONSE_CHAR_UUID, map_adapter_open_error, session_uuid_for,
     },
     bluez_advertise::{ADVERTISE_DISCOVERABLE, ADVERTISE_LOCAL_NAME},
     error::TransportError,
+    pair_engine::{PairCommitRequest, PairServiceState, build_pair_service, host_name_payload, run_pair_session},
+    pairing::PairingBroker,
 };
 
 /// Per-peer mpsc depth for incoming response frames. Sized to absorb
@@ -347,6 +348,163 @@ struct PeerCharSet {
 /// timing skew without unbounded growth.
 const RESPONSE_BUFFER_DEPTH: usize = 8;
 
+/// Bounded budget for one adapter-mode transition. BlueZ answers `Busy`
+/// while a previous mode change or a discovery is still settling, so the
+/// effective state is re-read and the transition retried instead of failing
+/// the session outright.
+const ADAPTER_MODE_RETRIES: usize = 10;
+const ADAPTER_MODE_RETRY_DELAY: Duration = Duration::from_millis(150);
+
+/// Adapter state a pair session changed, so release restores only that.
+///
+/// DeskUnlock never touches the adapter's global `Discoverable` flag. The pair
+/// service is published as an LE advertisement, which BlueZ serves
+/// independently of `Adapter1.Discoverable`: making the whole desktop
+/// generically discoverable is not required to accept one GATT pairing
+/// session, and it changes the desktop's Bluetooth role for every other
+/// device. Only `Pairable` is DeskUnlock's to own, and only for the duration
+/// of the session.
+struct PairAgentRestore {
+    /// Previous `Pairable` value, present only when this session changed it.
+    previous_pairable: Option<bool>,
+}
+
+impl PairAgentRestore {
+    /// Restore plan for a session that drove `Pairable` to the desired state.
+    /// An unchanged flag is never touched on release.
+    fn from_pairable(changed: bool, previous: bool) -> Self {
+        Self {
+            previous_pairable: changed.then_some(previous),
+        }
+    }
+}
+
+/// Held pair-session BlueZ agent plus the adapter state to restore. Generic
+/// over the handle type so the bookkeeping is unit-testable without a radio.
+struct PairAgentSession<H> {
+    handle: Option<H>,
+    restore: Option<PairAgentRestore>,
+}
+
+impl<H> Default for PairAgentSession<H> {
+    fn default() -> Self {
+        Self {
+            handle: None,
+            restore: None,
+        }
+    }
+}
+
+impl<H> PairAgentSession<H> {
+    fn is_held(&self) -> bool {
+        self.handle.is_some()
+    }
+
+    fn begin(&mut self, handle: H, restore: PairAgentRestore) {
+        self.handle = Some(handle);
+        self.restore = Some(restore);
+    }
+
+    /// Release the held session, returning its restore plan exactly once.
+    /// Further calls are no-ops, so release can neither leak nor double-restore.
+    fn end(&mut self) -> Option<PairAgentRestore> {
+        self.handle.take()?;
+        self.restore.take()
+    }
+}
+
+/// Minimal seam over the `Pairable` adapter flag, so the acquisition state
+/// machine is unit-testable without a radio. `Discoverable` is deliberately
+/// absent: a GATT pair session has no reason to touch it.
+#[async_trait]
+trait PairableControl: Send + Sync {
+    async fn pairable(&self) -> Result<bool, String>;
+    async fn set_pairable(&self, value: bool) -> Result<(), String>;
+}
+
+#[async_trait]
+impl PairableControl for bluer::Adapter {
+    async fn pairable(&self) -> Result<bool, String> {
+        self.is_pairable().await.map_err(|err| err.to_string())
+    }
+
+    async fn set_pairable(&self, value: bool) -> Result<(), String> {
+        bluer::Adapter::set_pairable(self, value).await.map_err(|err| err.to_string())
+    }
+}
+
+/// Drive the adapter to `Pairable = true` and verify the effective state.
+///
+/// Returns `Ok(true)` when this call changed the flag, `Ok(false)` when the
+/// adapter was already pairable, and `Err` when the state could not be verified
+/// within the bounded retry budget. A BlueZ `Busy` is not fatal on its own:
+/// the state is re-read after every attempt.
+async fn ensure_pairable_with(adapter: &impl PairableControl, retries: usize, delay: Duration) -> Result<bool, PeripheralError> {
+    if adapter.pairable().await.unwrap_or(false) {
+        return Ok(false);
+    }
+    for _ in 0..retries {
+        let _ = adapter.set_pairable(true).await;
+        if adapter.pairable().await.unwrap_or(false) {
+            return Ok(true);
+        }
+        tokio::time::sleep(delay).await;
+    }
+    Err(PeripheralError::Backend {
+        reason: "adapter Pairable could not be verified as true".to_owned(),
+    })
+}
+
+/// Production bounds for [`ensure_pairable_with`].
+async fn ensure_pairable(adapter: &impl PairableControl) -> Result<bool, PeripheralError> {
+    ensure_pairable_with(adapter, ADAPTER_MODE_RETRIES, ADAPTER_MODE_RETRY_DELAY).await
+}
+
+/// Acquisition sequence shared by the real adapter and the unit tests: verify
+/// `Pairable`, then register the agent, rolling the flag back when registration
+/// fails. `Discoverable` is never read or written. A failed acquisition leaves
+/// no agent held and no partially acquired adapter state behind.
+async fn acquire_pair_agent_with<H, F, Fut>(
+    adapter: &impl PairableControl,
+    session: &mut PairAgentSession<H>,
+    register: F,
+) -> Result<(), PeripheralError>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<H, String>>,
+{
+    if session.is_held() {
+        return Ok(());
+    }
+    let previous_pairable = adapter.pairable().await.unwrap_or(false);
+    let pairable_changed = ensure_pairable(adapter).await?;
+    let handle = match register().await {
+        Ok(handle) => handle,
+        Err(err) => {
+            if pairable_changed {
+                let _ = adapter.set_pairable(previous_pairable).await;
+            }
+            return Err(PeripheralError::Backend {
+                reason: format!("register_agent: {err}"),
+            });
+        }
+    };
+    session.begin(handle, PairAgentRestore::from_pairable(pairable_changed, previous_pairable));
+    Ok(())
+}
+
+/// Release sequence shared by the real adapter and the unit tests: drop the
+/// agent and restore `Pairable` only when the session changed it. `Discoverable`
+/// is never read or written. Idempotent.
+async fn release_pair_agent_with<H>(adapter: &impl PairableControl, session: &mut PairAgentSession<H>) {
+    let Some(restore) = session.end() else {
+        return;
+    };
+    if let Some(previous_pairable) = restore.previous_pairable {
+        let _ = adapter.set_pairable(previous_pairable).await;
+    }
+}
+
 /// Production peripheral backed by `bluer 0.17`.
 ///
 /// Owns one `bluer::Session`, one `bluer::Adapter`, one long-lived
@@ -369,42 +527,38 @@ pub struct PersistentPeripheral {
     /// `set_session_uuids`. Optional because the daemon may construct
     /// the peripheral before any UUIDs are known (cold-start path).
     adv_slot: Mutex<Option<bluer::adv::AdvertisementHandle>>,
-    /// BlueZ agent handle, held for the lifetime of the daemon.
-    /// Dropping it unregisters the agent; we never drop it because
-    /// the daemon is the sole pairing responder on the desktop.
-    ///
-    /// Registered at `new()` so any phone-initiated LESC pairing
-    /// against this adapter dispatches `request_confirmation` to
-    /// our handler instead of falling back to the system default
-    /// (which rejects numeric comparison and forces the bond to
-    /// time out with `HCI_ERR_AUTH_FAILURE`). The callback
-    /// auto-accepts: the user's trust signal is the CDM-picker
-    /// selection on the phone, not a desktop-side prompt.
-    #[allow(dead_code)]
-    agent_handle: AgentHandle,
-    /// Host's pubkey, served on the pair-mode characteristic the
-    /// phone reads at pair time. 32 random bytes generated at
-    /// startup; the desktop side of the pair protocol uses it only
-    /// as opaque HKDF input alongside the phone's pubkey to produce
-    /// the bond_key. Not persisted across daemon restarts — a pair
-    /// attempt that races a restart fails and retries; existing
-    /// bonds are unaffected because the bond_key is committed to
-    /// disk once at pair time.
-    host_pubkey: [u8; PAIR_PUBKEY_LEN],
-    /// Sender side of the pair-event channel. The pair watcher task
-    /// (re-spawned on every application registration) forwards every
-    /// phone-pubkey write here, paired with the host_pubkey that was
-    /// being served at the time of the write. The receiver is owned
-    /// by the daemon (returned from `new()`) and drives bond
-    /// derivation + persistence + `add_peer`.
-    pair_event_tx: mpsc::Sender<([u8; PAIR_PUBKEY_LEN], [u8; PAIR_PUBKEY_LEN])>,
-    /// JoinHandle for the pair watcher task spawned by the most
+    /// Held pair-session BlueZ agent and the adapter state to restore.
+    /// Empty outside an explicit DeskUnlock pair session, so no default agent
+    /// is ever left registered.
+    pair_agent: Mutex<PairAgentSession<AgentHandle>>,
+    /// Broker that relays a real BlueZ confirmation request to the GUI.
+    pairing_broker: PairingBroker,
+    /// Shared GATT pair-service state and V2 transaction inbox (holds the
+    /// host public key and authenticated host-name metadata).
+    pair_state: Arc<PairServiceState>,
+    /// Commit-boundary persistence channel. The daemon persists trust only
+    /// after the V2 commit decision.
+    pair_commit_tx: mpsc::Sender<PairCommitRequest>,
+    /// JoinHandle for the pair engine task spawned by the most
     /// recent application registration. Aborted before re-spawning
-    /// so we never have two watchers competing on stale control
+    /// so we never have two engines competing on stale control
     /// streams.
     pair_watcher: Mutex<Option<JoinHandle<()>>>,
     /// Per-peer characteristic state. Keyed by stable peer_id.
     peers: Mutex<HashMap<String, PeerCharSet>>,
+}
+
+/// Resolve a peer's Bluetooth display name for a bond record.
+///
+/// The transport name is a *label*, never a trust identity: it exists so the
+/// operator sees "Pixel 8" instead of "phone (paired via daemon)" in
+/// `syauth list`. Returns `None` when the adapter or the device name is
+/// unavailable, and the caller falls back to the transport label.
+pub async fn peer_display_name(adapter_id: &str, address: &str) -> Option<String> {
+    let session = bluer::Session::new().await.ok()?;
+    let adapter = session.adapter(adapter_id).ok()?;
+    let device = adapter.device(address.parse::<bluer::Address>().ok()?).ok()?;
+    device.name().await.ok().flatten().filter(|name| !name.trim().is_empty())
 }
 
 impl PersistentPeripheral {
@@ -421,7 +575,9 @@ impl PersistentPeripheral {
     /// for any other upstream failure.
     pub async fn new(
         adapter_id: &str,
-    ) -> Result<(Arc<Self>, mpsc::Receiver<([u8; PAIR_PUBKEY_LEN], [u8; PAIR_PUBKEY_LEN])>), PeripheralError> {
+        pairing_broker: PairingBroker,
+        pair_commit_tx: mpsc::Sender<PairCommitRequest>,
+    ) -> Result<Arc<Self>, PeripheralError> {
         let session = bluer::Session::new()
             .await
             .map_err(|err| PeripheralError::from(map_adapter_open_error(adapter_id, err)))?;
@@ -431,34 +587,11 @@ impl PersistentPeripheral {
         adapter.set_powered(true).await.map_err(|err| PeripheralError::Backend {
             reason: format!("adapter set_powered: {err}"),
         })?;
-        // Make the adapter ready to accept phone-initiated LESC pairing
-        // at any time, without requiring a separate `syauth pair` process
-        // to flip these flags. The daemon is the sole BlueZ client on the
-        // desktop; it owns these settings for its lifetime.
-        adapter.set_discoverable(true).await.map_err(|err| PeripheralError::Backend {
-            reason: format!("adapter set_discoverable: {err}"),
-        })?;
-        adapter.set_pairable(true).await.map_err(|err| PeripheralError::Backend {
-            reason: format!("adapter set_pairable: {err}"),
-        })?;
-        // Register a system-wide BlueZ pairing agent so phone-initiated
-        // LESC numeric-comparison bonding attempts dispatch their
-        // `request_confirmation` callback to us. `request_default = true`
-        // makes us the system default agent for the daemon's lifetime;
-        // without this BlueZ would route to whatever Just-Works fallback
-        // it has and the bond would fail with HCI_ERR_AUTH_FAILURE.
+        // The general Bluetooth role (discoverable/pairable + default agent)
+        // is NOT owned here. It is acquired only for an explicit DeskUnlock
+        // pair session via `acquire_pair_agent`, so DMS stays the desktop's
+        // general Bluetooth frontend.
         //
-        // The handler auto-accepts: the trust signal is the user's
-        // CDM-picker tap on the phone selecting this desktop. The desktop
-        // never prompts; that's the UX contract.
-        let agent = Agent {
-            request_default: true,
-            request_confirmation: Some(Box::new(|_req: RequestConfirmation| Box::pin(async move { Ok(()) }))),
-            ..Default::default()
-        };
-        let agent_handle = session.register_agent(agent).await.map_err(|err| PeripheralError::Backend {
-            reason: format!("register_agent: {err}"),
-        })?;
         // Mint an opaque 32-byte host pubkey used as HKDF input on the
         // pair-mode characteristic. The desktop only uses it as
         // pair-time HKDF input; persistence across daemon restarts is
@@ -468,19 +601,19 @@ impl PersistentPeripheral {
         getrandom::fill(&mut host_pubkey).map_err(|err| PeripheralError::Backend {
             reason: format!("host_pubkey rng: {err}"),
         })?;
-        // mpsc channel the pair watcher task forwards
-        // (host_pubkey, phone_pubkey) pairs to. Depth 8 absorbs
-        // concurrent retries without back-pressuring the BlueZ
-        // GATT-write thread.
-        let (pair_event_tx, pair_event_rx) = mpsc::channel::<([u8; PAIR_PUBKEY_LEN], [u8; PAIR_PUBKEY_LEN])>(8);
+        let host_name = std::fs::read_to_string("/proc/sys/kernel/hostname")
+            .map(|name| host_name_payload(&name))
+            .unwrap_or_else(|_| host_name_payload(""));
+        let pair_state = Arc::new(PairServiceState::new(host_pubkey, host_name));
         let peripheral = Arc::new(Self {
             _session: session,
             adapter,
             app_handle: Mutex::new(None),
             adv_slot: Mutex::new(None),
-            agent_handle,
-            host_pubkey,
-            pair_event_tx,
+            pair_agent: Mutex::new(PairAgentSession::default()),
+            pairing_broker,
+            pair_state,
+            pair_commit_tx,
             pair_watcher: Mutex::new(None),
             peers: Mutex::new(HashMap::new()),
         });
@@ -497,7 +630,63 @@ impl PersistentPeripheral {
         // just register the GATT app here so the characteristic is
         // discoverable once the orchestrator publishes the UUID.
         peripheral.rebuild_application(vec![]).await?;
-        Ok((peripheral, pair_event_rx))
+        Ok(peripheral)
+    }
+
+    /// Acquire the BlueZ default agent for an explicit DeskUnlock pair
+    /// session. Idempotent. Verifies the adapter is pairable for the duration
+    /// and registers the confirmation agent; [`Self::release_pair_agent`]
+    /// restores the previous pairable state and drops the agent so DeskUnlock
+    /// never remains the global Bluetooth pairing manager.
+    ///
+    /// The adapter's global `Discoverable` flag is deliberately left untouched:
+    /// the pair service is published as an LE advertisement, which BlueZ serves
+    /// regardless of that flag.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PeripheralError::Backend`] when the adapter or agent
+    /// registration fails.
+    pub async fn acquire_pair_agent(&self) -> Result<(), PeripheralError> {
+        let mut session = self.pair_agent.lock().await;
+        if session.is_held() {
+            return Ok(());
+        }
+        // The mode is verified before the agent is registered. A mode
+        // transition that answered Busy earlier must never skip that
+        // registration.
+        acquire_pair_agent_with(&self.adapter, &mut session, || async {
+            let broker = self.pairing_broker.clone();
+            let agent = Agent {
+                request_default: true,
+                request_confirmation: Some(Box::new(move |req: RequestConfirmation| {
+                    let broker = broker.clone();
+                    Box::pin(async move {
+                        if broker.request_confirmation(req.device.to_string(), req.passkey).await {
+                            Ok(())
+                        } else {
+                            Err(bluer::agent::ReqError::Rejected)
+                        }
+                    })
+                })),
+                ..Default::default()
+            };
+            self._session.register_agent(agent).await.map_err(|err| err.to_string())
+        })
+        .await?;
+        tracing::info!(target: "syauth_transport", "DeskUnlock pair agent acquired for this session only");
+        Ok(())
+    }
+
+    /// Release the pair-session agent and restore `Pairable` only when this
+    /// session changed it. `Discoverable` is never touched. Idempotent.
+    pub async fn release_pair_agent(&self) {
+        let mut session = self.pair_agent.lock().await;
+        if !session.is_held() {
+            return;
+        }
+        release_pair_agent_with(&self.adapter, &mut session).await;
+        tracing::info!(target: "syauth_transport", "DeskUnlock pair agent released; Pairable restored to the desktop's own value");
     }
 
     /// Disconnect every LE peer currently connected to our BlueZ
@@ -549,56 +738,6 @@ impl PersistentPeripheral {
         Ok(())
     }
 
-    /// Build the always-present pair-mode service: one read-only
-    /// host-pubkey characteristic + one write-only phone-pubkey
-    /// characteristic with an IO `CharacteristicWriteMethod`. Returns
-    /// the constructed `Service` plus the `chal_control` stream we
-    /// spawn a watcher on to forward phone-pubkey writes into
-    /// `pair_event_tx`.
-    ///
-    /// LESC link encryption is enforced at the OS layer by the time
-    /// the phone reaches a GATT write — no characteristic-level
-    /// `secure_*` flags are needed.
-    fn build_pair_service(
-        host_pubkey: [u8; PAIR_PUBKEY_LEN],
-    ) -> (
-        Service,
-        impl futures::Stream<Item = CharacteristicControlEvent> + Send + Unpin + 'static,
-    ) {
-        let (chal_control, chal_handle) = characteristic_control();
-        let service = Service {
-            uuid: SYAUTH_PAIR_SERVICE_UUID,
-            primary: true,
-            characteristics: vec![
-                Characteristic {
-                    uuid: SYAUTH_PAIR_HOST_PUBKEY_CHAR_UUID,
-                    read: Some(CharacteristicRead {
-                        read: true,
-                        fun: Box::new(move |_| {
-                            let bytes = host_pubkey.to_vec();
-                            async move { Ok(bytes) }.boxed()
-                        }),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                Characteristic {
-                    uuid: SYAUTH_PAIR_PHONE_PUBKEY_CHAR_UUID,
-                    write: Some(CharacteristicWrite {
-                        write: true,
-                        write_without_response: true,
-                        method: CharacteristicWriteMethod::Io,
-                        ..Default::default()
-                    }),
-                    control_handle: chal_handle,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-        (service, chal_control)
-    }
-
     /// Register a fresh GATT application. `peer_services` is the
     /// per-bonded-peer service list (one entry per active bond);
     /// the always-present pair-mode service is prepended here so
@@ -615,7 +754,7 @@ impl PersistentPeripheral {
         if let Some(prev) = self.pair_watcher.lock().await.take() {
             prev.abort();
         }
-        let (pair_service, mut pair_control) = Self::build_pair_service(self.host_pubkey);
+        let (pair_service, pair_phone_control, pair_v2_control) = build_pair_service(Arc::clone(&self.pair_state));
         let peer_count = peer_services.len();
         let mut services = Vec::with_capacity(1 + peer_count);
         services.push(pair_service);
@@ -641,55 +780,24 @@ impl PersistentPeripheral {
             .map_err(|err| PeripheralError::Backend {
                 reason: format!("serve_gatt_application: {err}"),
             })?;
+        tracing::info!(
+            target: "syauth_transport",
+            "GATT app registration accepted by BlueZ"
+        );
         {
             let mut slot = self.app_handle.lock().await;
             *slot = Some(new_handle);
         }
-        // Fast path: preserve already-connected BLE peers.
-        // Stale subscriptions are recovered on demand by
-        // rebuild_peer_registration().
-        // Spawn the pair watcher: every CharacteristicControlEvent::Write
-        // on the phone-pubkey characteristic is a phone trying to
-        // commit a pair. Read 32 bytes, forward (host_pubkey,
-        // phone_pubkey) to pair_event_tx, continue (the channel
-        // consumer drives bond persistence).
-        let pair_event_tx = self.pair_event_tx.clone();
-        let host_pubkey_for_watcher = self.host_pubkey;
-        let task = tokio::spawn(async move {
-            loop {
-                let evt = match pair_control.next().await {
-                    Some(e) => e,
-                    None => {
-                        tracing::info!(target: "syauth_transport", "pair watcher: control stream closed");
-                        break;
-                    }
-                };
-                let req = match evt {
-                    CharacteristicControlEvent::Write(req) => req,
-                    CharacteristicControlEvent::Notify(_) => continue,
-                };
-                let mut reader = match req.accept() {
-                    Ok(r) => r,
-                    Err(err) => {
-                        tracing::warn!(target: "syauth_transport", error = %err, "pair watcher: req.accept failed");
-                        continue;
-                    }
-                };
-                let mut buf = [0u8; PAIR_PUBKEY_LEN];
-                match reader.read_exact(&mut buf).await {
-                    Ok(_) => {
-                        tracing::info!(target: "syauth_transport", "pair watcher: phone pubkey received");
-                        if let Err(err) = pair_event_tx.send((host_pubkey_for_watcher, buf)).await {
-                            tracing::warn!(target: "syauth_transport", error = %err, "pair watcher: forward to event channel failed; daemon receiver gone");
-                            break;
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!(target: "syauth_transport", error = %err, "pair watcher: read_exact failed");
-                    }
-                }
-            }
-        });
+        // Spawn the daemon-owned pair engine: the phone-pubkey write opens a
+        // session, the engine drives the V2 transaction, and the daemon
+        // persists trust only at the commit boundary.
+        let task = tokio::spawn(run_pair_session(
+            Arc::clone(&self.pair_state),
+            self.pairing_broker.clone(),
+            self.pair_commit_tx.clone(),
+            pair_phone_control,
+            pair_v2_control,
+        ));
         *self.pair_watcher.lock().await = Some(task);
         Ok(())
     }
@@ -1548,5 +1656,296 @@ mod tests {
             PeripheralError::PeerAlreadyAdded { peer_id } => assert_eq!(peer_id, "a"),
             other => panic!("expected PeerAlreadyAdded, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Pair-agent acquisition: a BlueZ `Busy` on a mode transition must
+    // never skip the agent registration, and the effective adapter state
+    // must be verified (or the acquisition must fail cleanly).
+    // -----------------------------------------------------------------
+
+    use std::{
+        collections::VecDeque,
+        sync::{
+            Mutex as StdMutex,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+    };
+
+    const MODE_TEST_RETRIES: usize = 3;
+    const MODE_TEST_DELAY: std::time::Duration = std::time::Duration::from_millis(1);
+    const FAKE_AGENT: u8 = 7;
+
+    /// One scripted `set_pairable` call: the error BlueZ reports and whether
+    /// the mode actually changed anyway (BlueZ can apply a transition and
+    /// still answer `Busy`).
+    #[derive(Clone)]
+    struct ModeStep {
+        error: Option<&'static str>,
+        applied: bool,
+    }
+
+    /// Adapter double. It models `Discoverable` on purpose: the acquisition and
+    /// release paths must never touch it, and `requested` records every flag
+    /// this double was ever asked to transition.
+    #[derive(Default)]
+    struct FakeAdapterMode {
+        discoverable: AtomicBool,
+        pairable: AtomicBool,
+        script: StdMutex<VecDeque<ModeStep>>,
+        set_calls: AtomicUsize,
+        requested: StdMutex<Vec<(&'static str, bool)>>,
+    }
+
+    impl FakeAdapterMode {
+        fn new(discoverable: bool, pairable: bool) -> Self {
+            Self {
+                discoverable: AtomicBool::new(discoverable),
+                pairable: AtomicBool::new(pairable),
+                ..Default::default()
+            }
+        }
+
+        fn script(&self, steps: Vec<ModeStep>) {
+            *self.script.lock().expect("script") = VecDeque::from(steps);
+        }
+
+        fn requested(&self) -> Vec<(&'static str, bool)> {
+            self.requested.lock().expect("requested").clone()
+        }
+    }
+
+    #[async_trait]
+    impl PairableControl for FakeAdapterMode {
+        async fn pairable(&self) -> Result<bool, String> {
+            Ok(self.pairable.load(Ordering::SeqCst))
+        }
+
+        async fn set_pairable(&self, value: bool) -> Result<(), String> {
+            self.set_calls.fetch_add(1, Ordering::SeqCst);
+            self.requested.lock().expect("requested").push(("pairable", value));
+            let step = self.script.lock().expect("script").pop_front().unwrap_or(ModeStep {
+                error: None,
+                applied: true,
+            });
+            if step.applied {
+                self.pairable.store(value, Ordering::SeqCst);
+            }
+            match step.error {
+                Some(err) => Err(err.to_owned()),
+                None => Ok(()),
+            }
+        }
+    }
+
+    /// The Bluetooth name is an operator-facing label, never an identity: when
+    /// BlueZ cannot resolve it the caller must fall back to the transport label
+    /// instead of inventing one. Deterministic without a radio (a missing
+    /// adapter resolves to `None`, as does an unavailable BlueZ).
+    #[tokio::test]
+    async fn peer_display_name_is_none_without_a_matching_adapter() {
+        assert!(peer_display_name("hci-does-not-exist-9", "00:00:00:00:00:00").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn acquire_never_touches_discoverable_and_verifies_pairable() {
+        let adapter = FakeAdapterMode::new(false, false);
+        let mut session: PairAgentSession<u8> = PairAgentSession::default();
+
+        acquire_pair_agent_with(&adapter, &mut session, || async { Ok(FAKE_AGENT) })
+            .await
+            .expect("acquire");
+
+        assert!(
+            !adapter.discoverable.load(Ordering::SeqCst),
+            "the global Discoverable flag is not DeskUnlock's to change"
+        );
+        assert!(adapter.pairable.load(Ordering::SeqCst), "pairable is verified for the session");
+        assert_eq!(adapter.requested(), vec![("pairable", true)], "only Pairable is ever transitioned");
+        assert!(session.is_held(), "the agent is registered once the mode is verified");
+
+        release_pair_agent_with(&adapter, &mut session).await;
+
+        assert!(!session.is_held(), "release drops the agent");
+        assert!(
+            !adapter.discoverable.load(Ordering::SeqCst),
+            "release must not touch Discoverable either"
+        );
+        assert!(
+            !adapter.pairable.load(Ordering::SeqCst),
+            "Pairable is restored to the desktop's own value"
+        );
+        assert_eq!(adapter.requested(), vec![("pairable", true), ("pairable", false)]);
+    }
+
+    #[tokio::test]
+    async fn acquire_and_release_transition_nothing_when_the_adapter_is_already_ready() {
+        let adapter = FakeAdapterMode::new(true, true);
+        let mut session: PairAgentSession<u8> = PairAgentSession::default();
+
+        acquire_pair_agent_with(&adapter, &mut session, || async { Ok(FAKE_AGENT) })
+            .await
+            .expect("acquire");
+        assert!(session.is_held(), "the agent lifecycle is independent of the flags");
+        release_pair_agent_with(&adapter, &mut session).await;
+
+        assert!(adapter.requested().is_empty(), "no transition when the adapter is already ready");
+        assert!(!session.is_held());
+        assert!(adapter.pairable.load(Ordering::SeqCst));
+        assert!(
+            adapter.discoverable.load(Ordering::SeqCst),
+            "the user's own Discoverable state is preserved"
+        );
+    }
+
+    #[tokio::test]
+    async fn busy_with_the_desired_state_already_effective_is_a_no_op() {
+        let adapter = FakeAdapterMode::new(false, true);
+        let changed = ensure_pairable_with(&adapter, MODE_TEST_RETRIES, MODE_TEST_DELAY)
+            .await
+            .expect("verified");
+        assert!(!changed);
+        assert_eq!(adapter.set_calls.load(Ordering::SeqCst), 0, "no transition when already effective");
+    }
+
+    #[tokio::test]
+    async fn transient_busy_is_retried_and_verified() {
+        let adapter = FakeAdapterMode::new(false, false);
+        adapter.script(vec![ModeStep {
+            error: Some("Busy"),
+            applied: true,
+        }]);
+        let changed = ensure_pairable_with(&adapter, MODE_TEST_RETRIES, MODE_TEST_DELAY)
+            .await
+            .expect("verified");
+        assert!(changed);
+        assert!(adapter.pairable.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn persistent_busy_without_the_desired_state_fails_cleanly() {
+        let adapter = FakeAdapterMode::new(false, false);
+        adapter.script(vec![
+            ModeStep {
+                error: Some("Busy"),
+                applied: false,
+            },
+            ModeStep {
+                error: Some("Busy"),
+                applied: false,
+            },
+            ModeStep {
+                error: Some("Busy"),
+                applied: false,
+            },
+        ]);
+        assert!(ensure_pairable_with(&adapter, MODE_TEST_RETRIES, MODE_TEST_DELAY).await.is_err());
+        assert!(!adapter.pairable.load(Ordering::SeqCst), "no partially acquired adapter state");
+    }
+
+    #[tokio::test]
+    async fn a_failed_acquisition_holds_no_agent_and_leaves_no_adapter_state() {
+        let adapter = FakeAdapterMode::new(false, false);
+        // Script the full production budget: the acquisition path must fail
+        // cleanly instead of falling back to the double's default success.
+        adapter.script(vec![
+            ModeStep {
+                error: Some("Busy"),
+                applied: false,
+            };
+            ADAPTER_MODE_RETRIES
+        ]);
+        let mut session: PairAgentSession<u8> = PairAgentSession::default();
+
+        assert!(
+            acquire_pair_agent_with(&adapter, &mut session, || async { Ok(FAKE_AGENT) })
+                .await
+                .is_err()
+        );
+
+        assert!(!session.is_held(), "no agent is registered when the mode cannot be verified");
+        assert!(!adapter.pairable.load(Ordering::SeqCst));
+        assert!(!adapter.discoverable.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn a_failed_agent_registration_rolls_the_pairable_flag_back() {
+        let adapter = FakeAdapterMode::new(false, false);
+        let mut session: PairAgentSession<u8> = PairAgentSession::default();
+
+        assert!(
+            acquire_pair_agent_with(&adapter, &mut session, || async { Err("register_agent: Busy".to_owned()) })
+                .await
+                .is_err()
+        );
+
+        assert!(!session.is_held(), "a failed registration must not look like a held agent");
+        assert!(
+            !adapter.pairable.load(Ordering::SeqCst),
+            "the flag this session changed is rolled back"
+        );
+        assert_eq!(adapter.requested(), vec![("pairable", true), ("pairable", false)]);
+    }
+
+    #[tokio::test]
+    async fn a_non_busy_error_then_success_is_still_verified() {
+        let adapter = FakeAdapterMode::new(false, false);
+        adapter.script(vec![
+            ModeStep {
+                error: Some("Failed"),
+                applied: false,
+            },
+            ModeStep {
+                error: None,
+                applied: true,
+            },
+        ]);
+        let changed = ensure_pairable_with(&adapter, MODE_TEST_RETRIES, MODE_TEST_DELAY)
+            .await
+            .expect("verified");
+        assert!(changed);
+        assert_eq!(adapter.set_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn consecutive_sessions_reacquire_and_release_without_a_permanent_agent() {
+        let adapter = FakeAdapterMode::new(false, false);
+        let mut session: PairAgentSession<u8> = PairAgentSession::default();
+
+        for agent in [FAKE_AGENT, FAKE_AGENT + 1] {
+            acquire_pair_agent_with(&adapter, &mut session, || async { Ok(agent) })
+                .await
+                .expect("acquire");
+            assert!(session.is_held());
+            release_pair_agent_with(&adapter, &mut session).await;
+            assert!(!session.is_held(), "no permanent default agent survives the session");
+        }
+        assert_eq!(
+            adapter.requested(),
+            vec![("pairable", true), ("pairable", false), ("pairable", true), ("pairable", false)]
+        );
+        assert!(!adapter.discoverable.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn pair_agent_session_supports_reacquire_and_never_leaks() {
+        let restore = || PairAgentRestore::from_pairable(true, false);
+        let mut session: PairAgentSession<u8> = PairAgentSession::default();
+        assert!(!session.is_held());
+
+        session.begin(7, restore());
+        assert!(session.is_held());
+        let released = session.end().expect("first release restores");
+        assert_eq!(released.previous_pairable, Some(false));
+        assert!(!session.is_held());
+        assert!(session.end().is_none(), "a second release is a no-op, never a double restore");
+
+        // Acquire again on the same session object (no permanent default agent).
+        session.begin(9, restore());
+        assert!(session.is_held());
+        assert!(session.end().is_some());
+
+        let unchanged = PairAgentRestore::from_pairable(false, true);
+        assert_eq!(unchanged.previous_pairable, None, "an unchanged flag is never restored");
     }
 }

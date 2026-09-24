@@ -92,3 +92,8 @@ getrandom = "0.3"
 # `tokio::time::pause`, etc., should we ever need them.
 tokio = { version = "1", features = ["full"] }
 
+# Pair-engine trust-boundary tests drive the real on-disk staging format in
+# a temporary bond directory.
+tempfile = "3"
+time = "0.3"
+

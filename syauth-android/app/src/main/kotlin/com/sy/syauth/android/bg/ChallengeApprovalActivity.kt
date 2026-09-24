@@ -338,7 +338,7 @@ public class ChallengeApprovalActivity : FragmentActivity() {
         resolvedChallenge = intent?.getByteArrayExtra(EXTRA_CHALLENGE_BYTES) ?: ByteArray(0)
         resolvedKeystoreAlias = intent?.getStringExtra(EXTRA_KEYSTORE_ALIAS).orEmpty()
         val short = shortPeerId(peerId)
-        val promptText = "$hostname is requesting sudo (peer_id $short)"
+        val promptText = "$hostname requests authentication (peer_id $short)"
         lastPromptText = promptText
         Log.i(APPROVAL_LOG_TAG, "render challenge approval")
     }
@@ -473,7 +473,9 @@ internal fun buildPromptInfo(
     shortPeerId: String,
 ): BiometricPrompt.PromptInfo {
     val title = activity.getString(PROMPT_TITLE_RES)
-    val subtitle = activity.getString(PROMPT_SUBTITLE_FMT, hostname, shortPeerId)
+    // One argument: the copy names the asking host only. A raw peer id in the
+    // prompt is noise for the operator.
+    val subtitle = activity.getString(PROMPT_SUBTITLE_FMT, hostname)
     val negative = activity.getString(PROMPT_NEGATIVE_RES)
     return BiometricPrompt.PromptInfo.Builder()
         .setTitle(title)
@@ -607,7 +609,7 @@ internal class AndroidBiometricGate(
 }
 
 /** Title surfaced in the auth-screen TopAppBar; centralised so a future copy edit lands in one place. */
-private const val APPROVAL_SCREEN_TITLE: String = "syauth"
+private const val APPROVAL_SCREEN_TITLE: String = "DeskUnlock"
 
 /** Outer screen padding. Matches `approve.ApproveScreen.SCREEN_PADDING_DP`. */
 private val APPROVAL_PADDING_DP = 24.dp
@@ -640,7 +642,7 @@ private fun ApprovalContent(
                 TopAppBar(
                     title = {
                         Text(
-                            text = "Syauth",
+                            text = APPROVAL_SCREEN_TITLE,
                             style = MaterialTheme.typography.titleLarge,
                         )
                     },

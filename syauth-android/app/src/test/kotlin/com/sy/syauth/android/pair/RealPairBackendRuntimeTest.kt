@@ -26,12 +26,16 @@
 // Journey: specs/journeys/JOURNEY-DEV-001-real-lesc.md
 package com.sy.syauth.android.pair
 
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.util.Base64
 import androidx.test.core.app.ApplicationProvider
 import com.sy.syauth.android.pair.api.LescResult
+import com.sy.syauth.android.pair.api.PickPeerResult
 import com.sy.syauth.android.pair.impl.BondStateBroadcastReceiver
 import com.sy.syauth.android.pair.impl.EXTRA_PAIRING_KEY_NAME
 import com.sy.syauth.android.pair.impl.EXTRA_PAIRING_VARIANT_NAME
@@ -55,9 +59,11 @@ import com.sy.syauth.android.pair.impl.RealPairBackend
 import com.sy.syauth.android.pair.impl.ReceiverRegistrar
 import com.sy.syauth.android.pair.impl.decideAndroidPairingVariant
 import com.sy.syauth.android.pair.impl.pairModeUuidsFor
+import com.sy.syauth.android.pair.impl.transactionStateBelongsToAttempt
 import com.sy.syauth.android.pair.api.PeerHandle
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -65,6 +71,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 private const val FIXTURE_NOW_SECONDS: Long = 1_800_000_000L
@@ -97,6 +104,19 @@ private class RecordingCompanionScanner : PairCompanionScanner {
     val lastOnPicked: AtomicReference<((String, String?) -> Unit)?> =
         AtomicReference(null)
     val lastOnFailed: AtomicReference<((String) -> Unit)?> = AtomicReference(null)
+    var commitCalls: Int = 0
+        private set
+    var abandonCalls: Int = 0
+        private set
+
+    override fun commitSessionAssociation() {
+        commitCalls += 1
+    }
+
+    override fun abandonSessionAssociation() {
+        abandonCalls += 1
+    }
+
     override fun associate(
         serviceUuids: List<UUID>,
         onPicked: (deviceAddress: String, deviceName: String?) -> Unit,
@@ -132,7 +152,70 @@ private class XorPairBondKeyDeriver : PairBondKeyDeriver {
 }
 
 /** Returns a canned 32-byte host pubkey; used by the DEV-002 runtime error-path tests. */
-private class CannedHostPubkeyExchange : PairGattExchange {
+private class CannedHostPubkeyExchange(private val displayName: String? = null) : PairGattExchange {
+    override fun peerDisplayName(): String? = displayName
+    override fun readTransactionMessage(): ByteArray = byteArrayOf(2) + ByteArray(16) + byteArrayOf(1)
+
+    /** A real peer accepts the V2 control write; this canned one always does. */
+    override fun writeTransactionMessage(message: ByteArray): Boolean = true
+
+    override fun exchangePubkeys(address: String, phonePubkey: ByteArray): ByteArray =
+        ByteArray(PAIR_PUBKEY_LEN) { (it + 0x40).toByte() }
+}
+
+// ---------------------------------------------------------------------------
+// V2 transaction fixtures. The Android-side state machine can be poisoned by a
+// snapshot left over from a *previous* attempt; these pin the exact failure
+// seen on hardware ("local confirmation transition rejected") and the retry
+// lifecycle that must survive it.
+// ---------------------------------------------------------------------------
+
+private const val V2_VERSION: Byte = 2
+private const val V2_OP_CAPABILITY: Byte = 1
+private const val V2_OP_CONFIRM: Byte = 2
+private const val V2_OP_REJECT: Byte = 3
+private const val V2_OP_PREPARED: Byte = 6
+private const val V2_OP_COMMIT: Byte = 7
+private const val V2_OP_COMMITTED: Byte = 9
+private const val V2_STATE_LEN: Int = 27
+private const val V2_ROLE_PARTICIPANT: Byte = 1
+private const val V2_PHASE_OOB_PENDING: Byte = 1
+private const val TRANSACTION_PREF_NAME: String = "pairing-v2-recovery"
+
+/** `[version:1][transaction-id:16][operation:1]`, matching `Message::encode`. */
+private fun v2Message(id: ByteArray, operation: Byte): ByteArray =
+    byteArrayOf(V2_VERSION) + id + byteArrayOf(operation)
+
+/**
+ * A persisted snapshot in exactly the state a stranded attempt leaves behind:
+ * the phone had already taken its local CONFIRM for [transactionId], so the
+ * Rust validator (`Transaction::local` → `confirm`) rejects a second one.
+ * Layout matches `Transaction::encode`:
+ * `[version:1][role:1][phase:1][id:16][caps:2][confirmed:2][prepared:2][committed:2]`.
+ */
+private fun stalePostConfirmSnapshot(transactionId: ByteArray): ByteArray =
+    byteArrayOf(V2_VERSION, V2_ROLE_PARTICIPANT, V2_PHASE_OOB_PENDING) +
+        transactionId +
+        byteArrayOf(1, 1, 1, 0, 0, 0, 0, 0)
+
+/**
+ * Scripted V2 GATT session. The queue is consumed in order (the coordinator's
+ * capability first, then each acknowledgement the phone waits for); every
+ * message the phone publishes is recorded.
+ */
+private class ScriptedPairGattExchange(id: ByteArray, vararg reads: Byte) : PairGattExchange {
+    val writes: MutableList<ByteArray> = mutableListOf()
+    private val queued: ArrayDeque<ByteArray> = ArrayDeque(reads.map { v2Message(id, it) })
+
+    override fun peerDisplayName(): String = "cached-desktop"
+
+    override fun readTransactionMessage(): ByteArray? = queued.removeFirstOrNull()
+
+    override fun writeTransactionMessage(message: ByteArray): Boolean {
+        writes.add(message.copyOf())
+        return true
+    }
+
     override fun exchangePubkeys(address: String, phonePubkey: ByteArray): ByteArray =
         ByteArray(PAIR_PUBKEY_LEN) { (it + 0x40).toByte() }
 }
@@ -168,9 +251,10 @@ class RealPairBackendRuntimeTest {
         bondStateRegistrar: RecordingReceiverRegistrar = RecordingReceiverRegistrar(),
         bondKeyDeriver: PairBondKeyDeriver = XorPairBondKeyDeriver(),
         keystoreKeyGenerator: KeystoreKeyGenerator? = null,
+        adapter: BluetoothAdapter? = null,
     ): RealPairBackend = RealPairBackend(
         context = ApplicationProvider.getApplicationContext(),
-        adapter = null, // tests don't need a real BluetoothAdapter
+        adapter = adapter,
         companionScanner = companionScanner,
         gattExchange = gattExchange,
         pairingReceiverRegistrar = pairingRegistrar,
@@ -247,6 +331,19 @@ class RealPairBackendRuntimeTest {
         backend.startScan()
         scanner.lastOnFailed.get()?.invoke(FIXTURE_CANCEL_REASON)
         assertEquals(FIXTURE_CANCEL_REASON, reasonRef.get())
+        backend.cleanup()
+    }
+
+    @Test
+    fun backend_delegates_provisional_association_commit_and_abandon_to_the_scanner() {
+        val scanner = RecordingCompanionScanner()
+        val backend = makeBackend(companionScanner = scanner, gattExchange = null)
+
+        backend.abandonProvisionalAssociation()
+        backend.commitProvisionalAssociation()
+
+        assertEquals("abandon must reach the CDM scanner", 1, scanner.abandonCalls)
+        assertEquals("commit must reach the CDM scanner", 1, scanner.commitCalls)
         backend.cleanup()
     }
 
@@ -437,6 +534,22 @@ class RealPairBackendRuntimeTest {
     }
 
     @Test
+    fun runPostBondExchange_uses_hostname_from_the_same_peer_not_its_address() {
+        val backend = makeBackend(
+            companionScanner = null,
+            gattExchange = CannedHostPubkeyExchange("office-workstation"),
+            keystoreKeyGenerator = FixedKeystoreKeyGenerator(),
+        )
+        try {
+            backend.runPostBondExchange(FIXTURE_PEER_ADDR)
+            val result = backend.awaitLescResult() as LescResult.Bonded
+            assertEquals("office-workstation", result.peerName)
+        } finally {
+            backend.cleanup()
+        }
+    }
+
+    @Test
     fun runPostBondExchange_success_propagates_keystore_alias_and_pubkey_into_bonded() {
         val expectedAlias = "$KEYSTORE_ALIAS_PREFIX${FIXTURE_PEER_ADDR.replace(":", "")}"
         val phonePubkey = ByteArray(PAIR_PUBKEY_LEN) { (it + 1).toByte() }
@@ -462,6 +575,155 @@ class RealPairBackendRuntimeTest {
             bonded.phonePubkey.contentEquals(phonePubkey),
         )
         backend.cleanup()
+    }
+
+    @Test
+    fun already_bonded_peer_continues_the_deskunlock_handshake_not_a_bluetooth_success() {
+        val adapter = BluetoothAdapter.getDefaultAdapter()
+        val device = adapter.getRemoteDevice(FIXTURE_PEER_ADDR)
+        shadowOf(device).setBondState(BluetoothDevice.BOND_BONDED)
+        val backend = makeBackend(
+            companionScanner = null,
+            gattExchange = CannedHostPubkeyExchange("office-workstation"),
+            keystoreKeyGenerator = FixedKeystoreKeyGenerator(),
+            adapter = adapter,
+        )
+        try {
+            val started = backend.pickPeer(PeerHandle(FIXTURE_PEER_ADDR, "cachyos-x8664"))
+            assertTrue(
+                "an already Bluetooth-bonded peer must still enter the DeskUnlock handshake",
+                started is PickPeerResult.LescStarted,
+            )
+            // BOND_BONDED is transport only: the outcome must come from the
+            // DeskUnlock handshake, never from the Bluetooth bond.
+            val result = backend.awaitLescResult()
+            assertTrue(
+                "Bluetooth BOND_BONDED must not complete DeskUnlock; got $result",
+                result is LescResult.Bonded,
+            )
+        } finally {
+            backend.cleanup()
+        }
+    }
+
+    // -------------------------------------------------------------
+    // The capability is a transport fact, published before any human decision.
+    // -------------------------------------------------------------
+
+    @Test
+    fun the_capability_is_published_before_the_operators_oob_decision() {
+        val adapter = BluetoothAdapter.getDefaultAdapter()
+        shadowOf(adapter.getRemoteDevice(FIXTURE_PEER_ADDR)).setBondState(BluetoothDevice.BOND_BONDED)
+        val attemptId = ByteArray(16) { 0x55 }
+        val exchange = ScriptedPairGattExchange(attemptId, V2_OP_CAPABILITY)
+        val backend = makeBackend(
+            companionScanner = null,
+            gattExchange = exchange,
+            keystoreKeyGenerator = FixedKeystoreKeyGenerator(),
+            adapter = adapter,
+        )
+        try {
+            backend.pickPeer(PeerHandle(FIXTURE_PEER_ADDR, "cachyos-x8664"))
+            assertTrue(backend.awaitLescResult() is LescResult.Bonded)
+
+            // The desktop raises its OOB dialog only after this message lands,
+            // so it must be published during the key exchange: the operator then
+            // compares both screens instead of waiting for a serialized round.
+            assertEquals("exactly one capability is published", 1, exchange.writes.size)
+            val published = exchange.writes.first()
+            assertEquals(V2_OP_CAPABILITY, published[17])
+            assertArrayEquals(attemptId, published.copyOfRange(1, 17))
+        } finally {
+            backend.cleanup()
+        }
+    }
+
+    // -------------------------------------------------------------
+    // A new attempt must never advance an older attempt's snapshot.
+    // -------------------------------------------------------------
+
+    @Test
+    fun transaction_state_ownership_rejects_snapshots_of_other_attempts() {
+        val attemptId = ByteArray(16) { 0x11 }
+        val snapshot = stalePostConfirmSnapshot(attemptId)
+
+        assertTrue(
+            "the current attempt's snapshot is resumable",
+            transactionStateBelongsToAttempt(snapshot, attemptId),
+        )
+        assertTrue(
+            "a snapshot minted for another attempt is never resumed",
+            !transactionStateBelongsToAttempt(snapshot, ByteArray(16) { 0x22 }),
+        )
+        assertTrue("no snapshot means no ownership", !transactionStateBelongsToAttempt(null, attemptId))
+        assertTrue(
+            "a blob that is not a 27-byte snapshot has no ownership",
+            !transactionStateBelongsToAttempt(ByteArray(V2_STATE_LEN - 1), attemptId),
+        )
+    }
+
+    @Test
+    fun a_foreign_snapshot_is_discarded_before_the_new_attempt_uses_it() {
+        val context: Context = ApplicationProvider.getApplicationContext()
+        val prefs = context.getSharedPreferences(TRANSACTION_PREF_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString("state", Base64.encodeToString(stalePostConfirmSnapshot(ByteArray(16) { 0x11 }), Base64.NO_WRAP))
+            .commit()
+
+        val adapter = BluetoothAdapter.getDefaultAdapter()
+        shadowOf(adapter.getRemoteDevice(FIXTURE_PEER_ADDR)).setBondState(BluetoothDevice.BOND_BONDED)
+        val backend = makeBackend(
+            companionScanner = null,
+            gattExchange = ScriptedPairGattExchange(ByteArray(16) { 0x22 }, V2_OP_CAPABILITY),
+            keystoreKeyGenerator = FixedKeystoreKeyGenerator(),
+            adapter = adapter,
+        )
+        try {
+            backend.pickPeer(PeerHandle(FIXTURE_PEER_ADDR, "cachyos-x8664"))
+            assertTrue(backend.awaitLescResult() is LescResult.Bonded)
+
+            // The desktop's capability for THIS attempt carries a new id.
+            backend.coordinateTransaction { true }
+
+            assertNull(
+                "a snapshot minted for another attempt must be dropped, never advanced",
+                prefs.getString("state", null),
+            )
+        } finally {
+            backend.cleanup()
+        }
+    }
+
+    @Test
+    fun a_snapshot_of_the_current_attempt_survives_for_recovery() {
+        val context: Context = ApplicationProvider.getApplicationContext()
+        val prefs = context.getSharedPreferences(TRANSACTION_PREF_NAME, Context.MODE_PRIVATE)
+        val attemptId = ByteArray(16) { 0x44 }
+        val snapshot = Base64.encodeToString(stalePostConfirmSnapshot(attemptId), Base64.NO_WRAP)
+        prefs.edit().putString("state", snapshot).commit()
+
+        val adapter = BluetoothAdapter.getDefaultAdapter()
+        shadowOf(adapter.getRemoteDevice(FIXTURE_PEER_ADDR)).setBondState(BluetoothDevice.BOND_BONDED)
+        val backend = makeBackend(
+            companionScanner = null,
+            gattExchange = ScriptedPairGattExchange(attemptId, V2_OP_CAPABILITY),
+            keystoreKeyGenerator = FixedKeystoreKeyGenerator(),
+            adapter = adapter,
+        )
+        try {
+            backend.pickPeer(PeerHandle(FIXTURE_PEER_ADDR, "cachyos-x8664"))
+            assertTrue(backend.awaitLescResult() is LescResult.Bonded)
+
+            backend.coordinateTransaction { true }
+
+            assertEquals(
+                "a snapshot of the current attempt is the recovery contract: never dropped",
+                snapshot,
+                prefs.getString("state", null),
+            )
+        } finally {
+            backend.cleanup()
+        }
     }
 
     // -------------------------------------------------------------

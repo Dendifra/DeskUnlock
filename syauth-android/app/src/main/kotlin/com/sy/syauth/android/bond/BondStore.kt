@@ -21,7 +21,10 @@
 package com.sy.syauth.android.bond
 
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /** File name (under `filesDir`) holding the persisted bond record. */
 public const val BOND_RECORD_FILE_NAME: String = "syauth-bond.toml"
@@ -79,16 +82,18 @@ public class BondStore(private val storageDir: File) {
             throw IOException("could not create bond storage dir: $storageDir")
         }
         val tmp = File(storageDir, "$BOND_RECORD_FILE_NAME$TMP_SUFFIX")
-        tmp.writeText(serializeBondRecord(record))
-        val target = storePath
-        if (target.exists() && !target.delete()) {
-            tmp.delete()
-            throw IOException("could not replace existing bond record: $target")
+        FileOutputStream(tmp).use { output ->
+            output.write(serializeBondRecord(record).toByteArray(Charsets.UTF_8))
+            output.fd.sync()
         }
-        if (!tmp.renameTo(target)) {
-            tmp.delete()
-            throw IOException("could not rename bond tmpfile into place: $target")
-        }
+        // Never delete the old bond before replacement: a failed rename or
+        // process death must leave the previous phone/computer usable.
+        Files.move(
+            tmp.toPath(),
+            storePath.toPath(),
+            StandardCopyOption.ATOMIC_MOVE,
+            StandardCopyOption.REPLACE_EXISTING,
+        )
     }
 
     /**
@@ -212,8 +217,22 @@ private fun encodeHex(bytes: ByteArray): String {
  */
 public fun loadPersistedBond(storageDir: File): BondRecord? {
     val store = BondStore(storageDir)
-    return runCatching { store.load() }.getOrNull()
+    val record = runCatching { store.load() }.getOrNull() ?: return null
+
+    // Branding migration for bonds created before the DeskUnlock rename.
+    // Only the historical fixed BLE local-name is migrated; arbitrary
+    // user/host names are preserved unchanged.
+    if (record.hostName == LEGACY_BRAND_HOST_NAME) {
+        val migrated = record.copy(hostName = DESKUNLOCK_BRAND_HOST_NAME)
+        runCatching { store.save(migrated) }
+        return migrated
+    }
+
+    return record
 }
+
+private const val LEGACY_BRAND_HOST_NAME: String = "syauth"
+private const val DESKUNLOCK_BRAND_HOST_NAME: String = "DeskUnlock"
 
 private const val TMP_SUFFIX: String = ".tmp"
 private const val COMMENT_PREFIX: String = "#"

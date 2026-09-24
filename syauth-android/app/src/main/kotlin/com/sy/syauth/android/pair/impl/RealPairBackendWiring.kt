@@ -5,6 +5,8 @@
 // constructor's seam interfaces with a real Android dependency. The
 // Robolectric tests do NOT touch this file — they inject hand-rolled
 // fakes directly into [RealPairBackend].
+@file:Suppress("MissingPermission", "NewApi")
+
 package com.sy.syauth.android.pair.impl
 
 import android.bluetooth.BluetoothAdapter
@@ -14,12 +16,16 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.IntentFilter
+import android.util.Log
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import uniffi.syauth_mobile.sessionUuidForBond
+
+/** Log tag for the raw GATT exchange outcomes (pairing diagnostics). */
+private const val PAIR_GATT_LOG_TAG: String = "syauth.pair.gatt"
 
 /**
  * Fixed UUID of the desktop's transient pair service. Byte-identical
@@ -41,6 +47,20 @@ public val SYAUTH_PAIR_HOST_PUBKEY_CHAR_UUID: UUID = UUID.fromString("5a4e8e3c-1
  * `SYAUTH_PAIR_PHONE_PUBKEY_CHAR_UUID`.
  */
 public val SYAUTH_PAIR_PHONE_PUBKEY_CHAR_UUID: UUID = UUID.fromString("5a4e8e3c-1c4c-4a17-9c81-d518a55a0103")
+
+/** Optional, authenticated display metadata. This is NOT commit capability. */
+public val SYAUTH_PAIR_HOST_NAME_V1_CHAR_UUID: UUID = UUID.fromString("5a4e8e3c-1c4c-4a17-9c81-d518a55a0104")
+public val SYAUTH_PAIR_V2_CONTROL_CHAR_UUID: UUID = UUID.fromString("5a4e8e3c-1c4c-4a17-9c81-d518a55a0105")
+public val SYAUTH_PAIR_V2_STATUS_CHAR_UUID: UUID = UUID.fromString("5a4e8e3c-1c4c-4a17-9c81-d518a55a0106")
+
+/** Reject unknown versions, malformed UTF-8 and control-character injection. */
+internal fun decodePeerDisplayName(bytes: ByteArray): String {
+    require(bytes.size in 2..129 && bytes[0] == 1.toByte()) { "Unsupported peer name metadata" }
+    val name = Charsets.UTF_8.newDecoder()
+        .decode(java.nio.ByteBuffer.wrap(bytes, 1, bytes.size - 1)).toString()
+    require(name.isNotBlank() && name.none { it.isISOControl() }) { "Invalid peer name metadata" }
+    return name
+}
 
 /** Default GATT-exchange wait window for service discovery + char read/write. */
 public const val PAIR_GATT_EXCHANGE_TIMEOUT_SECS: Long = 30L
@@ -148,8 +168,94 @@ public class AndroidPairGattExchange(
     private val context: Context,
     private val adapter: BluetoothAdapter,
 ) : PairGattExchange {
+    @Volatile private var activeGatt: BluetoothGatt? = null
+    @Volatile private var controlCharacteristic: BluetoothGattCharacteristic? = null
+    @Volatile private var statusCharacteristic: BluetoothGattCharacteristic? = null
+    private val statusValue = AtomicReference<ByteArray?>(null)
+    @Volatile private var statusReadLatch: CountDownLatch? = null
+    @Volatile private var controlWriteLatch: CountDownLatch? = null
+    @Volatile private var controlWriteStatus: Int = BluetoothGatt.GATT_FAILURE
+
+    override fun writeTransactionMessage(message: ByteArray): Boolean {
+        val gatt = activeGatt ?: return false
+        val characteristic = controlCharacteristic ?: return false
+        if (message.size != 18 && message.size != 27) return false
+        val latch = CountDownLatch(1)
+        controlWriteLatch = latch
+        characteristic.value = message.copyOf()
+        val started = runCatching { gatt.writeCharacteristic(characteristic) }.getOrDefault(false)
+        if (!started || !latch.await(PAIR_GATT_EXCHANGE_TIMEOUT_SECS, TimeUnit.SECONDS)) {
+            controlWriteLatch = null
+            Log.w(PAIR_GATT_LOG_TAG, "v2 write op=${message[17]} refused started=$started")
+            return false
+        }
+        controlWriteLatch = null
+        Log.i(PAIR_GATT_LOG_TAG, "v2 write op=${message[17]} status=$controlWriteStatus")
+        return controlWriteStatus == BluetoothGatt.GATT_SUCCESS
+    }
+
+    override fun readTransactionMessage(): ByteArray? {
+        val gatt = activeGatt ?: return null
+        val characteristic = statusCharacteristic ?: return null
+        statusValue.set(null)
+        val latch = CountDownLatch(1)
+        statusReadLatch = latch
+        if (!runCatching { gatt.readCharacteristic(characteristic) }.getOrDefault(false)) return null
+        if (!latch.await(PAIR_GATT_EXCHANGE_TIMEOUT_SECS, TimeUnit.SECONDS)) return null
+        return statusValue.get()?.copyOf()
+    }
+
+    override fun reconnectStatus(address: String): Boolean {
+        closeSession()
+        val done = CountDownLatch(1)
+        val success = AtomicReference(false)
+        val device = runCatching { adapter.getRemoteDevice(address) }.getOrNull() ?: return false
+        val callback = object : BluetoothGattCallback() {
+            override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+                if (newState == BluetoothGatt.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
+                    runCatching { gatt.discoverServices() }.onFailure { done.countDown() }
+                } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
+                    done.countDown()
+                }
+            }
+            override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+                val service = if (status == BluetoothGatt.GATT_SUCCESS) gatt.getService(SYAUTH_PAIR_SERVICE_UUID) else null
+                val control = service?.getCharacteristic(SYAUTH_PAIR_V2_CONTROL_CHAR_UUID)
+                val state = service?.getCharacteristic(SYAUTH_PAIR_V2_STATUS_CHAR_UUID)
+                if (control != null && state != null) {
+                    activeGatt = gatt
+                    controlCharacteristic = control
+                    statusCharacteristic = state
+                    success.set(true)
+                }
+                done.countDown()
+            }
+        }
+        val gatt = runCatching { device.connectGatt(context, false, callback) }.getOrNull() ?: return false
+        if (!done.await(PAIR_GATT_EXCHANGE_TIMEOUT_SECS, TimeUnit.SECONDS) || !success.get()) {
+            runCatching { gatt.disconnect() }
+            runCatching { gatt.close() }
+            return false
+        }
+        return true
+    }
+
+    override fun closeSession() {
+        val gatt = activeGatt ?: return
+        runCatching { gatt.disconnect() }
+        runCatching { gatt.close() }
+        activeGatt = null
+        controlCharacteristic = null
+        statusCharacteristic = null
+    }
+
+    @Volatile private var hostDisplayName: String? = null
+
+    override fun peerDisplayName(): String? = hostDisplayName
 
     override fun exchangePubkeys(address: String, phonePubkey: ByteArray): ByteArray {
+        hostDisplayName = null
+        val nameDone = CountDownLatch(1)
         val device = adapter.getRemoteDevice(address)
         val servicesDiscovered = CountDownLatch(1)
         val writeDone = CountDownLatch(1)
@@ -168,6 +274,7 @@ public class AndroidPairGattExchange(
                     servicesDiscovered.countDown()
                     writeDone.countDown()
                     readDone.countDown()
+                    nameDone.countDown()
                 }
             }
 
@@ -185,6 +292,9 @@ public class AndroidPairGattExchange(
                         failure.set("phone-pubkey write failed status=$status")
                     }
                     writeDone.countDown()
+                } else if (characteristic.uuid == SYAUTH_PAIR_V2_CONTROL_CHAR_UUID) {
+                    controlWriteStatus = status
+                    controlWriteLatch?.countDown()
                 }
             }
 
@@ -193,7 +303,23 @@ public class AndroidPairGattExchange(
                 characteristic: BluetoothGattCharacteristic,
                 status: Int,
             ) {
-                if (characteristic.uuid == SYAUTH_PAIR_HOST_PUBKEY_CHAR_UUID) {
+                if (characteristic.uuid == SYAUTH_PAIR_V2_STATUS_CHAR_UUID) {
+                    if (status == BluetoothGatt.GATT_SUCCESS) {
+                        statusValue.set(characteristic.value?.copyOf())
+                    }
+                    statusReadLatch?.countDown()
+                } else if (characteristic.uuid == SYAUTH_PAIR_HOST_NAME_V1_CHAR_UUID) {
+                    if (status == BluetoothGatt.GATT_SUCCESS) {
+                        try {
+                            hostDisplayName = decodePeerDisplayName(characteristic.value ?: byteArrayOf())
+                        } catch (_: Exception) {
+                            failure.set("Invalid peer name metadata")
+                        }
+                    } else {
+                        failure.set("Peer name read failed")
+                    }
+                    nameDone.countDown()
+                } else if (characteristic.uuid == SYAUTH_PAIR_HOST_PUBKEY_CHAR_UUID) {
                     if (status == BluetoothGatt.GATT_SUCCESS) {
                         hostPubkey.set(characteristic.value?.copyOf())
                     } else {
@@ -214,8 +340,22 @@ public class AndroidPairGattExchange(
                 ?: throw RuntimeException("pair service not present on bonded device")
             val phoneChar = service.getCharacteristic(SYAUTH_PAIR_PHONE_PUBKEY_CHAR_UUID)
                 ?: throw RuntimeException("phone-pubkey characteristic missing")
+            controlCharacteristic = service.getCharacteristic(SYAUTH_PAIR_V2_CONTROL_CHAR_UUID)
+                ?: throw RuntimeException("pair v2 control characteristic missing")
+            statusCharacteristic = service.getCharacteristic(SYAUTH_PAIR_V2_STATUS_CHAR_UUID)
+                ?: throw RuntimeException("pair v2 status characteristic missing")
             val hostChar = service.getCharacteristic(SYAUTH_PAIR_HOST_PUBKEY_CHAR_UUID)
                 ?: throw RuntimeException("host-pubkey characteristic missing")
+            // Read private display metadata before the public-key write
+            // releases the desktop's scan wait. Old peers may omit this
+            // optional field; that says nothing about commit capability.
+            service.getCharacteristic(SYAUTH_PAIR_HOST_NAME_V1_CHAR_UUID)?.let { nameChar ->
+                if (!gatt.readCharacteristic(nameChar) ||
+                    !nameDone.await(PAIR_GATT_EXCHANGE_TIMEOUT_SECS, TimeUnit.SECONDS)) {
+                    throw RuntimeException("Peer name read timeout")
+                }
+                failure.get()?.let { throw RuntimeException(it) }
+            }
             phoneChar.value = phonePubkey
             if (!gatt.writeCharacteristic(phoneChar)) {
                 throw RuntimeException("phone-pubkey writeCharacteristic refused")
@@ -231,10 +371,13 @@ public class AndroidPairGattExchange(
                 throw RuntimeException("host-pubkey read timeout")
             }
             failure.get()?.let { throw RuntimeException(it) }
+            activeGatt = gatt
             return hostPubkey.get() ?: throw RuntimeException("host-pubkey read returned null")
         } finally {
-            runCatching { gatt.disconnect() }
-            runCatching { gatt.close() }
+            if (activeGatt !== gatt) {
+                runCatching { gatt.disconnect() }
+                runCatching { gatt.close() }
+            }
         }
     }
 }

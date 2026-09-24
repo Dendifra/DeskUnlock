@@ -1,9 +1,14 @@
 [Unit]
-Description=Watch Syauth pairing database
+Description=Watch Syauth pairing transaction journal
 ConditionPathExists=!%h/.config/syauth/disabled
 
 [Path]
-PathChanged=/var/lib/syauth/bonds.toml
+# PathChanged, not PathExists: an `oneshot` target re-triggers the moment it
+# exits while the path still exists, so PathExists spins — measured on hardware
+# as 30 starts in one second, tripping the start limit and leaving the session
+# `degraded` after every pairing. A change (the journal appearing or being
+# rewritten) is consumed once.
+PathChanged=/var/lib/syauth/pairing-v2.journal
 Unit=syauth-reconcile.service
 
 [Install]

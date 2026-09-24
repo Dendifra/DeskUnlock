@@ -1,7 +1,7 @@
 [Unit]
 Description=DeskUnlock inactivity lock
 After=graphical-session.target
-Wants=graphical-session.target
+PartOf=graphical-session.target
 ConditionPathExists=!%h/.config/syauth/disabled
 
 [Service]
@@ -11,4 +11,4 @@ Restart=on-failure
 RestartSec=10
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target

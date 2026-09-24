@@ -1,6 +1,0 @@
-# Dedicated PAM stack used by the DeskUnlock DankMaterialShell bridge.
-# pam_syauth resolves the per-user runtime socket from the PAM username.
-auth       required   pam_syauth.so
-account    required   pam_permit.so
-password   required   pam_deny.so
-session    required   pam_permit.so

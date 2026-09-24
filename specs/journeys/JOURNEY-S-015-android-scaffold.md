@@ -8,7 +8,7 @@
 
 ## 1. Journey
 
-When **the Android app developer (Sam) bringing up `syauth-android/` for the first time after S-014 shipped the `syauth_mobile.aar`** I want to **drop the AAR into the Android Gradle project that mirrors `~/sources/prrr/prrr-android/` line-for-line, run `make android-test`, and see a single Compose screen render `OOB: <four emoji words>`** so I can **prove the Rust→UniFFI→Kotlin pipeline works end-to-end on a real (or emulated) device before touching Bluetooth (S-016) or BiometricPrompt (S-017)**.
+When **the Android app developer (Sam) bringing up `syauth-android/` for the first time after S-014 shipped the `syauth_mobile.aar`** I want to **drop the AAR into the Android Gradle project that mirrors `~/sources/prrr/prrr-android/` line-for-line, run `make android-test`, and see a single Compose screen render `OOB: <eight-digit code>`** so I can **prove the Rust→UniFFI→Kotlin pipeline works end-to-end on a real (or emulated) device before touching Bluetooth (S-016) or BiometricPrompt (S-017)**.
 
 ## 2. CJM
 
@@ -41,7 +41,7 @@ A third constraint is operational: most developer hosts (and this CI host) have 
 
 ### Phase 2: Compose screen renders the OOB call result
 
-**User Intent:** When the app launches on the emulator, Sam wants to see `OOB: <emoji> <emoji> <emoji> <emoji>` in a single `Text` composable as proof that the Rust→JNA→Compose pipeline actually executed.
+**User Intent:** When the app launches on the emulator, Sam wants to see `OOB: <eight-digit code>` in a single `Text` composable as proof that the Rust→JNA→Compose pipeline actually executed.
 
 **Actions:** Sam runs `./gradlew :app:installDebug && adb shell am start -n com.sy.syauth.android/.MainActivity`.
 
@@ -115,11 +115,11 @@ Sam runs `make android-aar && make android-test` on an NDK + SDK + emulator host
 - [x] `make help` mentions `android-test`.
 
 ### Production-Ready Defaults
-- [x] No emojis in Gradle / Kotlin source (the OOB words are *data*, not source decoration).
+- [x] No emojis in Gradle / Kotlin source (the OOB code is *data*, not source decoration).
 - [x] No `abiFilters` — the AAR ships every ABI Android Studio's bundled NDK supports.
 
 ### Golden Path Quality
-- [x] Instrumented test asserts the rendered text starts with `"OOB: "` AND is at least 6 chars after the prefix (4 emoji words separated by spaces).
+- [x] Instrumented test asserts the rendered text starts with `"OOB: "` AND is at least 6 chars after the prefix (an eight-digit code).
 - [x] The test rule launches MainActivity, not a synthetic test activity — proves real-app behavior.
 
 ### Decision Load

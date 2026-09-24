@@ -44,9 +44,12 @@ object PairingTestTags {
     const val SCANNING_CANCEL: String = "pair.scanning.cancel"
     const val LESC_CODE: String = "pair.lesc.code"
     const val LESC_CANCEL: String = "pair.lesc.cancel"
-    const val OOB_WORDS: String = "pair.oob.words"
+    const val OOB_CODE: String = "pair.oob.code"
     const val OOB_YES: String = "pair.oob.yes"
     const val OOB_NO: String = "pair.oob.no"
+    const val OOB_CANCEL: String = "pair.oob.cancel"
+    const val FINALIZING_PROGRESS: String = "pair.finalizing.progress"
+    const val UNCERTAIN_REASON: String = "pair.uncertain.reason"
     const val BONDED_LABEL: String = "pair.bonded.label"
     const val BONDED_DONE: String = "pair.bonded.done"
     const val FAILED_REASON: String = "pair.failed.reason"
@@ -55,13 +58,20 @@ object PairingTestTags {
 
 /** Static UI strings. Centralised so tests assert on the same constants. */
 object PairingStrings {
-    const val IDLE_CTA: String = "Pair with computer"
-    const val CANCEL: String = "Cancel"
-    const val OOB_QUESTION: String = "These match the computer?"
-    const val OOB_YES: String = "Yes"
+    const val IDLE_CTA: String = "Trova computer"
+    const val IDLE_TITLE: String = "Associa un computer"
+    const val IDLE_DESCRIPTION: String = "Collega il telefono al tuo computer in modo sicuro tramite Bluetooth."
+    const val SEARCHING: String = "Cerco computer DeskUnlock nelle vicinanze…"
+    const val FOUND_PREFIX: String = "Computer trovato: "
+    const val BLUETOOTH_HELP: String = "Controlla che il codice Bluetooth coincida sui due dispositivi."
+    const val OOB_HELP: String = "Controlla che questo numero sia identico a quello mostrato sul computer."
+    const val FINALIZING: String = "Finalizzazione dell'associazione…"
+    const val CANCEL: String = "Annulla"
+    const val OOB_QUESTION: String = "I numeri coincidono?"
+    const val OOB_YES: String = "Sì"
     const val OOB_NO: String = "No"
-    const val BONDED_PREFIX: String = "Paired with "
-    const val DONE: String = "Done"
+    const val BONDED: String = "Computer associato"
+    const val DONE: String = "Fine"
     const val FAILED_PREFIX: String = "Pairing failed: "
     const val BACK: String = "Back"
 }
@@ -84,6 +94,7 @@ fun PairingScreen(
     onOobYes: () -> Unit,
     onOobNo: () -> Unit,
     onDone: () -> Unit,
+    onRetry: (() -> Unit)? = null,
 ) {
     Column(
         modifier = Modifier
@@ -100,11 +111,14 @@ fun PairingScreen(
                 onCancel = onCancel,
             )
             is PairingState.OobConfirming -> OobContent(
-                emoji = state.emoji,
+                code = state.code,
                 onYes = onOobYes,
                 onNo = onOobNo,
+                onCancel = onCancel,
             )
-            is PairingState.Bonded -> BondedContent(name = state.name, onDone = onDone)
+            is PairingState.Finalizing -> FinalizingContent()
+            is PairingState.Uncertain -> UncertainContent(reason = state.reason, onRetry = onRetry ?: onDone)
+            is PairingState.Bonded -> BondedContent(onDone = onDone)
             is PairingState.Failed -> FailedContent(reason = state.reason, onBack = onDone)
         }
     }
@@ -112,6 +126,12 @@ fun PairingScreen(
 
 @Composable
 private fun IdleContent(onStartScan: () -> Unit) {
+    Text(text = "DeskUnlock", style = MaterialTheme.typography.headlineMedium)
+    Spacer(modifier = Modifier.height(8.dp))
+    Text(text = PairingStrings.IDLE_TITLE, style = MaterialTheme.typography.titleLarge)
+    Spacer(modifier = Modifier.height(8.dp))
+    Text(text = PairingStrings.IDLE_DESCRIPTION)
+    Spacer(modifier = Modifier.height(24.dp))
     Button(
         onClick = onStartScan,
         modifier = Modifier
@@ -124,6 +144,8 @@ private fun IdleContent(onStartScan: () -> Unit) {
 
 @Composable
 private fun ScanningContent(onCancel: () -> Unit) {
+    Text(text = PairingStrings.SEARCHING)
+    Spacer(modifier = Modifier.height(12.dp))
     CircularProgressIndicator(
         modifier = Modifier.semantics { testTag = PairingTestTags.SCANNING_PROGRESS },
     )
@@ -138,6 +160,9 @@ private fun ScanningContent(onCancel: () -> Unit) {
 
 @Composable
 private fun LescContent(code: String, onCancel: () -> Unit) {
+    Text(text = "Verifica Bluetooth", style = MaterialTheme.typography.titleLarge)
+    Text(text = PairingStrings.BLUETOOTH_HELP)
+    Spacer(modifier = Modifier.height(12.dp))
     Text(
         text = code,
         style = MaterialTheme.typography.headlineLarge,
@@ -154,19 +179,28 @@ private fun LescContent(code: String, onCancel: () -> Unit) {
 
 @Composable
 private fun OobContent(
-    emoji: List<String>,
+    code: String,
     onYes: () -> Unit,
     onNo: () -> Unit,
+    onCancel: () -> Unit,
 ) {
     Text(
-        text = emoji.joinToString(separator = " "),
+        text = code,
         style = MaterialTheme.typography.headlineMedium,
-        modifier = Modifier.semantics { testTag = PairingTestTags.OOB_WORDS },
+        modifier = Modifier.semantics { testTag = PairingTestTags.OOB_CODE },
     )
     Spacer(modifier = Modifier.height(16.dp))
+    Text(text = PairingStrings.OOB_HELP)
+    Spacer(modifier = Modifier.height(8.dp))
     Text(text = PairingStrings.OOB_QUESTION)
     Spacer(modifier = Modifier.height(16.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Button(
+            onClick = onCancel,
+            modifier = Modifier.semantics { testTag = PairingTestTags.OOB_CANCEL },
+        ) {
+            Text(text = PairingStrings.CANCEL)
+        }
         Button(
             onClick = onYes,
             modifier = Modifier.semantics { testTag = PairingTestTags.OOB_YES },
@@ -183,9 +217,25 @@ private fun OobContent(
 }
 
 @Composable
-private fun BondedContent(name: String, onDone: () -> Unit) {
+private fun FinalizingContent() {
+    CircularProgressIndicator(modifier = Modifier.semantics { testTag = PairingTestTags.FINALIZING_PROGRESS })
+    Spacer(modifier = Modifier.height(16.dp))
+    Text(text = PairingStrings.FINALIZING)
+}
+
+@Composable
+private fun UncertainContent(reason: String, onRetry: () -> Unit) {
+    Text(text = "Verifica dell'associazione in corso…", style = MaterialTheme.typography.titleLarge)
+    Spacer(modifier = Modifier.height(8.dp))
+    Text(text = reason, modifier = Modifier.semantics { testTag = PairingTestTags.UNCERTAIN_REASON })
+    Spacer(modifier = Modifier.height(16.dp))
+    Button(onClick = onRetry) { Text(text = "Riprova") }
+}
+
+@Composable
+private fun BondedContent(onDone: () -> Unit) {
     Text(
-        text = PairingStrings.BONDED_PREFIX + name,
+        text = PairingStrings.BONDED,
         modifier = Modifier.semantics { testTag = PairingTestTags.BONDED_LABEL },
     )
     Spacer(modifier = Modifier.height(24.dp))

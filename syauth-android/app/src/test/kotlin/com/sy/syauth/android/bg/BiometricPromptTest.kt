@@ -124,31 +124,31 @@ class BiometricPromptTest {
         val sink = RecordingResponseSink()
         ChallengeApprovalActivity.biometricGate = gate
         ChallengeApprovalActivity.responseSink = sink
-        val controller = Robolectric.buildActivity(
+        Robolectric.buildActivity(
             ChallengeApprovalActivity::class.java,
             fixtureIntent(),
         ).create().start().resume()
-        val activity = controller.get()
 
-        activity.onApproveClicked()
-        assertEquals("first Approve invokes gate exactly once", 1, gate.callCount)
+        assertEquals(
+            "first resumed activity invokes gate exactly once",
+            1,
+            gate.callCount,
+        )
         gate.succeed(FIXTURE_SIGNATURE)
 
-        // The activity should finish after the first sign;
-        // a second Approve tap on the same activity would normally
-        // be a no-op because `isFinishing == true`. Per-use
-        // semantics: simulate a fresh activity round and assert a
-        // second authenticate call is required.
+        // A fresh activity must trigger a fresh biometric round.
         ChallengeApprovalActivity.biometricGate = gate
-        val secondController = Robolectric.buildActivity(
+        Robolectric.buildActivity(
             ChallengeApprovalActivity::class.java,
             fixtureIntent(),
         ).create().start().resume()
-        val secondActivity = secondController.get()
-        secondActivity.onApproveClicked()
-        gate.succeed(SECOND_FIXTURE_SIGNATURE)
 
-        assertEquals("each Approve round invokes gate exactly once", 2, gate.callCount)
+        assertEquals(
+            "each activity round invokes gate exactly once",
+            2,
+            gate.callCount,
+        )
+        gate.succeed(SECOND_FIXTURE_SIGNATURE)
         assertEquals(2, sink.calls.size)
         assertArrayEquals(
             "first response carries the first signature",

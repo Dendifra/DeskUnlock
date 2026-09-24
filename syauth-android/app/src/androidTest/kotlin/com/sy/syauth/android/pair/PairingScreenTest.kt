@@ -90,15 +90,15 @@ class PairingScreenTest {
 
     // ──── TC-11 ────
     @Test
-    fun oob_confirming_renders_4_emoji_words_and_yes_no_buttons() {
-        val emoji = listOf("alpha", "beta", "gamma", "delta")
-        renderState(PairingState.OobConfirming(emoji))
+    fun oob_confirming_renders_the_numeric_code_and_yes_no_buttons() {
+        val code = "04231789"
+        renderState(PairingState.OobConfirming(code))
 
         composeTestRule
-            .onNodeWithTag(PairingTestTags.OOB_WORDS)
+            .onNodeWithTag(PairingTestTags.OOB_CODE)
             .assertIsDisplayed()
         composeTestRule
-            .onNodeWithText(emoji.joinToString(" "))
+            .onNodeWithText(code)
             .assertIsDisplayed()
         composeTestRule
             .onNodeWithText(PairingStrings.OOB_QUESTION)
@@ -109,6 +109,10 @@ class PairingScreenTest {
             .assertHasClickAction()
         composeTestRule
             .onNodeWithTag(PairingTestTags.OOB_NO)
+            .assertIsDisplayed()
+            .assertHasClickAction()
+        composeTestRule
+            .onNodeWithTag(PairingTestTags.OOB_CANCEL)
             .assertIsDisplayed()
             .assertHasClickAction()
     }
@@ -123,7 +127,7 @@ class PairingScreenTest {
             .onNodeWithTag(PairingTestTags.BONDED_LABEL)
             .assertIsDisplayed()
         composeTestRule
-            .onNodeWithText(PairingStrings.BONDED_PREFIX + name)
+            .onNodeWithText(PairingStrings.BONDED)
             .assertIsDisplayed()
         composeTestRule
             .onNodeWithTag(PairingTestTags.BONDED_DONE)

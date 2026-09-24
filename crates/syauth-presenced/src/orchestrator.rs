@@ -403,6 +403,13 @@ pub struct Orchestrator {
     bonds_file: PathBuf,
     /// Path to the keys directory (`<keys_dir>/<peer_id>.bin`).
     keys_dir: PathBuf,
+    /// Stop the daemon once the last bonded peer disappears.
+    ///
+    /// `false` by default so tests that reload an empty store never signal the
+    /// test process. The daemon turns it on: the operator's rule is that with
+    /// no associated phone there is nothing to serve, and waiting for a manual
+    /// restart is not acceptable ("altrimenti non ne usciamo", 2026-09-23).
+    exit_when_empty: std::sync::atomic::AtomicBool,
     /// Sender side of the reload mpsc queue. Cloned out via
     /// `reload_sender()` to the server crate and the runtime's signal
     /// handler.
@@ -558,7 +565,19 @@ impl Orchestrator {
             reload_rx: tokio::sync::Mutex::new(Some(reload_rx)),
             audit_log: TokioMutex::new(audit_log),
             start,
+            exit_when_empty: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Stop the daemon once the last bonded peer disappears.
+    ///
+    /// Off by default so a test that reloads an empty store never signals the
+    /// test process. The daemon turns it on: with no associated phone there is
+    /// nothing to serve, and the operator should not have to restart anything
+    /// by hand.
+    pub fn set_exit_when_empty(&self, enabled: bool) {
+        self.exit_when_empty
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Attach an audit-log appender after construction. Returns the
@@ -693,6 +712,31 @@ impl Orchestrator {
         let (to_add, to_remove) = self.compute_diff(&new_set).await;
         let peers_before = self.peers.lock().await.len();
         for peer_id in &to_remove {
+            // Tell the phone the association is over *before* dropping the peer,
+            // so the app dissociates itself instead of the operator having to
+            // do it twice — once per side (2026-09-23). Best effort: an offline
+            // phone simply never learns, and its next challenge fails.
+            if let Ok(peer_bytes) = hex::decode(peer_id) {
+                if peer_bytes.len() == 16 {
+                    let mut transaction = [0u8; 16];
+                    transaction.copy_from_slice(&peer_bytes);
+                    let frame = syauth_core::pair_transaction::Message {
+                        transaction,
+                        operation: syauth_core::pair_transaction::Operation::Revoke,
+                    }
+                    .encode();
+                    if let Err(err) = self.peripheral.notify_challenge(peer_id, &frame).await {
+                        tracing::info!(
+                            target: ROTATION_LOG_TARGET,
+                            peer_id,
+                            error = %err,
+                            "revoke notice not delivered; the phone will find out on its next challenge"
+                        );
+                    } else {
+                        tracing::info!(target: ROTATION_LOG_TARGET, peer_id, "revoke notice sent to the phone");
+                    }
+                }
+            }
             self.do_remove_peer(peer_id).await;
         }
         for peer_id in &to_add {
@@ -706,6 +750,17 @@ impl Orchestrator {
             "reload trigger={} peers_before={peers_before} peers_after={peers_after}",
             trigger.as_str()
         );
+        if peers_after == 0 && self.exit_when_empty.load(std::sync::atomic::Ordering::Relaxed) {
+            // The phone dissociated (or the operator revoked the last bond on
+            // this machine) and the store is now empty. Re-raise the signal the
+            // daemon already handles so the shutdown stays clean: the radio
+            // registration is released instead of abandoned.
+            tracing::info!(
+                target: ROTATION_LOG_TARGET,
+                "no associated phone left: stopping the daemon (nothing left to serve)"
+            );
+            let _ = nix::sys::signal::kill(nix::unistd::getpid(), nix::sys::signal::Signal::SIGTERM);
+        }
         self.rotate_once(SystemTime::now()).await;
     }
 

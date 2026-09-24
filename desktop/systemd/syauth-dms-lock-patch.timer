@@ -1,0 +1,16 @@
+[Unit]
+Description=Re-apply the DeskUnlock lock-screen adaptation
+ConditionPathExists=!%h/.config/syauth/disabled
+# DMS rewrites its Quickshell tree (and the PAM config it carries) on every
+# start, so the adaptation is re-applied on a short period instead of once:
+# the timer self-heals after a DMS restart or an update, and the script is
+# idempotent and exits immediately when the tree is already adapted.
+# If DMS ever moves the anchors, the script notifies instead of touching it.
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=30s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

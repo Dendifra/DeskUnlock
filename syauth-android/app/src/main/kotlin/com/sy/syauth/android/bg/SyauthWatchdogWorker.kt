@@ -45,7 +45,12 @@ public class SyauthWatchdogWorker(
 ) : Worker(context, params) {
     override fun doWork(): Result {
         val started = resurrectIfDead(applicationContext)
-        Log.i(WATCHDOG_LOG_TAG, "watchdog tick: started=$started")
+        // Reconcile on every tick too, not only at service start: the bond
+        // set can change while the service runs, and a client left behind for
+        // a bond that no longer exists keeps the radio busy and makes the
+        // desktop see a phone that has already dissociated.
+        val reconciled = requestBondReload(applicationContext)
+        Log.i(WATCHDOG_LOG_TAG, "watchdog tick: started=$started reconciled=$reconciled")
         return Result.success()
     }
 }

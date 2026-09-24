@@ -20,6 +20,8 @@
 // `scripts/build_aar.sh`. NO hand-written JNI exists in this file or any
 // other file under `syauth-android/`; DoD #4 (S-015) is enforced by a
 // grep guard in `make android-test`.
+@file:Suppress("MissingPermission", "NewApi")
+
 package com.sy.syauth.android
 
 import android.Manifest
@@ -27,6 +29,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -114,6 +117,7 @@ import com.sy.syauth.android.bond.BondStore
 import com.sy.syauth.android.bond.DiskBondPersister
 import com.sy.syauth.android.bond.loadPersistedBond
 import com.sy.syauth.android.pair.PairingScreen
+import com.sy.syauth.android.pair.PairingState
 import com.sy.syauth.android.pair.PairingViewModel
 import com.sy.syauth.android.pair.impl.AndroidCdmPairCompanionScanner
 import com.sy.syauth.android.pair.impl.InlineExecutor
@@ -188,7 +192,7 @@ object NavRoutes {
 
     /**
      * The hello-world / UniFFI smoke route. `HelloWorldTest` navigates
-     * here before asserting that `oobCodeForBond` produced a four-word
+     * here before asserting that `oobCodeForBond` produced the numeric
      * render, so a regression in the UniFFI bindings is still caught
      * even after the home route stopped showing the smoke text by
      * default (the operator's home view is now the paired-device
@@ -358,23 +362,26 @@ class MainActivity : FragmentActivity() {
      * association and the unlock service never gets bound, which
      * gives `pam_syauth` a `response-timeout` on every unlock.
      */
-    private fun startObservingForBondedAssociations(record: BondRecord) {
+    private fun startObservingForBondedAssociations() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
         val manager = getSystemService(android.companion.CompanionDeviceManager::class.java) ?: return
         val scanner = cdmPairScanner ?: return
-        val targetMac = record.peerId.uppercase()
-        val matched = runCatching {
-            manager.myAssociations.filter { info ->
-                info.deviceMacAddress?.toString()?.uppercase() == targetMac
-            }
-        }.getOrDefault(emptyList())
-        if (matched.isEmpty()) {
-            Log.w(PERMISSION_LOG_TAG, "no CDM associations match bonded device")
+        // `myAssociations` returns only THIS package's rows, and every one of
+        // them points at the same desktop. Filtering them by MAC was wrong:
+        // associations created from a BLE picker report `deviceMacAddress =
+        // null` (the address lives in the stored ScanResult), so the filter
+        // matched nothing, `startObservingDevicePresence` was never called and
+        // the OS never bound the companion service — no presence samples, no
+        // proximity data, and every proximity unlock timed out.
+        val associations = runCatching { manager.myAssociations }.getOrDefault(emptyList())
+        if (associations.isEmpty()) {
+            Log.w(PERMISSION_LOG_TAG, "no CDM associations to observe for this package")
             return
         }
-        for (info in matched) {
+        for (info in associations) {
             scanner.startObservingDevicePresence(info.id)
         }
+        Log.i(PERMISSION_LOG_TAG, "observing device presence for ${associations.size} association(s)")
     }
 
     private fun installCompanionSeams(record: BondRecord) {
@@ -474,19 +481,13 @@ class MainActivity : FragmentActivity() {
                 peerId = bond.peerId,
                 deviceMac = bond.peerId,
                 onChallenge = { peerId, frameBytes ->
-                    // Strip the trailing 16-byte MAC tag so the
-                    // signature is computed over the frame body only
-                    // (version || nonce || payload), matching the
-                    // daemon's verify_frame(body_bytes) contract.
-                    val challengeBody = if (frameBytes.size > 16) {
-                        frameBytes.copyOfRange(0, frameBytes.size - 16)
-                    } else {
-                        frameBytes
-                    }
-                    SyauthCompanionService.launchApprovalActivity(
+                    // One entry point for every desktop frame: a revoke must
+                    // drop the local bond, a challenge must open the approval
+                    // activity — no matter which factory is installed.
+                    SyauthCompanionService.handleIncomingFrame(
                         applicationContext,
                         peerId,
-                        challengeBody,
+                        frameBytes,
                     )
                 },
             )
@@ -539,10 +540,16 @@ class MainActivity : FragmentActivity() {
                 launcher = cdmPickerLauncher,
                 executor = InlineExecutor(),
             )
+            // Every past pairing left its CDM association behind (eight of them
+            // on this phone by the end of 2026-09-23), which is what made the
+            // app's presence state wrong and its "associated" card misleading.
+            // Clean up whenever the app is opened, not only after a pairing.
+            cdmPairScanner?.pruneStaleAssociations()
         }
         approvePayload.value = parseApprovePayload(intent)
         val record = runCatching { loadPersistedBond(filesDir) }.getOrNull()
         bondRecord.value = record
+        registerBondDroppedReceiver()
         // Always request BLE runtime permissions on activity start, not just
         // when a bond exists. The pair flow's `BluetoothDevice.createBond()`
         // throws `SecurityException` without `BLUETOOTH_CONNECT`, and a
@@ -557,7 +564,7 @@ class MainActivity : FragmentActivity() {
         } else {
             installCompanionSeams(record)
             installPersistentClientFactory(record)
-            startObservingForBondedAssociations(record)
+            startObservingForBondedAssociations()
             startSyauthCompanionForegroundService()
             scheduleSyauthWatchdog()
         }
@@ -585,6 +592,81 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
+    }
+
+    /** Refresh the home card and service bindings after a completed local pair. */
+    internal fun reloadBondAfterPairing() {
+        val record = loadPersistedBond(filesDir) ?: return
+        bondRecord.value = record
+        installCompanionSeams(record)
+        installPersistentClientFactory(record)
+        startObservingForBondedAssociations()
+        startSyauthCompanionForegroundService()
+        scheduleSyauthWatchdog()
+        reloadCompanionServiceBonds()
+    }
+
+    /**
+     * A desktop-initiated revoke deletes the bond while this activity is
+     * alive; the home card must stop showing "associated" without a manual
+     * app restart (observed 2026-09-23: the card stayed "associated" after
+     * the PC-side dissociation because only the on-disk record was dropped).
+     */
+    private var bondDroppedReceiver: android.content.BroadcastReceiver? = null
+
+    private fun registerBondDroppedReceiver() {
+        bondDroppedReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action != SyauthCompanionService.ACTION_BOND_DROPPED) return
+                bondRecord.value = null
+                Log.i(PERMISSION_LOG_TAG, "desktop revoke: home card cleared")
+            }
+        }
+        val filter = IntentFilter(SyauthCompanionService.ACTION_BOND_DROPPED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(bondDroppedReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(bondDroppedReceiver, filter)
+        }
+    }
+
+    override fun onDestroy() {
+        bondDroppedReceiver?.let { runCatching { unregisterReceiver(it) } }
+        bondDroppedReceiver = null
+        super.onDestroy()
+    }
+
+    /**
+     * Tell the already-running companion service that the bond set changed.
+     *
+     * `SyauthCompanionService` builds one GATT client per bond in `onCreate`
+     * and is `START_STICKY`, so after a re-pair (or a dissociation) it kept
+     * serving the *previous* bond. The desktop then saw `Connected: no`,
+     * presence samples stopped arriving and both the proximity lock and the
+     * phone unlock went dead until the app was restarted by hand — observed
+     * on 2026-09-23. The reload action reconciles the live clients with the
+     * bonds that exist on disk now, without churning the ones that work.
+     */
+    private fun reloadCompanionServiceBonds() {
+        val intent = Intent(this, SyauthCompanionService::class.java).apply {
+            action = SyauthCompanionService.ACTION_RELOAD_BONDS
+        }
+        runCatching { startService(intent) }
+            .onFailure { Log.w(PERMISSION_LOG_TAG, "companion reload intent failed", it) }
+    }
+
+    /**
+     * Ask the companion service to put one `Revoke` frame on the wire, so the
+     * desktop marks this bond revoked and stops serving it.
+     */
+    private fun sendRevokeToCompanionService(peerId: String) {
+        val intent = Intent(this, SyauthCompanionService::class.java).apply {
+            action = SyauthCompanionService.ACTION_REVOKE_BOND
+            putExtra(SyauthCompanionService.EXTRA_PEER_ID, peerId)
+        }
+        runCatching { startService(intent) }
+            .onFailure { Log.w(PERMISSION_LOG_TAG, "revoke intent failed", it) }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -621,6 +703,11 @@ class MainActivity : FragmentActivity() {
      */
     internal fun onBondRevokeTapped() {
         val record = bondRecord.value ?: return
+        // Tell the desktop first, over the live GATT link: without this frame the
+        // PC kept serving a bond this phone had already dropped (observed
+        // 2026-09-23: "if I dissociate in the app the PC stays active"). Best
+        // effort on purpose — the local cleanup must not depend on the radio.
+        sendRevokeToCompanionService(record.peerId)
         val bondFile = java.io.File(filesDir, BOND_RECORD_FILE_NAME)
         runCatching { bondFile.delete() }
         runCatching {
@@ -628,6 +715,10 @@ class MainActivity : FragmentActivity() {
             if (ks.containsAlias(record.keystoreAlias)) ks.deleteEntry(record.keystoreAlias)
         }
         bondRecord.value = null
+        // The bond file is gone: the service must drop the client it built
+        // for it, otherwise it keeps holding the radio and the desktop keeps
+        // seeing a peer that no longer exists on this phone.
+        reloadCompanionServiceBonds()
     }
 }
 
@@ -688,7 +779,14 @@ private fun SyauthApp(
                 onOobYes = viewModel::onOobYesTapped,
                 onOobNo = viewModel::onOobNoTapped,
                 onDone = {
-                    activity.finishAndRemoveTask()
+                    if (state is PairingState.Bonded) {
+                        (activity as? MainActivity)?.reloadBondAfterPairing()
+                    }
+                    navController.popBackStack()
+                },
+                onRetry = {
+                    navController.popBackStack()
+                    navController.navigate(NavRoutes.PAIR)
                 },
             )
         }
@@ -1011,7 +1109,7 @@ private fun UnpairedHomeBody(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Pair a computer to use the Pixel as a biometric key.",
+                text = "Pair a computer to use this phone as a biometric key.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -1180,7 +1278,7 @@ private fun DiagnosticRoute() {
 @Composable
 internal fun OobScreen() {
     val rendered by produceState(initialValue = "${OOB_RENDER_PREFIX}...") {
-        // `oobCodeForBond` is pure CPU (HKDF-SHA256 expand + four table
+        // `oobCodeForBond` is pure CPU (HKDF-SHA256 expand + decimal
         // lookups). On ARMv8 it takes microseconds; we still defer to a
         // `produceState` coroutine instead of calling on first composition
         // so a binding regression that hangs the call doesn't block the
@@ -1188,8 +1286,8 @@ internal fun OobScreen() {
         // the rendered string so the test surfaces the failure rather
         // than crashing the activity.
         value = try {
-            val words = oobCodeForBond(helloBondKey())
-            OOB_RENDER_PREFIX + words.joinToString(" ")
+            val code = oobCodeForBond(helloBondKey())
+            OOB_RENDER_PREFIX + code
         } catch (t: Throwable) {
             "${OOB_RENDER_PREFIX}ERR ${t.message ?: t::class.java.simpleName}"
         }
@@ -1258,14 +1356,14 @@ private object PairingViewModelFactoryHolder {
                     clock = com.sy.syauth.android.pair.impl.SystemPairClock(),
                     sessionUuidLookup = com.sy.syauth.android.pair.impl.UniffiPairSessionUuidLookup(),
                     bondKeyDeriver = com.sy.syauth.android.pair.impl.HkdfPairBondKeyDeriver(),
+                    bondPersister = DiskBondPersister(
+                        bondStore = BondStore(context.filesDir),
+                    ),
                     keystoreKeyGenerator = keystoreGenerator,
                 )
                 val vm = PairingViewModel(
                     backend = backend,
                     oobCalculator = UniffiOobCalculator(),
-                    bondPersister = DiskBondPersister(
-                        bondStore = BondStore(context.filesDir),
-                    ),
                     bondRemover = ReflectionBondRemover(adapter = adapter),
                     companionAssociator = associator,
                 )

@@ -6,6 +6,7 @@ import importlib.util
 import os
 import time
 import unittest
+from unittest.mock import patch
 from datetime import datetime
 from pathlib import Path
 
@@ -73,6 +74,83 @@ class SettingsLastUnlockTests(unittest.TestCase):
             settings.format_unlock_timestamp("not-a-timestamp"),
             "not-a-timestamp",
         )
+
+
+class SettingsPhoneIdentityTests(unittest.TestCase):
+    def test_galaxy_is_rendered_in_the_actual_settings_card(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        app = settings.QApplication.instance() or settings.QApplication([])
+
+        def command(args, **_kwargs):
+            if args == ["syauth", "list"]:
+                return "fixture-peer\tGalaxy S26\tbonded\t2026-01-01T00:00:00Z"
+            if args == [str(settings.CONTROL), "status"]:
+                return "Syauth: ON"
+            return ""
+
+        with patch.object(settings, "run_command", side_effect=command):
+            window = settings.SettingsWindow()
+            try:
+                self.assertEqual(window.phone_name.text(), "Galaxy S26")
+                self.assertEqual(window.phone_name.textFormat(), settings.Qt.TextFormat.PlainText)
+                self.assertEqual(window.phone_state.text(), "Associato")
+            finally:
+                window.timer.stop()
+                window.close()
+                window.deleteLater()
+                app.processEvents()
+
+    def test_non_pixel_phone_comes_from_application_bond(self):
+        with patch.object(settings, "run_command", return_value=(
+            "fixture-peer\tGalaxy S26\tbonded\t2026-01-01T00:00:00Z\n"
+        )) as command:
+            phone = settings.get_phone_info()
+        self.assertEqual(phone["name"], "Galaxy S26")
+        self.assertTrue(phone["paired"])
+        self.assertIsNone(phone["connected"])
+        command.assert_called_once_with(["syauth", "list"])
+
+    def test_revoked_phone_and_unrelated_bluetooth_devices_are_not_selected(self):
+        with patch.object(settings, "run_command", return_value=(
+            "old-fixture\tPixel 8\trevoked:replaced\tdate\n"
+            "new-fixture\tFairphone\tbonded\tdate\n"
+        )):
+            self.assertEqual(settings.get_phone_info()["name"], "Fairphone")
+
+    def test_ambiguous_bonds_are_not_resolved_by_vendor_or_first_row(self):
+        with patch.object(settings, "run_command", return_value=(
+            "fixture-one\tGalaxy S26\tbonded\tdate\n"
+            "fixture-two\tAnother phone\tbonded\tdate\n"
+        )):
+            phone = settings.get_phone_info()
+        self.assertFalse(phone["paired"])
+        self.assertEqual(phone["name"], "Più telefoni associati")
+
+    def test_missing_bond_never_picks_a_bluetooth_device(self):
+        with patch.object(settings, "run_command", return_value="(no bonds)"):
+            self.assertFalse(settings.get_phone_info()["paired"])
+
+
+class SettingsProximityTests(unittest.TestCase):
+    def test_disabled_proximity_is_visible_as_disabled_everywhere(self):
+        label, active = settings.proximity_display_state({
+            "available": True,
+            "enabled": False,
+            "state": "NEAR",
+        })
+
+        self.assertEqual(label, "Disattivato")
+        self.assertFalse(active)
+
+    def test_enabled_proximity_keeps_the_technical_state(self):
+        label, active = settings.proximity_display_state({
+            "available": True,
+            "enabled": True,
+            "state": "NEAR",
+        })
+
+        self.assertEqual(label, "Vicino")
+        self.assertTrue(active)
 
 
 if __name__ == "__main__":

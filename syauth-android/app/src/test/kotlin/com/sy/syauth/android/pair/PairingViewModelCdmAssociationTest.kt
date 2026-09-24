@@ -61,20 +61,59 @@ private class RecordingAssociator(
 /** Trivial fakes; same shape as PairingViewModelTest.kt. */
 private class StaticPairBackend(
     private val pickResult: PickPeerResult = PickPeerResult.LescStarted(code = "123456"),
+    private val transactionOutcome: (() -> Result<String>)? = null,
 ) : PairBackend {
+    var commitCount: Int = 0
+        private set
+    var abandonCount: Int = 0
+        private set
+    var cleanupCount: Int = 0
+        private set
+
     override fun startScan() = Unit
     override fun stopScan() = Unit
     override fun pickPeer(peer: PeerHandle): PickPeerResult = pickResult
+    var persister: BondPersister? = null
+
+    override fun persistBond(record: BondRecord): Result<Unit> =
+        runCatching { persister?.persist(record) ?: error("missing test persister") }
+
     override fun awaitLescResult(): LescResult =
         LescResult.Bonded(
             bondKey = ByteArray(BOND_KEY_LEN) { it.toByte() },
             peerName = TEST_PEER.name,
         )
+
+    override fun coordinateTransaction(persistCommitted: () -> Boolean): Result<String> =
+        transactionOutcome?.invoke()
+            ?: if (persistCommitted()) Result.success(TEST_PEER.name)
+            else Result.failure(IllegalStateException("persist failed"))
+
+    override fun commitProvisionalAssociation() {
+        commitCount += 1
+    }
+
+    override fun abandonProvisionalAssociation() {
+        abandonCount += 1
+    }
+
+    override fun cleanup() {
+        cleanupCount += 1
+    }
+}
+
+/**
+ * Invoke the protected `ViewModel.onCleared()` hook the way the
+ * ViewModelStore does when the pair route is disposed.
+ */
+private fun clearViewModel(vm: PairingViewModel) {
+    val method = PairingViewModel::class.java.getDeclaredMethod("onCleared")
+    method.isAccessible = true
+    method.invoke(vm)
 }
 
 private class FixedOobCalculator : OobCalculator {
-    override fun compute(bondKey: ByteArray): List<String> =
-        listOf("alpha", "beta", "gamma", "delta")
+    override fun compute(bondKey: ByteArray): String = "04231789"
 }
 
 private class RecordingPersister(
@@ -99,14 +138,18 @@ private fun buildVm(
     associator: CompanionAssociator,
     persister: RecordingPersister = RecordingPersister(),
     remover: RecordingRemover = RecordingRemover(),
-): PairingViewModel = PairingViewModel(
-    backend = StaticPairBackend(),
+    backend: StaticPairBackend = StaticPairBackend(),
+): PairingViewModel {
+    backend.persister = persister
+    return PairingViewModel(
+    backend = backend,
     oobCalculator = FixedOobCalculator(),
-    bondPersister = persister,
     bondRemover = remover,
     companionAssociator = associator,
     associateDispatcher = Dispatchers.Unconfined,
-)
+    transactionDispatcher = Dispatchers.Unconfined,
+    )
+}
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -124,7 +167,7 @@ class PairingViewModelCdmAssociationTest {
     }
 
     @Test
-    fun oob_yes_associates_then_transitions_to_bonded() {
+    fun oob_yes_transitions_to_bonded_without_second_cdm_request() {
         val associator = RecordingAssociator()
         val persister = RecordingPersister()
         val remover = RecordingRemover()
@@ -133,8 +176,7 @@ class PairingViewModelCdmAssociationTest {
         driveToOobConfirming(vm)
         vm.onOobYesTapped()
 
-        assertEquals(1, associator.callCount)
-        assertEquals(TEST_PEER, associator.lastPeer)
+        assertEquals(0, associator.callCount)
         val state = vm.state.value
         assertTrue("expected Bonded, got $state", state is PairingState.Bonded)
         assertEquals(TEST_PEER.name, (state as PairingState.Bonded).name)
@@ -143,9 +185,9 @@ class PairingViewModelCdmAssociationTest {
     }
 
     @Test
-    fun oob_yes_association_failure_emits_failed_and_rolls_back_bond() {
+    fun oob_yes_does_not_depend_on_a_second_association_request() {
         val associator = RecordingAssociator(
-            outcome = Result.failure(CompanionAssociationError("user rejected dialog")),
+            outcome = Result.failure(CompanionAssociationError("unused")),
         )
         val persister = RecordingPersister()
         val remover = RecordingRemover()
@@ -154,23 +196,10 @@ class PairingViewModelCdmAssociationTest {
         driveToOobConfirming(vm)
         vm.onOobYesTapped()
 
-        assertEquals(1, associator.callCount)
+        assertEquals(0, associator.callCount)
         val state = vm.state.value
-        assertTrue("expected Failed, got $state", state is PairingState.Failed)
-        val reason = (state as PairingState.Failed).reason
-        assertTrue(
-            "reason should mention CDM rejection, got: $reason",
-            reason.startsWith("companion-device association rejected:"),
-        )
-        assertTrue(
-            "reason should include the inner cause, got: $reason",
-            reason.contains("user rejected dialog"),
-        )
-        // BT bond is rolled back on the associate-failure path.
-        assertEquals(listOf(TEST_PEER.id), remover.removed)
-        // Persister was called once (before associate); the Kotlin
-        // layer does not have a `remove(peerId)` on BondPersister in
-        // v0.1 (documented residual in PairingViewModel.onOobYesTapped).
+        assertTrue("expected Bonded, got $state", state is PairingState.Bonded)
+        assertEquals(0, remover.removed.size)
         assertEquals(1, persister.persisted.size)
     }
 
@@ -206,5 +235,176 @@ class PairingViewModelCdmAssociationTest {
         assertEquals(0, associator.callCount)
         val state = vm.state.value
         assertTrue("expected Failed, got $state", state is PairingState.Failed)
+    }
+
+    // -------------------------------------------------------------
+    // CDM association cleanup (cancel / reject / error / timeout).
+    // -------------------------------------------------------------
+
+    @Test
+    fun cancel_from_scanning_abandons_the_provisional_association() {
+        val backend = StaticPairBackend()
+        val vm = buildVm(RecordingAssociator(), backend = backend)
+
+        vm.onStartScanTapped()
+        vm.onCancelTapped()
+
+        assertEquals(1, backend.abandonCount)
+        assertEquals(0, backend.commitCount)
+        assertTrue("expected Idle, got ${vm.state.value}", vm.state.value is PairingState.Idle)
+    }
+
+    @Test
+    fun cancel_from_oob_confirmation_abandons_the_provisional_association() {
+        val backend = StaticPairBackend()
+        val vm = buildVm(RecordingAssociator(), backend = backend)
+
+        driveToOobConfirming(vm)
+        vm.onCancelTapped()
+
+        assertEquals(1, backend.abandonCount)
+        assertEquals(0, backend.commitCount)
+        assertTrue("expected Idle, got ${vm.state.value}", vm.state.value is PairingState.Idle)
+    }
+
+    @Test
+    fun oob_no_reject_abandons_the_provisional_association() {
+        val backend = StaticPairBackend()
+        val vm = buildVm(RecordingAssociator(), backend = backend)
+
+        driveToOobConfirming(vm)
+        vm.onOobNoTapped()
+
+        assertEquals(1, backend.abandonCount)
+        assertEquals(0, backend.commitCount)
+        assertTrue("expected Failed, got ${vm.state.value}", vm.state.value is PairingState.Failed)
+    }
+
+    @Test
+    fun lesc_failure_abandons_the_provisional_association() {
+        val backend = StaticPairBackend()
+        val vm = buildVm(RecordingAssociator(), backend = backend)
+
+        vm.onStartScanTapped()
+        vm.onPeerPicked(TEST_PEER)
+        vm.onLescResult(LescResult.Failed("lesc failed"))
+
+        assertEquals(1, backend.abandonCount)
+        assertEquals(0, backend.commitCount)
+        assertTrue("expected Failed, got ${vm.state.value}", vm.state.value is PairingState.Failed)
+    }
+
+    @Test
+    fun pick_failure_abandons_the_provisional_association() {
+        val backend = StaticPairBackend(pickResult = PickPeerResult.Failed("no adapter"))
+        val vm = buildVm(RecordingAssociator(), backend = backend)
+
+        vm.onStartScanTapped()
+        vm.onPeerPicked(TEST_PEER)
+
+        assertEquals(1, backend.abandonCount)
+        assertTrue("expected Failed, got ${vm.state.value}", vm.state.value is PairingState.Failed)
+    }
+
+    @Test
+    fun transaction_failure_abandons_the_provisional_association() {
+        val backend = StaticPairBackend(
+            transactionOutcome = { Result.failure(IllegalStateException("remote timeout")) },
+        )
+        val vm = buildVm(RecordingAssociator(), backend = backend)
+
+        driveToOobConfirming(vm)
+        vm.onOobYesTapped()
+
+        assertEquals(1, backend.abandonCount)
+        assertEquals(0, backend.commitCount)
+        assertTrue("expected Failed, got ${vm.state.value}", vm.state.value is PairingState.Failed)
+    }
+
+    @Test
+    fun uncertain_transaction_keeps_the_provisional_association() {
+        val backend = StaticPairBackend(
+            transactionOutcome = {
+                Result.failure(IllegalStateException("UNCERTAIN: remote completion unavailable"))
+            },
+        )
+        val vm = buildVm(RecordingAssociator(), backend = backend)
+
+        driveToOobConfirming(vm)
+        vm.onOobYesTapped()
+
+        assertEquals(0, backend.abandonCount)
+        assertEquals(0, backend.commitCount)
+        assertTrue("expected Uncertain, got ${vm.state.value}", vm.state.value is PairingState.Uncertain)
+    }
+
+    @Test
+    fun bonded_commits_the_provisional_association_and_never_abandons() {
+        val backend = StaticPairBackend()
+        val vm = buildVm(RecordingAssociator(), backend = backend)
+
+        driveToOobConfirming(vm)
+        vm.onOobYesTapped()
+
+        assertEquals(1, backend.commitCount)
+        assertEquals(0, backend.abandonCount)
+        assertTrue("expected Bonded, got ${vm.state.value}", vm.state.value is PairingState.Bonded)
+    }
+
+    @Test
+    fun cancel_is_idempotent_and_abandons_once() {
+        val backend = StaticPairBackend()
+        val vm = buildVm(RecordingAssociator(), backend = backend)
+
+        vm.onStartScanTapped()
+        vm.onCancelTapped()
+        vm.onCancelTapped()
+
+        assertEquals(1, backend.abandonCount)
+    }
+
+    @Test
+    fun retry_after_cancel_does_not_accumulate_associations() {
+        val backend = StaticPairBackend()
+        val vm = buildVm(RecordingAssociator(), backend = backend)
+
+        vm.onStartScanTapped()
+        vm.onCancelTapped()
+        vm.onStartScanTapped()
+        vm.onCancelTapped()
+
+        assertEquals(2, backend.abandonCount)
+        assertEquals(0, backend.commitCount)
+    }
+
+    @Test
+    fun session_abort_before_bonded_abandons_the_provisional_association() {
+        val backend = StaticPairBackend()
+        val vm = buildVm(RecordingAssociator(), backend = backend)
+
+        vm.onStartScanTapped()
+        clearViewModel(vm)
+
+        assertEquals(1, backend.abandonCount)
+        assertEquals(0, backend.commitCount)
+        assertEquals(1, backend.cleanupCount)
+    }
+
+    @Test
+    fun session_abort_after_bonded_keeps_the_committed_association() {
+        val backend = StaticPairBackend()
+        val vm = buildVm(
+            RecordingAssociator(),
+            persister = RecordingPersister(),
+            backend = backend,
+        )
+
+        driveToOobConfirming(vm)
+        vm.onOobYesTapped()
+        clearViewModel(vm)
+
+        assertEquals(1, backend.commitCount)
+        assertEquals(0, backend.abandonCount)
+        assertEquals(1, backend.cleanupCount)
     }
 }

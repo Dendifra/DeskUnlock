@@ -35,6 +35,8 @@ pub mod bluez;
 pub mod bluez_advertise;
 pub mod error;
 pub mod mock;
+pub mod pair_engine;
+pub mod pairing;
 pub mod peripheral;
 
 use std::time::Duration;
@@ -43,7 +45,8 @@ use async_trait::async_trait;
 pub use bluez::{
     BOND_KEY_BYTES, BlueZBtPeer, DEFAULT_ADAPTER_NAME, FRAGMENT_HEADER_LEN, FRAGMENT_MORE_BIT, FRAGMENT_PAYLOAD_MAX, HKDF_INFO_SESSION_V1,
     MAX_BLE_MTU, PAIR_PUBKEY_LEN, PairingState, SECONDS_PER_MINUTE, SESSION_UUID_BYTES, SESSION_UUID_ROTATION_INTERVAL,
-    SYAUTH_PAIR_HOST_PUBKEY_CHAR_UUID, SYAUTH_PAIR_PHONE_PUBKEY_CHAR_UUID, SYAUTH_PAIR_SERVICE_UUID, connect_pair_service, reassemble,
+    SYAUTH_PAIR_HOST_NAME_V1_CHAR_UUID, SYAUTH_PAIR_HOST_PUBKEY_CHAR_UUID, SYAUTH_PAIR_PHONE_PUBKEY_CHAR_UUID, SYAUTH_PAIR_SERVICE_UUID,
+    SYAUTH_PAIR_V2_CONTROL_CHAR_UUID, SYAUTH_PAIR_V2_STATUS_CHAR_UUID, connect_pair_service, query_pair_status, reassemble,
     session_uuid_for,
 };
 pub use bluez_advertise::{ADVERTISE_LOCAL_NAME, BluerAdvertiser};
@@ -53,9 +56,17 @@ pub use mock::{
     REORDERED_BUFFER_DEPTH, REPLAY_DEFAULT_DUPLICATES, SHORT_CALLER_TIMEOUT, SLOW_DEFAULT_DELAY, TIMEOUT_BUDGET_MULT,
     WRONG_VERSION_DEFAULT,
 };
+pub use pair_engine::{
+    PAIR_MESSAGE_TIMEOUT, PairCommitPhase, PairCommitRequest, PairEngineError, PairServiceState, build_pair_service, host_name_payload,
+    pair_service_uuid,
+};
+pub use pairing::{
+    BondedNotice, GuiAlreadyConnected, OobRequest, PAIR_CONFIRMATION_TIMEOUT, PairingBroker, PairingRequest, frame,
+    pairing_confirmation_socket, pairing_session_socket, read_frame,
+};
 #[cfg(any(test, feature = "test-fake"))]
 pub use peripheral::FakePeripheral;
-pub use peripheral::{BondKey, Peripheral, PeripheralError, PersistentPeripheral};
+pub use peripheral::{BondKey, Peripheral, PeripheralError, PersistentPeripheral, peer_display_name};
 use syauth_core::Frame;
 
 /// A Bluetooth peer the PAM module can talk to.

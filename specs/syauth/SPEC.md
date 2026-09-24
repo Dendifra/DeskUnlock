@@ -125,6 +125,22 @@ We choose (2) for v1 (cheap, universal), with (1) as an optional second factor i
 | D7 | PAM stack behavior | Module is `auth required` for `sudo` and `gdm-password`; on `PAM_AUTHINFO_UNAVAIL` (peer offline) the stack falls through to `pam_unix.so` (password) which preserves the lockout-recovery story | Lock-out is the worst failure mode; explicit fallback is documented and chosen by the admin, not silent | `auth sufficient` (would weaken the stack); fail-closed only (creates support burden if phone battery dies) |
 | D8 | Discovery model | The **desktop** advertises a rotating session-bound UUID; the **phone** scans and connects | Avoids the phone broadcasting a stable identifier (presence-tracking defense); puts the long-lived advertiser on AC power | Phone advertises (drains phone battery, leaks identity); rendezvous through cloud (unwanted dependency) |
 
+#### Coordinated graphical pairing
+
+The graphical pairing seam is a versioned JSON Lines adapter around the existing
+LESC/OOB engine. `syauth pair --gui` emits only presentation events and accepts
+only explicit `{"command":"confirm|reject|cancel"}` commands; it never
+contains a private key or `bond_key`. The terminal CLI remains the default.
+
+Application pairing protocol version 2 uses a fresh transaction id and strict
+message ordering: `CAPABILITY -> LESC/key exchange -> OOB CONFIRM -> PREPARED
+-> COMMIT -> COMMIT_ACK -> COMMITTED`. `REJECT`, `CANCEL`, `TIMEOUT`, and
+`ERROR` abort before commit. A disconnect after commit is `UNCERTAIN`, not
+success or assumed rollback. `BONDED` is valid only after both sides have
+persisted and re-read their committed record and exchanged `COMMITTED`.
+Legacy peers are rejected by version negotiation; the GUI must request an
+upgrade rather than silently downgrade.
+
 ### 3.3 ML (Minimum Loveable)
 
 **IN — v0.1.0:**
@@ -190,7 +206,7 @@ syauth/
 1. User runs `syauth pair` on desktop. CLI brings up adapter, requests LE Secure Connections with MITM protection.
 2. User opens "Add Computer" in the Android app.
 3. BlueZ and Android negotiate LESC pairing. Both display the 6-digit numeric-comparison code.
-4. After BT pairing, our **app-level** OOB confirmation kicks in: the CLI shows a *separate* 4-word emoji code derived from `HKDF(bond, "syauth-oob-v1")[0..4]`. The Android app shows the same. User confirms they match (or aborts).
+4. After BT pairing, our **app-level** OOB confirmation kicks in: the CLI shows a *separate* numeric code derived from `HKDF(bond, "syauth-oob-v1")[0..4]`. The Android app shows the same number. User confirms they match (or aborts).
 5. Both sides write the bond record to secure storage. Pairing complete.
 
 **Why a second OOB confirmation after BT pairing:** if an attacker compromises the BT pairing (e.g. via a controller-firmware bug or by intercepting numeric comparison via an out-of-band channel), they would also need to spoof the app-level OOB code, which is derived from the freshly-negotiated shared secret. This is defense in depth, cheap to add.
@@ -313,7 +329,7 @@ Alex reads about syauth, installs it via `dnf` (or builds from source), runs `sy
 **Phase 2 — Pair**
 
 - *Intent:* Establish a trusted bond between this desktop and this phone.
-- *Actions:* `syauth pair` on desktop → BT numeric comparison appears on both → confirm → app-level emoji-code appears on both → confirm → done.
+- *Actions:* `syauth pair` on desktop → BT numeric comparison appears on both → confirm → app-level numeric code appears on both → confirm → done.
 - *Pain/Risk:* BT pairing flake (BlueZ + phone vendor stack); LE Secure Connections fallback to legacy on old adapters; user confirms the wrong device; user is rushed and approves a malicious pairing attempt.
 - *Success signal:* `syauth list` shows the phone; phone shows "Paired with `hostname`".
 
@@ -368,7 +384,7 @@ A first-time user pairs in under 3 minutes, has `sudo` working with a tap in und
 |----|--------|---------------------|--------|
 | T-001 | BLE link-layer relay | Mandatory user gesture (biometric) on phone for every unlock | **Mitigated** |
 | T-002 | Replay | 16-byte nonce + 64-entry LRU cache, 10 s TTL | **Mitigated** |
-| T-003 | MitM during pairing | LE Secure Connections numeric comparison + independent app-level OOB emoji code | **Mitigated** |
+| T-003 | MitM during pairing | LE Secure Connections numeric comparison + independent app-level numeric OOB code | **Mitigated** |
 | T-004 | Rogue device bonding (user is tricked into pairing) | Pairing must be initiated by `syauth pair` on the desktop; inbound bond requests are not accepted | **Mitigated** |
 | T-005 | PAM stack misconfiguration leading to bypass | Ship `syauth install-pam` helper; document `auth required` semantics; recommend keeping `pam_unix` as fallback | **Mitigated by docs + tooling** |
 | T-006 | Phone-thief escalation | Phone-side BiometricPrompt with `setUserAuthenticationRequired(true)` on the Keystore signing key | **Mitigated by Android Keystore** |

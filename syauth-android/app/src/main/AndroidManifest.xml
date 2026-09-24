@@ -161,6 +161,16 @@
             android:foregroundServiceType="connectedDevice"
             tools:targetApi="31" />
 
+        <service
+            android:name=".bg.SyauthCdmCompanionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_COMPANION_DEVICE_SERVICE"
+            tools:targetApi="31">
+            <intent-filter>
+                <action android:name="android.companion.CompanionDeviceService" />
+            </intent-filter>
+        </service>
+
         <!--
           S-014: `ChallengeApprovalActivity` — transparent, no-history,
           single-instance activity launched by `SyauthCompanionService`
@@ -202,7 +212,7 @@
         <receiver
             android:name=".bg.PackageReplacedReceiver"
             android:enabled="true"
-            android:exported="false">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>

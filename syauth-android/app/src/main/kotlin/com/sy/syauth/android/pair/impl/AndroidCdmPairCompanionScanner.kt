@@ -38,6 +38,7 @@ package com.sy.syauth.android.pair.impl
 import android.app.Activity
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanResult
 import android.companion.AssociationInfo
 import android.companion.AssociationRequest
 import android.companion.BluetoothLeDeviceFilter
@@ -75,6 +76,32 @@ internal const val CDM_PICKER_CANCELLED_REASON: String =
 internal const val CDM_PICKER_NO_DEVICE_REASON: String =
     "companion-device picker returned no BluetoothDevice"
 
+internal data class PickedPeer(val address: String, val name: String?)
+
+@Suppress("DEPRECATION")
+internal fun extractPickedPeerFromIntent(data: Intent): PickedPeer? {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        when (val picked = data.extras?.get(CompanionDeviceManager.EXTRA_DEVICE)) {
+            is BluetoothDevice -> return PickedPeer(picked.address, runCatching { picked.name }.getOrNull())
+            is ScanResult -> return PickedPeer(picked.device.address, runCatching { picked.device.name }.getOrNull())
+        }
+        val association = data.getParcelableExtra(
+            CompanionDeviceManager.EXTRA_ASSOCIATION,
+            AssociationInfo::class.java,
+        )
+        if (association != null) {
+            val mac = association.deviceMacAddress?.toString()?.uppercase()
+            if (mac != null) return PickedPeer(mac, association.displayName?.toString())
+        }
+        return null
+    }
+    return when (val picked = data.extras?.get(CompanionDeviceManager.EXTRA_DEVICE)) {
+        is BluetoothDevice -> PickedPeer(picked.address, runCatching { picked.name }.getOrNull())
+        is ScanResult -> PickedPeer(picked.device.address, runCatching { picked.device.name }.getOrNull())
+        else -> null
+    }
+}
+
 /**
  * Production [PairCompanionScanner] wrapping
  * `CompanionDeviceManager.associate(AssociationRequest, Executor, Callback)`.
@@ -101,11 +128,19 @@ public class AndroidCdmPairCompanionScanner(
     private val pendingOnFailed: AtomicReference<((String) -> Unit)?> =
         AtomicReference(null)
 
+    /**
+     * CDM associations created by the current pair session. An
+     * association is provisional until the pair reaches BONDED; see
+     * [ProvisionalAssociationSession].
+     */
+    private val provisionalSession = ProvisionalAssociationSession(::disassociateAssociation)
+
     override fun associate(
         serviceUuids: List<UUID>,
         onPicked: (deviceAddress: String, deviceName: String?) -> Unit,
         onFailed: (reason: String) -> Unit,
     ) {
+        provisionalSession.begin()
         pendingOnPicked.set(onPicked)
         pendingOnFailed.set(onFailed)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
@@ -126,6 +161,12 @@ public class AndroidCdmPairCompanionScanner(
     }
 
     private fun buildAssociationRequest(serviceUuids: List<UUID>): AssociationRequest {
+        // `AssociationRequest.Builder` has no "notify on device nearby" knob:
+        // the OS decides that flag from the app's companion permissions, and on
+        // this device every association ended up with it `false` (observed
+        // 2026-09-23). The reliable trigger for bringing the background service
+        // back is therefore the CDM service's `onDeviceAppeared`, which the OS
+        // calls regardless — see `SyauthCdmCompanionService`.
         val builder = AssociationRequest.Builder().setSingleDevice(false)
         for (uuid in serviceUuids) {
             val scan = ScanFilter.Builder()
@@ -165,6 +206,10 @@ public class AndroidCdmPairCompanionScanner(
                 Log.i(
                     CDM_PAIR_SCANNER_LOG_TAG,
                     "CDM association created id=${associationInfo.id}",
+                )
+                provisionalSession.record(
+                    associationInfo.id,
+                    associationInfo.deviceMacAddress?.toString()?.uppercase(),
                 )
                 startObservingDevicePresence(associationInfo.id)
             }
@@ -312,6 +357,7 @@ public class AndroidCdmPairCompanionScanner(
             (onFailed ?: { _ -> })(CDM_PICKER_CANCELLED_REASON)
             return true
         }
+        recordAssociationFromIntent(data)
         val picked = extractPickedPeer(data)
         if (picked == null) {
             (onFailed ?: { _ -> })(CDM_PICKER_NO_DEVICE_REASON)
@@ -321,7 +367,148 @@ public class AndroidCdmPairCompanionScanner(
         return true
     }
 
-    private data class PickedPeer(val address: String, val name: String?)
+    /**
+     * Mark the current session's CDM association as committed because
+     * the pair reached BONDED. Committed associations are never removed
+     * by [abandonSessionAssociation]. Idempotent.
+     */
+    override fun commitSessionAssociation() {
+        val committed = provisionalSession.commit()
+        pruneSupersededAssociations(committed.toSet())
+    }
+
+    /**
+     * Remove the CDM associations left behind by earlier pairings.
+     *
+     * Each pairing adds one and nothing ever removed it: after one day of
+     * testing the phone carried eight, and only the oldest had
+     * `mNotifyOnDeviceNearby=true` (observed 2026-09-23). The OS binds
+     * `SyauthCompanionService` from these associations, so the pile made the
+     * app's presence state wrong and the service unreliable. After a
+     * successful pairing exactly one association must remain: the one just
+     * committed.
+     *
+     * `myAssociations` only ever returns this app's own associations, so no
+     * device filtering is needed — and a failure to enumerate them leaves the
+     * association set untouched rather than guessing.
+     */
+    /**
+     * Remove the CDM associations superseded by earlier pairings, keeping the
+     * most recent one.
+     *
+     * Called when the app starts, not only after a pairing: the associations
+     * accumulated by every past pairing are what made the app's presence state
+     * wrong and its "associated" card misleading (observed 2026-09-23: eight
+     * associations on the device, only the oldest with
+     * `mNotifyOnDeviceNearby=true`). No bond is required — the stale
+     * associations are worth removing even on an unpaired phone.
+     */
+    public fun pruneStaleAssociations() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val manager = activity.getSystemService(CompanionDeviceManager::class.java)
+        if (manager == null) {
+            Log.w(CDM_PAIR_SCANNER_LOG_TAG, "prune: $CDM_SERVICE_MISSING_REASON")
+            return
+        }
+        val mine = runCatching { manager.myAssociations }.getOrNull()
+        if (mine == null) {
+            Log.w(CDM_PAIR_SCANNER_LOG_TAG, "prune: could not enumerate associations; leaving them alone")
+            return
+        }
+        val newest = mine.maxByOrNull { it.id } ?: return
+        if (mine.size > 1) {
+            Log.i(
+                CDM_PAIR_SCANNER_LOG_TAG,
+                "prune: ${mine.size} associations on this phone; keeping id=${newest.id}",
+            )
+        }
+        pruneSupersededAssociations(setOf(newest.id))
+    }
+
+    private fun pruneSupersededAssociations(keep: Set<Int>) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val manager = activity.getSystemService(CompanionDeviceManager::class.java)
+        if (manager == null) {
+            Log.w(CDM_PAIR_SCANNER_LOG_TAG, "prune: $CDM_SERVICE_MISSING_REASON")
+            return
+        }
+        val mine = runCatching { manager.myAssociations }.getOrNull()
+        if (mine == null) {
+            Log.w(CDM_PAIR_SCANNER_LOG_TAG, "prune: could not enumerate associations; leaving them alone")
+            return
+        }
+        for (association in mine) {
+            if (association.id in keep) continue
+            Log.i(
+                CDM_PAIR_SCANNER_LOG_TAG,
+                "prune: removing superseded association id=${association.id}",
+            )
+            disassociateAssociation(association.id, association.deviceMacAddress?.toString())
+        }
+    }
+
+    /**
+     * Remove the CDM association(s) created by the current session
+     * because the pair ended before BONDED (cancel, reject, error,
+     * timeout). Idempotent; never touches associations from other
+     * sessions, devices, or apps.
+     */
+    override fun abandonSessionAssociation() {
+        provisionalSession.abandon()
+    }
+
+    /**
+     * Record the association delivered by the picker result Intent. The
+     * `onAssociationCreated` callback can race the launcher result; the
+     * result Intent carries the same `AssociationInfo` on API 33+, so
+     * recording here closes the gap before the ViewModel can cancel.
+     */
+    private fun recordAssociationFromIntent(data: Intent) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val association = runCatching {
+            data.getParcelableExtra(
+                CompanionDeviceManager.EXTRA_ASSOCIATION,
+                AssociationInfo::class.java,
+            )
+        }.getOrNull() ?: return
+        provisionalSession.record(
+            association.id,
+            association.deviceMacAddress?.toString()?.uppercase(),
+        )
+    }
+
+    /**
+     * Remove one provisional association through CDM. Prefers the
+     * association id (API 33+); falls back to the MAC-string overload on
+     * older hosts.
+     */
+    @Suppress("DEPRECATION")
+    private fun disassociateAssociation(associationId: Int, mac: String?) {
+        val manager = activity.getSystemService(CompanionDeviceManager::class.java)
+        if (manager == null) {
+            Log.w(CDM_PAIR_SCANNER_LOG_TAG, "disassociate: $CDM_SERVICE_MISSING_REASON")
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && associationId != UNKNOWN_ASSOCIATION_ID) {
+            runCatching { manager.disassociate(associationId) }
+                .onSuccess {
+                    Log.i(CDM_PAIR_SCANNER_LOG_TAG, "disassociated provisional association id=$associationId")
+                }
+                .onFailure { t ->
+                    Log.w(CDM_PAIR_SCANNER_LOG_TAG, "disassociate id=$associationId failed", t)
+                }
+            return
+        }
+        if (mac != null) {
+            runCatching { manager.disassociate(mac) }
+                .onSuccess {
+                    Log.i(CDM_PAIR_SCANNER_LOG_TAG, "disassociated provisional association mac=$mac")
+                }
+                .onFailure { t ->
+                    Log.w(CDM_PAIR_SCANNER_LOG_TAG, "disassociate mac=$mac failed", t)
+                }
+        }
+    }
 
     /**
      * Resolve the picked peer from the launcher's result Intent. On
@@ -334,39 +521,7 @@ public class AndroidCdmPairCompanionScanner(
      * through [android.bluetooth.BluetoothAdapter] when only the
      * association is present.
      */
-    @Suppress("DEPRECATION")
-    private fun extractPickedPeer(data: Intent): PickedPeer? {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val legacyDevice = data.getParcelableExtra(
-                CompanionDeviceManager.EXTRA_DEVICE,
-                BluetoothDevice::class.java,
-            )
-            if (legacyDevice != null) {
-                return PickedPeer(legacyDevice.address, runCatching { legacyDevice.name }.getOrNull())
-            }
-            val association = data.getParcelableExtra(
-                CompanionDeviceManager.EXTRA_ASSOCIATION,
-                AssociationInfo::class.java,
-            )
-            if (association != null) {
-                // MacAddress.toString() is lowercase per its contract;
-                // BluetoothAdapter.getRemoteDevice requires uppercase
-                // hex per its docs (and throws IllegalArgumentException
-                // otherwise). Uppercase before handing the MAC back.
-                val mac = association.deviceMacAddress?.toString()?.uppercase()
-                val display = association.displayName?.toString()
-                if (mac != null) {
-                    return PickedPeer(mac, display)
-                }
-            }
-            return null
-        }
-        val legacyDevice: BluetoothDevice? = data.getParcelableExtra(CompanionDeviceManager.EXTRA_DEVICE)
-        if (legacyDevice != null) {
-            return PickedPeer(legacyDevice.address, runCatching { legacyDevice.name }.getOrNull())
-        }
-        return null
-    }
+    private fun extractPickedPeer(data: Intent): PickedPeer? = extractPickedPeerFromIntent(data)
 
     private fun failPending(reason: String) {
         pendingOnPicked.set(null)

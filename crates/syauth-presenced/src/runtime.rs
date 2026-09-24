@@ -15,8 +15,13 @@ use std::{
 };
 
 use syauth_core::{Bond, BondStatus, BondStore, bond_key_from_pubkeys, peer_id_from_pubkey};
-use syauth_transport::{BOND_KEY_BYTES, DEFAULT_ADAPTER_NAME, FakePeripheral, Peripheral, PersistentPeripheral};
+use syauth_transport::PairingBroker;
+use syauth_transport::{
+    BOND_KEY_BYTES, DEFAULT_ADAPTER_NAME, FakePeripheral, PairCommitPhase, PairCommitRequest, Peripheral, PersistentPeripheral,
+    peer_display_name,
+};
 use tokio::{
+    io::AsyncReadExt,
     signal::unix::{SignalKind, signal},
     sync::mpsc,
     time::Instant,
@@ -214,7 +219,8 @@ pub async fn run(config: Config) -> Result<ShutdownReason, RunError> {
     );
 
     let (orch_shutdown_tx, orch_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-    let (orch_task, reload_tx, orch_handle) = maybe_spawn_orchestrator(&config, orch_shutdown_rx).await;
+    let pairing_broker = PairingBroker::default();
+    let (orch_task, reload_tx, orch_handle) = maybe_spawn_orchestrator(&config, orch_shutdown_rx, pairing_broker).await;
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let serve_config = ServeConfig {
@@ -308,6 +314,7 @@ async fn wait_for_reason(
 async fn maybe_spawn_orchestrator(
     config: &Config,
     shutdown: tokio::sync::oneshot::Receiver<()>,
+    pairing_broker: PairingBroker,
 ) -> (
     Option<tokio::task::JoinHandle<()>>,
     Option<mpsc::Sender<ReloadCommand>>,
@@ -327,16 +334,19 @@ async fn maybe_spawn_orchestrator(
     // discoverable so a phone can complete its first pair, after
     // which the consumer adds the bond and the orchestrator can
     // spin up on the next reload.
-    type PairEventRx = tokio::sync::mpsc::Receiver<([u8; 32], [u8; 32])>;
-    let (peripheral, pair_events): (Arc<dyn Peripheral + Send + Sync>, Option<PairEventRx>) = match config.peripheral_mode {
-        PeripheralMode::Real => match PersistentPeripheral::new(DEFAULT_ADAPTER_NAME).await {
-            Ok((p, rx)) => (p, Some(rx)),
+    let (pair_commit_tx, pair_commit_rx) = mpsc::channel::<PairCommitRequest>(4);
+    let peripheral: Arc<dyn Peripheral + Send + Sync> = match config.peripheral_mode {
+        PeripheralMode::Real => match PersistentPeripheral::new(DEFAULT_ADAPTER_NAME, pairing_broker.clone(), pair_commit_tx).await {
+            Ok(p) => {
+                spawn_pair_session_listener(Arc::clone(&p));
+                p
+            }
             Err(err) => {
                 warn_no_orchestrator(&format!("BlueZ adapter open failed: {err}"));
                 return (None, None, None);
             }
         },
-        PeripheralMode::Fake => (seed_fake_peripheral(config), None),
+        PeripheralMode::Fake => seed_fake_peripheral(config),
     };
     // Load any pre-existing non-revoked bond into the orchestrator's
     // seed peer set. With zero bonds the seed is empty — the
@@ -383,16 +393,17 @@ async fn maybe_spawn_orchestrator(
         audit_log,
     ));
     let reload_tx = orchestrator.reload_sender();
+    // The operator's rule: with no associated phone there is nothing to serve,
+    // so the daemon must stop by itself instead of waiting for a manual restart.
+    // Only the daemon turns this on — tests reload empty stores all the time.
+    orchestrator.set_exit_when_empty(true);
     // Spawn the pair-event consumer now that we have a reload_tx
     // handle. The consumer writes bonds.toml + key file then signals
     // the orchestrator to reload; the orchestrator handles
     // peripheral.add_peer + internal peer set update atomically so
     // the pair listener and the rotation loop stay in sync.
-    if let Some(rx) = pair_events {
-        let bonds_path = config.bonds_file.clone();
-        let keys_dir = config.keys_dir.clone();
-        let reload_tx_for_pair = reload_tx.clone();
-        tokio::spawn(pair_event_consumer(rx, bonds_path, keys_dir, reload_tx_for_pair));
+    if let Some(bond_dir) = config.bonds_file.parent() {
+        tokio::spawn(pair_commit_consumer(pair_commit_rx, bond_dir.to_path_buf(), reload_tx.clone()));
     }
     let orchestrator_handle = Arc::clone(&orchestrator);
     let handle = tokio::spawn(Arc::clone(&orchestrator).run(shutdown));
@@ -496,122 +507,296 @@ fn load_bond_key(keys_dir: &Path, peer_id: &str) -> Result<[u8; BOND_KEY_BYTES],
     Ok(out)
 }
 
+/// `true` when the store still holds at least one `Bonded` record.
+fn bond_dir_has_a_bonded_peer(bond_dir: &std::path::Path) -> bool {
+    syauth_core::BondStore::load(&bond_dir.join("bonds.toml")).is_ok_and(|store| {
+        store
+            .list()
+            .iter()
+            .any(|bond| matches!(bond.status, syauth_core::BondStatus::Bonded))
+    })
+}
+
+/// Mark the named bond `Revoked` because the phone said the association is
+/// over.
+///
+/// The id comes from the request's transaction field: a revocation is not part
+/// of a pairing transaction, so there is no other place to carry it. Refuses an
+/// unknown id instead of inventing a record, and is idempotent — a repeated
+/// revocation keeps the first reason.
+fn revoke_bond_by_peer_id(bond_dir: &std::path::Path, peer_id: &str) -> Result<(), String> {
+    let path = bond_dir.join("bonds.toml");
+    let mut store = syauth_core::BondStore::load(&path).map_err(|err| err.to_string())?;
+    if !store.list().iter().any(|bond| bond.peer_id == peer_id) {
+        return Err(format!("no bond with peer_id={peer_id}"));
+    }
+    store
+        .mark_revoked(peer_id, "phone: device dissociated")
+        .map_err(|err| err.to_string())?;
+    store.save(&path).map_err(|err| err.to_string())?;
+    tracing::info!(target: "syauth_presenced", peer_id, "day-2 revocation applied from the phone");
+    Ok(())
+}
+
 /// Log the "orchestrator not started" warn line. Factored out so the
 /// short-circuits in [`maybe_spawn_orchestrator`] read uniformly.
 fn warn_no_orchestrator(reason: &str) {
     tracing::warn!(reason, "orchestrator not started; daemon will serve socket only");
 }
 
-/// Consume pair events from the peripheral's pair watcher. Each event
-/// is a `(host_pubkey, phone_pubkey)` pair the phone wrote to the
-/// pair-mode characteristic after completing LESC bonding. The
-/// consumer derives the canonical bond_key, persists the bond record
-/// and per-peer key file, then asks the orchestrator to reload —
-/// `peripheral.add_peer` happens inside the orchestrator's reload
-/// path so the rotation set, internal peer map, and peripheral state
-/// stay in lockstep.
+/// Consume commit-boundary requests from the daemon-owned pair engine.
 ///
-/// Best-effort: a failure on any step logs a warn and continues — the
-/// phone will retry the write if the link stays alive, or the user
-/// will rerun pair if the link dropped. We never panic the daemon on
-/// a malformed pair attempt.
-async fn pair_event_consumer(
-    mut rx: tokio::sync::mpsc::Receiver<([u8; 32], [u8; 32])>,
-    bonds_path: std::path::PathBuf,
-    keys_dir: std::path::PathBuf,
+/// The engine asks for three durable actions and never writes trust itself:
+///
+/// - `Stage` writes the inactive bond + key + `pairing-v2.journal` before
+///   COMMIT; it writes **no** active trust;
+/// - `Promote` moves the staged bond/key into `bonds.toml` +
+///   `keys/<peer_id>.bin` and clears the recovery state. It is requested only
+///   after the bilateral V2 `COMMITTED`;
+/// - `Discard` drops the staging after a definite pre-commit abort.
+///
+/// An uncertain transaction sends none of these after `Stage`, so the journal
+/// and pending state survive for `syauth-reconcile`.
+async fn pair_commit_consumer(
+    mut rx: tokio::sync::mpsc::Receiver<PairCommitRequest>,
+    bond_dir: std::path::PathBuf,
     reload_tx: mpsc::Sender<ReloadCommand>,
 ) {
-    while let Some((host_pubkey, phone_pubkey)) = rx.recv().await {
-        let peer_id = peer_id_from_pubkey(&phone_pubkey);
-        let bond_key = bond_key_from_pubkeys(&host_pubkey, &phone_pubkey);
-        tracing::info!(
-            target: "syauth_presenced",
-            peer_id = %peer_id,
-            "pair: deriving bond and persisting"
-        );
-        // 1. Write the per-peer key file at <keys_dir>/<peer_id>.bin.
-        //    Permissions match the established convention used by
-        //    `syauth pair`: 0600, parent dir created on first run.
-        if let Err(err) = persist_pair_bond_key(&keys_dir, &peer_id, &bond_key) {
-            tracing::warn!(
-                target: "syauth_presenced",
-                peer_id = %peer_id,
-                error = %err,
-                "pair: bond key write failed"
-            );
-            continue;
-        }
-        // 2. Add the bond record to bonds.toml. We use `--force`-style
-        //    semantics: any existing record for this peer_id is
-        //    replaced (the phone explicitly chose to pair again).
-        let bond = Bond {
-            peer_id: peer_id.clone(),
-            pubkey: phone_pubkey,
-            name: PAIR_DEFAULT_BOND_NAME.to_string(),
-            created_at: ::time::OffsetDateTime::now_utc(),
-            status: BondStatus::Bonded,
+    while let Some(request) = rx.recv().await {
+        let peer_id = peer_id_from_pubkey(&request.phone_pubkey);
+        let outcome = match request.phase {
+            PairCommitPhase::Stage => stage_pair_trust(&bond_dir, &request, &peer_id).await,
+            PairCommitPhase::MarkCommit => syauth_core::pair_recovery::mark_commit_pending(&bond_dir).map_err(|err| err.to_string()),
+            PairCommitPhase::Promote => syauth_core::pair_recovery::promote(&bond_dir, &peer_id).map_err(|err| err.to_string()),
+            PairCommitPhase::Discard => {
+                syauth_core::pair_recovery::discard(&bond_dir, &peer_id);
+                Ok(())
+            }
+            // Day-2 revocation: the peer id travels in the transaction field,
+            // because a revocation is not part of any pairing transaction.
+            PairCommitPhase::Revoke => {
+                let outcome = revoke_bond_by_peer_id(&bond_dir, &hex::encode(request.transaction));
+                if outcome.is_ok() {
+                    // The operator's rule: with no associated phone there is
+                    // nothing to serve, so the daemon must stop instead of
+                    // waiting for a manual restart. Re-raising the signal it
+                    // already handles keeps the shutdown path clean — the
+                    // radio registration is released, not abandoned.
+                    if !bond_dir_has_a_bonded_peer(&bond_dir) {
+                        tracing::info!(
+                            target: "syauth_presenced",
+                            "last bond revoked: stopping the daemon (nothing left to serve)"
+                        );
+                        let _ = nix::sys::signal::kill(nix::unistd::getpid(), nix::sys::signal::Signal::SIGTERM);
+                    }
+                }
+                outcome
+            }
         };
-        if let Err(err) = persist_pair_bond_record(&bonds_path, bond) {
-            tracing::warn!(
-                target: "syauth_presenced",
-                peer_id = %peer_id,
-                error = %err,
-                "pair: bond record write failed"
-            );
-            continue;
+        match outcome {
+            Ok(()) => {
+                tracing::info!(
+                    target: "syauth_presenced",
+                    peer_id = %peer_id,
+                    phase = ?request.phase,
+                    "pair: commit-boundary action durable"
+                );
+                if matches!(request.phase, PairCommitPhase::Promote) {
+                    if let Err(err) = reload_tx
+                        .send(ReloadCommand {
+                            trigger: ReloadTrigger::Pair,
+                        })
+                        .await
+                    {
+                        tracing::warn!(
+                            target: "syauth_presenced",
+                            peer_id = %peer_id,
+                            error = %err,
+                            "pair: orchestrator reload signal failed; daemon will pick the bond up on next inotify event"
+                        );
+                    }
+                }
+                let _ = request.reply.send(true);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "syauth_presenced",
+                    peer_id = %peer_id,
+                    phase = ?request.phase,
+                    error = %err,
+                    "pair: commit-boundary action failed; no active trust written"
+                );
+                let _ = request.reply.send(false);
+            }
         }
-        // 3. Signal the orchestrator to reload. It will re-read
-        //    bonds.toml, diff against its live peer set, and call
-        //    `peripheral.add_peer` itself so the rotation loop and
-        //    the peripheral state stay coherent.
-        if let Err(err) = reload_tx
-            .send(ReloadCommand {
-                trigger: ReloadTrigger::Pair,
-            })
-            .await
+    }
+    tracing::info!(target: "syauth_presenced", "pair_commit_consumer: channel closed");
+}
+
+/// Durably stage the inactive bond + key + journal for a commit-boundary
+/// request. Writes no active trust.
+async fn stage_pair_trust(bond_dir: &Path, request: &PairCommitRequest, peer_id: &str) -> Result<(), String> {
+    let bond_key = bond_key_from_pubkeys(&request.host_pubkey, &request.phone_pubkey);
+    // Store the operator-facing Bluetooth name ("Pixel 8") instead of a prose
+    // placeholder. The transport label is only a fallback: the name is a label,
+    // never a trust identity.
+    let name = peer_display_name(DEFAULT_ADAPTER_NAME, &request.peer)
+        .await
+        .unwrap_or_else(|| request.peer.clone());
+    let bond = Bond {
+        peer_id: peer_id.to_owned(),
+        pubkey: request.phone_pubkey,
+        name,
+        created_at: ::time::OffsetDateTime::now_utc(),
+        status: BondStatus::Bonded,
+    };
+    syauth_core::pair_recovery::stage(bond_dir, request.transaction, peer_id, &request.peer, &bond, &bond_key)
+        .map_err(|err| err.to_string())
+}
+
+/// Bind the pair-session socket the GUI client holds open while a pairing
+/// dialog is active. The BlueZ default agent is acquired on connect and
+/// released on disconnect, so DeskUnlock never owns the general Bluetooth
+/// pairing role outside a pair session.
+fn spawn_pair_session_listener(peripheral: Arc<PersistentPeripheral>) {
+    let Some(path) = syauth_transport::pairing_session_socket() else {
+        tracing::warn!(target: "syauth_presenced", "XDG_RUNTIME_DIR unset; pair-session agent scoping unavailable");
+        return;
+    };
+    tokio::spawn(async move {
+        if let Some(parent) = path.parent() {
+            if let Err(err) = std::fs::create_dir_all(parent) {
+                tracing::warn!(target: "syauth_presenced", error = %err, "pair-session dir create failed");
+                return;
+            }
+        }
+        let _ = std::fs::remove_file(&path);
+        let listener = match tokio::net::UnixListener::bind(&path) {
+            Ok(listener) => listener,
+            Err(err) => {
+                tracing::warn!(
+                    target: "syauth_presenced",
+                    error = %err,
+                    "pair-session socket bind failed; LESC pairing may be unavailable"
+                );
+                return;
+            }
+        };
+        #[cfg(unix)]
         {
-            tracing::warn!(
-                target: "syauth_presenced",
-                peer_id = %peer_id,
-                error = %err,
-                "pair: orchestrator reload signal failed; daemon will pick the bond up on next inotify event"
-            );
-            continue;
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
         }
-        tracing::info!(
-            target: "syauth_presenced",
-            peer_id = %peer_id,
-            "pair: bond persisted; orchestrator reload requested"
+        loop {
+            match listener.accept().await {
+                Ok((mut stream, _)) => {
+                    let peripheral = Arc::clone(&peripheral);
+                    tokio::spawn(async move {
+                        if peripheral.acquire_pair_agent().await.is_err() {
+                            return;
+                        }
+                        let mut buf = [0u8; 1];
+                        let _ = stream.read(&mut buf).await;
+                        peripheral.release_pair_agent().await;
+                    });
+                }
+                Err(err) => {
+                    tracing::warn!(target: "syauth_presenced", error = %err, "pair-session accept failed");
+                    break;
+                }
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod day2_revoke_tests {
+    use std::fs;
+
+    use syauth_core::{Bond, BondStatus, BondStore, SigningKey, peer_id_from_pubkey};
+    use tempfile::TempDir;
+    use time::OffsetDateTime;
+
+    use super::revoke_bond_by_peer_id;
+
+    fn bonded_fixture(td: &TempDir) -> String {
+        fs::set_permissions(
+            td.path(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )
+        .expect("chmod");
+        let pubkey = SigningKey::from_bytes(&[9; 32]).verifying_key().to_bytes();
+        let peer_id = peer_id_from_pubkey(&pubkey);
+        let mut store = BondStore::empty();
+        store
+            .add(Bond {
+                peer_id: peer_id.clone(),
+                pubkey,
+                name: "phone".to_owned(),
+                created_at: OffsetDateTime::UNIX_EPOCH,
+                status: BondStatus::Bonded,
+            })
+            .expect("add");
+        store.save(&td.path().join("bonds.toml")).expect("save");
+        peer_id
+    }
+
+    /// The phone dissociates: the desktop must stop serving that bond, which is
+    /// the desktop-side half of "dissociate on one side, dissociated on both".
+    #[test]
+    fn a_phone_revocation_marks_the_bond_revoked() {
+        let td = TempDir::new().expect("tempdir");
+        let peer_id = bonded_fixture(&td);
+
+        revoke_bond_by_peer_id(td.path(), &peer_id).expect("revoke");
+
+        let store = BondStore::load(&td.path().join("bonds.toml")).expect("load");
+        let bond = store.list().iter().find(|b| b.peer_id == peer_id).expect("bond");
+        assert!(bond.is_revoked(), "the bond must be revoked, got {:?}", bond.status);
+    }
+
+    /// An id that names nothing is refused instead of inventing a record.
+    #[test]
+    fn an_unknown_peer_id_is_refused() {        let td = TempDir::new().expect("tempdir");
+        let _ = bonded_fixture(&td);
+        let err = revoke_bond_by_peer_id(td.path(), "00000000000000000000000000000000").expect_err("must refuse");
+        assert!(err.contains("no bond"), "got {err}");
+    }
+
+    /// Repeating it is harmless and keeps the first reason.
+    #[test]
+    fn a_repeated_revocation_keeps_the_first_reason() {
+        let td = TempDir::new().expect("tempdir");
+        let peer_id = bonded_fixture(&td);
+        revoke_bond_by_peer_id(td.path(), &peer_id).expect("first");
+        revoke_bond_by_peer_id(td.path(), &peer_id).expect("second");
+
+        let store = BondStore::load(&td.path().join("bonds.toml")).expect("load");
+        let bond = store.list().iter().find(|b| b.peer_id == peer_id).expect("bond");
+        match &bond.status {
+            BondStatus::Revoked { reason } => assert_eq!(reason, "phone: device dissociated"),
+            other => panic!("expected revoked, got {other:?}"),
+        }
+    }
+
+    /// The operator's rule as a decision: with no associated phone there is
+    /// nothing to serve, so the daemon must stop by itself instead of waiting
+    /// for a manual restart ("altrimenti non ne usciamo", 2026-09-23).
+    /// Re-raising SIGTERM is what makes the stop clean; this pins the decision.
+    #[test]
+    fn the_daemon_stops_once_the_last_bond_is_revoked() {
+        let td = TempDir::new().expect("tempdir");
+        let peer_id = bonded_fixture(&td);
+        assert!(
+            super::bond_dir_has_a_bonded_peer(td.path()),
+            "a bonded peer means the daemon keeps serving"
+        );
+
+        revoke_bond_by_peer_id(td.path(), &peer_id).expect("revoke");
+
+        assert!(
+            !super::bond_dir_has_a_bonded_peer(td.path()),
+            "no bonded peer left: the daemon must stop"
         );
     }
-    tracing::info!(target: "syauth_presenced", "pair_event_consumer: channel closed");
-}
-
-/// Default name surfaced in `syauth list` for a bond minted by the
-/// daemon's pair flow (operator never typed a name on the desktop).
-const PAIR_DEFAULT_BOND_NAME: &str = "phone (paired via daemon)";
-
-/// Write a 32-byte bond key to `<keys_dir>/<peer_id>.bin` with mode
-/// 0600. Creates `keys_dir` if it does not exist with mode 0700.
-fn persist_pair_bond_key(keys_dir: &Path, peer_id: &str, bond_key: &[u8; BOND_KEY_BYTES]) -> Result<(), std::io::Error> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::create_dir_all(keys_dir)?;
-    let _ = std::fs::set_permissions(keys_dir, std::fs::Permissions::from_mode(0o700));
-    let path = keys_dir.join(format!("{peer_id}{BOND_KEY_FILE_EXT}"));
-    std::fs::write(&path, bond_key)?;
-    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    Ok(())
-}
-
-/// Load `bonds_path`, replace-or-add the bond record, save back.
-/// `--force` semantics: any existing record for the same peer_id is
-/// replaced; the phone explicitly chose to pair again.
-fn persist_pair_bond_record(bonds_path: &Path, bond: Bond) -> Result<(), syauth_core::BondError> {
-    let mut store = BondStore::load(bonds_path)?;
-    if store.list().iter().any(|b| b.peer_id == bond.peer_id) {
-        store.remove(&bond.peer_id)?;
-    }
-    store.add(bond)?;
-    store.save(bonds_path)?;
-    Ok(())
 }

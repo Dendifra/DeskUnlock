@@ -20,6 +20,8 @@ pub mod list;
 pub mod oob;
 pub mod pair;
 pub mod pair_backend;
+pub mod reconcile;
 pub mod revoke;
 pub mod status;
 pub mod uninstall_pam;
+pub mod unlock_request;

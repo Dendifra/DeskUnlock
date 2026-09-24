@@ -3,6 +3,14 @@ Description=Reconcile Syauth phone registration
 After=syauth-presenced.service
 Requires=syauth-presenced.service
 ConditionPathExists=!%h/.config/syauth/disabled
+# A pairing writes the journal several times per second and every write wakes
+# the path unit. The default burst (5 starts / 10 s) would then mark the path
+# `unit-start-limit-hit` and leave the whole user session `degraded`, even
+# though each run succeeds: a run exits immediately and keeps the staged
+# transaction for a later attempt. Allow a pairing's burst, still catch a real
+# loop.
+StartLimitIntervalSec=60
+StartLimitBurst=30
 
 [Service]
 Type=oneshot

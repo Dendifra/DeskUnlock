@@ -4,6 +4,20 @@ set -Eeuo pipefail
 MODE="${1:---bootstrap}"
 DISABLED_MARKER="$HOME/.config/syauth/disabled"
 
+# The daemon refuses to run with no associated phone (operator's rule,
+# 2026-09-23). Activation is also the pairing path, so it opens the pairing
+# window: without it the very first pairing could never happen.
+PAIRING_MODE_MARKER="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/syauth/pairing-mode"
+BONDS_FILE="/var/lib/syauth/bonds.toml"
+
+mark_pairing_mode_when_unassociated() {
+    if [[ -f "$BONDS_FILE" ]] && grep -q 'kind = "Bonded"' "$BONDS_FILE"; then
+        return 0
+    fi
+    mkdir -p "$(dirname "$PAIRING_MODE_MARKER")"
+    : >"$PAIRING_MODE_MARKER"
+}
+
 warn() {
     printf 'ATTENZIONE: %s\n' "$*" >&2
 }
@@ -23,6 +37,23 @@ start_dms() {
     # DMS must remain available even when the Syauth master switch is OFF.
     systemctl --user start --no-block dms.service ||
         warn "dms.service non avviato"
+}
+
+# Enable + start one user unit, unless the operator masked it.
+#
+# `systemctl enable` fails hard on a masked unit and this script runs under
+# `set -Eeuo pipefail`: on 2026-09-23 that aborted activation half-way, so
+# the daemon never came back and the GUI looked like it would not start at
+# all. Masking is a deliberate decision, so it is respected — loudly —
+# instead of taking everything after it down with it.
+unit_enable_start() {
+    local unit="$1"
+    if [[ "$(systemctl --user is-enabled "$unit" 2>/dev/null || true)" == "masked" ]]; then
+        warn "$unit è mascherata: la lascio disattivata (decisione dell'operatore)."
+        return 0
+    fi
+    systemctl --user enable "$unit" >/dev/null
+    systemctl --user start --no-block "$unit"
 }
 
 activate_core() {
@@ -46,17 +77,14 @@ activate_core() {
         return 0
     fi
 
-    systemctl --user enable \
-        syauth-presenced.service \
-        syauth-proximity.service \
-        syauth-reconcile.path \
-        >/dev/null
+    mark_pairing_mode_when_unassociated
+    unit_enable_start syauth-presenced.service
+    unit_enable_start syauth-proximity.service
+    unit_enable_start syauth-reconcile.path
+    unit_enable_start syauth-reconcile.timer
+    unit_enable_start syauth-dms-lock-patch.timer
     systemctl --user enable syauth-idle-lock.service >/dev/null 2>&1 || true
 
-    systemctl --user start --no-block \
-        syauth-presenced.service \
-        syauth-proximity.service \
-        syauth-reconcile.path
     systemctl --user start --no-block syauth-idle-lock.service >/dev/null 2>&1 || true
 
     echo "Servizi core Syauth attivati."

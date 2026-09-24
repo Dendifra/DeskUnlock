@@ -11,7 +11,7 @@ ExecStartPre=/usr/bin/syauth-wait-bluez
 
 ExecStart=/usr/lib/syauth/syauth-presenced
 
-ExecStartPost=/usr/bin/syauth-check-orchestrator
+ExecStartPost=-/usr/bin/syauth-check-orchestrator
 ExecStopPost=/usr/bin/rm -f /run/syauth/gatt.ready
 
 KillSignal=SIGTERM

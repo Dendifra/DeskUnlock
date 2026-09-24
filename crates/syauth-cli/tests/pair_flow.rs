@@ -15,7 +15,7 @@
 //! | 03  | "On timeout (default 60 s) ... no partial bond" | Mock LESC never resolves; `--timeout-secs 1` → `Revoked { Timeout }`, file byte-equal. |
 //! | 04  | "non-interactive when `--yes` is passed" / operator-rejects path | Mock supplies `N`; result is `Revoked { OperatorReject }`, file byte-equal. |
 //! | 05  | "syauth list shows the new peer immediately" | TC-01 store passed to `render_list_to` ⇒ output contains the peer name.    |
-//! | 06  | "ambiguous --peer with --yes"               | Two candidates match `--peer pixel` + `--yes` → `AmbiguousPeer { ... }`.   |
+//! | 06  | "ambiguous --peer with --yes"               | Two candidates match a name filter + `--yes` → `AmbiguousPeer { ... }`.   |
 //! | 07  | "--yes does not skip the LESC check"         | `LescUnsupported` is returned even when `--yes` is set.                    |
 //!
 //! All seven cases collectively satisfy the brief's "at least 4 cases" floor
@@ -52,9 +52,9 @@ use tokio::{
 // ---------------------------------------------------------------------------
 
 const TEST_ADAPTER: &str = "hci0";
-const TEST_PEER_NAME: &str = "alex-pixel";
+const TEST_PEER_NAME: &str = "Galaxy S26";
 const TEST_PEER_ADDR: &str = "AA:BB:CC:DD:EE:01";
-const TEST_PEER_NAME_SPARE: &str = "alex-pixel-spare";
+const TEST_PEER_NAME_SPARE: &str = "Galaxy S26 spare";
 const TEST_PEER_ADDR_SPARE: &str = "AA:BB:CC:DD:EE:02";
 const GOLDEN_PUBKEY: [u8; 32] = [0x21; 32];
 const GOLDEN_BOND_KEY: [u8; 32] = [0x42; 32];
@@ -84,6 +84,7 @@ fn pair_opts(td: &TempDir, peer_filter: Option<&str>, timeout_secs: u64, yes: bo
         bond_dir: bond_dir_path(td),
         yes,
         waybar: false,
+        gui: false,
         // S-019 added the hidden `--scripted-oob` flag; the S-011 cases
         // never set it (they exercise the interactive path or `--yes`).
         scripted_oob: None,
@@ -161,6 +162,10 @@ impl PairBackend for MockPairBackend {
         Ok(self.cfg.lock().expect("cfg lock").candidates.clone())
     }
 
+    async fn coordinate_v2(&self, _transaction: [u8; 16]) -> Result<(), PairError> {
+        Ok(())
+    }
+
     async fn initiate_lesc_with_peer(&self, _peer: &PairCandidate) -> Result<LescOutcome, PairError> {
         self.entered_lesc.notify_one();
         let behavior = self.cfg.lock().expect("cfg lock").lesc_behavior;
@@ -196,6 +201,25 @@ async fn drive_pair(opts: &PairOpts, backend: &dyn PairBackend, stdin: &str) -> 
 // ---------------------------------------------------------------------------
 // TC-01: Golden — pair writes the bond, list shows it.
 // ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn non_pixel_phone_is_paired_and_listed_by_its_real_name() {
+    let td = temp_bond_dir();
+    let mut config = MockConfig::golden();
+    config.candidates[0].name = "Galaxy S26".to_owned();
+    let backend = MockPairBackend::new(config);
+    // Explicit OOB confirmation: this test does not use --yes.
+    let opts = pair_opts(&td, None, TIMEOUT_SECS_LOOSE, false);
+    let (phase, _) = drive_pair(&opts, &backend, "yes\n").await.expect("pair Galaxy");
+    assert_eq!(phase, PairingPhase::Bonded);
+    let store = BondStore::load(&bonds_path(&opts.bond_dir)).expect("load bond");
+    assert_eq!(store.list()[0].name, "Galaxy S26");
+    assert_eq!(store.list()[0].peer_id, peer_id_from_pubkey(&GOLDEN_PUBKEY));
+    let mut output = Vec::new();
+    render_list_to(&mut output, &store).expect("render for settings");
+    let output = String::from_utf8(output).expect("utf8");
+    assert!(output.contains("\tGalaxy S26\tbonded\t"));
+}
 
 #[tokio::test]
 async fn pair_golden_flow_writes_bond_and_list_shows_it() {
@@ -376,7 +400,7 @@ async fn pair_ambiguous_peer_with_yes_errors_with_match_list() {
         },
     ];
     let backend = MockPairBackend::new(cfg);
-    let opts = pair_opts(&td, Some("alex-pixel"), TIMEOUT_SECS_LOOSE, true);
+    let opts = pair_opts(&td, Some("Galaxy"), TIMEOUT_SECS_LOOSE, true);
 
     let err = drive_pair(&opts, &backend, "").await.expect_err("ambiguous must error");
     match err {

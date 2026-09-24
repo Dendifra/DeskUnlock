@@ -20,6 +20,7 @@ typedef struct {
     struct wl_seat *seat;
     struct ext_idle_notifier_v1 *notifier;
     struct ext_idle_notification_v1 *notification;
+    struct ext_idle_notification_v1 *input_notification;
     bool locked;
     uint32_t timeout_ms;
 } IdleClient;
@@ -29,6 +30,7 @@ static void lock_session(IdleClient *client) {
         return;
     }
     client->locked = true;
+    fprintf(stderr, "syauth-idle-lock: idled after %u ms — locking session via loginctl\n", client->timeout_ms);
 
     pid_t child = fork();
     if (child < 0) {
@@ -52,22 +54,37 @@ static void lock_session(IdleClient *client) {
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         fprintf(stderr, "syauth-idle-lock: session lock request failed\n");
         client->locked = false;
+    } else {
+        fprintf(stderr, "syauth-idle-lock: session lock request accepted by loginctl\n");
     }
 }
 
 static void idle_idled(void *data, struct ext_idle_notification_v1 *notification) {
     (void)notification;
+    fprintf(stderr, "syauth-idle-lock: idled event received (normal notification)\n");
+    lock_session(data);
+}
+
+static void input_idle_idled(void *data, struct ext_idle_notification_v1 *notification) {
+    (void)notification;
+    fprintf(stderr, "syauth-idle-lock: idled event received (INPUT notification, inhibitors ignored)\n");
     lock_session(data);
 }
 
 static void idle_resumed(void *data, struct ext_idle_notification_v1 *notification) {
     IdleClient *client = data;
     (void)notification;
+    fprintf(stderr, "syauth-idle-lock: resumed event received\n");
     client->locked = false;
 }
 
 static const struct ext_idle_notification_v1_listener idle_listener = {
     .idled = idle_idled,
+    .resumed = idle_resumed,
+};
+
+static const struct ext_idle_notification_v1_listener input_idle_listener = {
+    .idled = input_idle_idled,
     .resumed = idle_resumed,
 };
 
@@ -77,7 +94,7 @@ static void registry_global(void *data, struct wl_registry *registry, uint32_t n
     if (strcmp(interface, "wl_seat") == 0 && !client->seat) {
         client->seat = wl_registry_bind(registry, name, &wl_seat_interface, version < 1 ? version : 1);
     } else if (strcmp(interface, "ext_idle_notifier_v1") == 0 && !client->notifier) {
-        client->notifier = wl_registry_bind(registry, name, &ext_idle_notifier_v1_interface, 1);
+        client->notifier = wl_registry_bind(registry, name, &ext_idle_notifier_v1_interface, version < 2 ? version : 2);
     }
 }
 
@@ -165,16 +182,26 @@ int main(int argc, char **argv) {
     client.notification = ext_idle_notifier_v1_get_idle_notification(
         client.notifier, client.timeout_ms, client.seat);
     ext_idle_notification_v1_add_listener(client.notification, &idle_listener, &client);
+    if (ext_idle_notifier_v1_get_version(client.notifier) >= 2) {
+        client.input_notification = ext_idle_notifier_v1_get_input_idle_notification(
+            client.notifier, client.timeout_ms, client.seat);
+        ext_idle_notification_v1_add_listener(client.input_notification, &input_idle_listener, &client);
+        fprintf(stderr, "syauth-idle-lock: INPUT notification armed (v2, ignores inhibitors)\n");
+    }
     if (wl_display_roundtrip(client.display) < 0) {
         fprintf(stderr, "syauth-idle-lock: Wayland event setup failed\n");
         return 1;
     }
+    fprintf(stderr, "syauth-idle-lock: armed — will report idle after %u ms\n", client.timeout_ms);
     // ext-idle-notify-v1 notifications are reusable: one object emits an
     // idled/resumed pair for every idle cycle. Keep dispatching until the
     // Wayland connection itself fails.
     while (wl_display_dispatch(client.display) >= 0) {
     }
     int result = 1;
+    if (client.input_notification) {
+        ext_idle_notification_v1_destroy(client.input_notification);
+    }
     ext_idle_notification_v1_destroy(client.notification);
     ext_idle_notifier_v1_destroy(client.notifier);
     wl_seat_destroy(client.seat);

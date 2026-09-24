@@ -42,7 +42,7 @@ use crate::bluez::{BOND_KEY_BYTES, PairingState, session_uuid_for};
 /// Local-name field of the LE advertisement. Constant string — never
 /// derived from the hostname — so a passive observer cannot correlate
 /// the advertisement to an operator identity.
-pub const ADVERTISE_LOCAL_NAME: &str = "syauth";
+pub const ADVERTISE_LOCAL_NAME: &str = "DeskUnlock";
 
 /// Whether the advertisement is marked discoverable. SPEC §3.2 D8's
 /// rationale requires the desktop to be the long-lived advertiser; the

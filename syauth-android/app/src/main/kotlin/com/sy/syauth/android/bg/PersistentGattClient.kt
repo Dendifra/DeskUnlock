@@ -258,6 +258,8 @@ public class PersistentGattClient internal constructor(
     private val discoveryRecoveryReconnectUsed = AtomicBoolean(false)
     private var discoveryRetry: Runnable? = null
     private var discoveryRetryAttempt = 0
+    private var discoveryWatchdog: Runnable? = null
+    private var discoveryRecoveryRetry: Runnable? = null
 
     private val presenceHandler: Handler = Handler(Looper.getMainLooper())
     private val rssiHandler: Handler = Handler(Looper.getMainLooper())
@@ -352,10 +354,14 @@ public class PersistentGattClient internal constructor(
         // so the disconnected-path scheduling never runs and the client
         // would wedge forever in a never-completing scan — the desktop
         // then audits notifier_slot=None / transport-error on every
-        // unlock. A fast successful connect cancels this pending tick via
+        // unlock. The cold-start arm uses START_CONNECT_WATCHDOG_MS
+        // (not the 2 s post-disconnect cadence) so a slow cold scan is
+        // not torn down before it can complete (observed 2026-09-23:
+        // a 2 s arm here looped "forcing reconnect" forever). A fast
+        // successful connect cancels this pending tick via
         // STATE_CONNECTED before it fires; a stalled connect is retried.
         reconnectHandler.removeCallbacks(reconnectRunnable)
-        reconnectHandler.postDelayed(reconnectRunnable, RECONNECT_INTERVAL_MS)
+        reconnectHandler.postDelayed(reconnectRunnable, START_CONNECT_WATCHDOG_MS)
     }
 
     /**
@@ -366,6 +372,8 @@ public class PersistentGattClient internal constructor(
         stopped.set(true)
         reconnectHandler.removeCallbacks(reconnectRunnable)
         cancelDiscoveryRetry()
+        cancelDiscoveryWatchdog()
+        cancelDiscoveryRecoveryRetry()
         discoveryRecoveryActive.set(false)
         discoveryRecoveryReconnectUsed.set(false)
         gattGeneration.incrementAndGet()
@@ -403,6 +411,8 @@ public class PersistentGattClient internal constructor(
     private fun reconnectFresh(resetRecovery: Boolean) {
         reconnectHandler.removeCallbacks(reconnectRunnable)
         cancelDiscoveryRetry()
+        cancelDiscoveryWatchdog()
+        cancelDiscoveryRecoveryRetry()
         discoveryRetryAttempt = 0
         discoveryInFlight.set(false)
         gattOperations.markNotReady()
@@ -449,6 +459,64 @@ public class PersistentGattClient internal constructor(
         discoveryRetry = null
     }
 
+    private fun cancelDiscoveryWatchdog() {
+        discoveryWatchdog?.let(reconnectHandler::removeCallbacks)
+        discoveryWatchdog = null
+    }
+
+    private fun cancelDiscoveryRecoveryRetry() {
+        discoveryRecoveryRetry?.let(reconnectHandler::removeCallbacks)
+        discoveryRecoveryRetry = null
+    }
+
+    /**
+     * Keep retrying a fresh GATT handshake after the one-shot discovery
+     * recovery was already used. Field reality (2026-09-24): the desktop can
+     * be down for minutes (master OFF, a daemon restart, a long boot); the
+     * client used its single recovery and then went silent forever, so the
+     * phone never reconnected when the desktop came back — no presence, no
+     * RSSI, proximity dead until the app was restarted by hand.
+     */
+    private fun scheduleDiscoveryRecoveryRetry() {
+        if (discoveryRecoveryRetry != null) return
+        val retry = Runnable {
+            discoveryRecoveryRetry = null
+            if (stopped.get()) return@Runnable
+            discoveryRecoveryReconnectUsed.set(false)
+            reconnectFresh(resetRecovery = false)
+        }
+        discoveryRecoveryRetry = retry
+        reconnectHandler.postDelayed(retry, DISCOVERY_RECOVERY_RETRY_MS)
+    }
+
+    /**
+     * Arm a watchdog for a discovery that never produces
+     * `onServicesDiscovered`. Field reality (2026-09-24): after a
+     * dissociate + re-associate the fresh client connected
+     * (`STATE_CONNECTED`) and called `discoverServices()`, but the
+     * callback never fired — the client sat wedged for minutes with no
+     * subscription, so the desktop saw no presence/RSSI and proximity
+     * stayed dead. The disconnect watchdog does not cover this: the link
+     * is up, so it was cancelled on `STATE_CONNECTED`. This one forces a
+     * fresh GATT handshake when discovery stalls.
+     */
+    private fun armDiscoveryWatchdog(handle: BluetoothGatt) {
+        cancelDiscoveryWatchdog()
+        val generation = gattGeneration.get()
+        val watchdog = Runnable {
+            discoveryWatchdog = null
+            if (stopped.get() || gatt.get() !== handle || gattGeneration.get() != generation) return@Runnable
+            if (!discoveryInFlight.get()) return@Runnable
+            Log.w(
+                PERSISTENT_GATT_LOG_TAG,
+                "discovery watchdog: no onServicesDiscovered after ${DISCOVERY_WATCHDOG_MS}ms — forcing reconnect",
+            )
+            forceReconnect()
+        }
+        discoveryWatchdog = watchdog
+        reconnectHandler.postDelayed(watchdog, DISCOVERY_WATCHDOG_MS)
+    }
+
     private fun scheduleDiscoveryRetry(handle: BluetoothGatt) {
         if (discoveryRetry != null) return
         val delay = DISCOVERY_RETRY_DELAYS_MS.getOrNull(discoveryRetryAttempt)
@@ -458,7 +526,11 @@ public class PersistentGattClient internal constructor(
                 Log.w(PERSISTENT_GATT_LOG_TAG, "escalating incomplete discovery to one fresh GATT")
                 reconnectFresh(resetRecovery = false)
             } else {
-                Log.w(PERSISTENT_GATT_LOG_TAG, "fresh GATT discovery recovery exhausted")
+                Log.w(
+                    PERSISTENT_GATT_LOG_TAG,
+                    "fresh GATT discovery recovery exhausted; retrying in ${DISCOVERY_RECOVERY_RETRY_MS}ms",
+                )
+                scheduleDiscoveryRecoveryRetry()
             }
             return
         }
@@ -471,6 +543,8 @@ public class PersistentGattClient internal constructor(
             if (!handle.discoverServices()) {
                 discoveryInFlight.set(false)
                 scheduleDiscoveryRetry(handle)
+            } else {
+                armDiscoveryWatchdog(handle)
             }
         }
         discoveryRetry = retry
@@ -497,6 +571,12 @@ public class PersistentGattClient internal constructor(
             GattWriteDecision.Start -> writeGattFrame(handle, frameBytes)
         }
     }
+
+    /**
+     * `ManagedClient` seam: hand a raw frame to the radio without the caller
+     * caring which characteristic carries it.
+     */
+    public fun send(frameBytes: ByteArray): Boolean = writeResponse(frameBytes)
 
     private fun writeGattFrame(handle: BluetoothGatt, frameBytes: ByteArray): Boolean {
         val c = findCharacteristic(handle, SYAUTH_RESPONSE_CHAR_UUID) ?: run {
@@ -539,6 +619,7 @@ public class PersistentGattClient internal constructor(
                     val refreshed = refreshGattCache(g)
                     Log.i(PERSISTENT_GATT_LOG_TAG, "conn state: gatt.refresh()=$refreshed; discovering")
                     g.discoverServices()
+                    armDiscoveryWatchdog(g)
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     cancelDiscoveryRetry()
@@ -584,6 +665,7 @@ public class PersistentGattClient internal constructor(
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
             if (gatt.get() !== g) return
+            cancelDiscoveryWatchdog()
             discoveryInFlight.set(false)
             gattOperations.markNotReady()
             Log.i(PERSISTENT_GATT_LOG_TAG, "services discovered status=$status n=${g.services.size}")
@@ -626,6 +708,7 @@ public class PersistentGattClient internal constructor(
             }
             if (newRecoveryEpisode && discoveryInFlight.compareAndSet(false, true)) {
                 g.discoverServices()
+                armDiscoveryWatchdog(g)
             }
         }
 
@@ -722,7 +805,39 @@ public class PersistentGattClient internal constructor(
          * non-zero radio cost).
          */
         internal const val RECONNECT_INTERVAL_MS: Long = 2_000L
+
+        /**
+         * Watchdog cadence for a `connectGatt` that never produces any
+         * callback at all. Field reality (2026-09-23): a cold
+         * `autoConnect=true` scan against a restarted daemon routinely
+         * needs several seconds; arming the 2 s post-disconnect watchdog
+         * here killed every attempt before it could complete — the phone
+         * looped "forcing reconnect" every 2 s and the desktop never saw
+         * a subscription (no RSSI, no presence, dead unlock). 15 s gives
+         * the scan room while still recovering a genuinely wedged
+         * connect without user action.
+         */
+        internal const val START_CONNECT_WATCHDOG_MS: Long = 15_000L
         internal val DISCOVERY_RETRY_DELAYS_MS: LongArray = longArrayOf(500L, 1_000L, 2_000L)
+
+        /**
+         * Watchdog for a `discoverServices()` that never produces an
+         * `onServicesDiscovered` callback. Field reality (2026-09-24):
+         * after a dissociate + re-associate the fresh client connected and
+         * started discovery, then sat wedged for minutes — no callback, no
+         * subscription, no RSSI, proximity dead. The disconnect watchdog
+         * does not cover this (the link is up, so it was cancelled on
+         * `STATE_CONNECTED`). 10 s forces a fresh handshake when discovery
+         * stalls without thrashing a healthy link.
+         */
+        internal const val DISCOVERY_WATCHDOG_MS: Long = 10_000L
+
+        /**
+         * Backoff for retrying a fresh GATT handshake after the one-shot
+         * discovery recovery was already spent. The peer can be away for
+         * minutes; 15 s keeps retrying without turning into a tight loop.
+         */
+        internal const val DISCOVERY_RECOVERY_RETRY_MS: Long = 15_000L
 
         private const val PRESENCE_HEARTBEAT_INTERVAL_MS: Long = 10_000L
         internal const val RSSI_SAMPLE_INTERVAL_MS: Long = 2_000L

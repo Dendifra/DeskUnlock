@@ -40,10 +40,10 @@ namespace syauth_mobile {
   [Throws=MobileError]
   bytes build_response_frame(bytes bond_key, FrameSigner signer, bytes challenge_frame_bytes);
 
-  // Derive the 4-word emoji-prefixed OOB code for `bond_key`. Mirrors
+  // Derive the OOB confirmation code for `bond_key`. Mirrors
   // `crates/syauth-cli/src/oob.rs::oob_code_for_bond`.
   [Throws=MobileError]
-  sequence<string> oob_code_for_bond(bytes bond_key);
+  string oob_code_for_bond(bytes bond_key);
 
   // Derive the 16-byte rotating session UUID the desktop advertises
   // for `bond_key` at wall-clock `minute` (unix-epoch-seconds / 60).
@@ -53,6 +53,29 @@ namespace syauth_mobile {
   // `syauth_transport::session_uuid_for` byte-for-byte.
   [Throws=MobileError]
   bytes session_uuid_for_bond(bytes bond_key, i64 minute);
+
+  // Derive the 32-hex-character peer id the desktop uses for this
+  // phone's public key. Mirrors `syauth_core::peer_id_from_pubkey`
+  // byte-for-byte; the phone needs it to name itself in day-2 frames
+  // (e.g. the Revoke op) the same way the desktop's bond store does.
+  [Throws=MobileError]
+  string peer_id_from_pubkey(bytes pubkey);
+
+  // Secret-free Rust-authoritative pairing transaction state.
+  [Throws=MobileError]
+  bytes pair_transaction_create(bytes transaction_id, u8 role);
+  [Throws=MobileError]
+  bytes pair_transaction_apply_local(bytes state, u8 event);
+  [Throws=MobileError]
+  bytes pair_transaction_apply_remote(bytes state, bytes message);
+  [Throws=MobileError]
+  bytes pair_transaction_restore(bytes state);
+  [Throws=MobileError]
+  u8 pair_transaction_phase(bytes state);
+  [Throws=MobileError]
+  bytes pair_transaction_status_query(bytes transaction_id, i64 nonce);
+  [Throws=MobileError]
+  bytes pair_transaction_apply_status(bytes state, bytes response, i64 nonce);
 };
 
 // Typed error variants surfaced to Kotlin/Swift. Every `reason` is a
