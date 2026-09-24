@@ -1,4 +1,5 @@
 # line	state	text (newlines escaped as \n)
+# line	state	text (newlines escaped as \n)
 80	DO-NOT-WRAP	Syauth: ON
 83	DO-NOT-WRAP	Syauth: OFF
 110	DO-NOT-WRAP	Powered
@@ -9,20 +10,20 @@
 950	DO-NOT-WRAP	Tema: chiaro
 950	DO-NOT-WRAP	Tema: scuro
 1332	DO-NOT-WRAP	✓  Login e sblocco della sessione
-201	TODO	Servizio non disponibile
-203	TODO	Disattivato
-208	TODO	Telefono assente
-225	TODO	Non associato
-227	TODO	Telefono non connesso
-351	TODO	DeskUnlock disattivato
-353	TODO	Nessun telefono
-356	TODO	Lock screen non adattato
-359	TODO	Sblocco telefono non armato
-361	TODO	Riavvia DMS
+201	wrapped	Servizio non disponibile
+203	wrapped	Disattivato
+208	wrapped	Telefono assente
+225	wrapped	Non associato
+227	wrapped	Telefono non connesso
+351	wrapped	DeskUnlock disattivato
+353	wrapped	Nessun telefono
+356	wrapped	Lock screen non adattato
+359	wrapped	Sblocco telefono non armato
+361	wrapped	Riavvia DMS
 550	TODO	Telefono trovato:
 550	TODO	Telefono trovato: {}\\nVerifica il codice Bluetooth sul telefono.
 550	TODO	Verifica il codice Bluetooth sul telefono.
-577	TODO	Associazione non completata.
+577	wrapped	Associazione non completata.
 848	TODO	QLabel[role="hint"] { color:
 848	TODO	QLabel[role="hint"] { color: {}; }
 123	REVIEW	Mai
@@ -54,7 +55,7 @@
 762	REVIEW	XDG_CONFIG_HOME
 828	REVIEW	Fusion
 937	REVIEW	font-size: 11px;font-weight: 600;color: #aeb4bc;
-1194	REVIEW	Privacy: RSSI, baseline e stato restano locali; nessuna telemetria viene inviata.
+1194	wrapped	Privacy: RSSI, baseline e stato restano locali; nessuna telemetria viene inviata.
 1288	REVIEW	RSSI raw
 1288	REVIEW	rssi raw
 1289	REVIEW	RSSI filtered

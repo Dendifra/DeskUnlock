@@ -198,14 +198,14 @@ def get_proximity_state():
 
 def proximity_display_state(proximity):
     if not proximity["available"]:
-        return "Servizio non disponibile", False
+        return _("Servizio non disponibile"), False
     if not proximity["enabled"]:
-        return "Disattivato", False
+        return _("Disattivato"), False
     if proximity["state"] == "ABSENT":
         # Watcher armed but the phone is not connected: nothing can lock or
         # unlock right now, so do not report "Attivo" (observed 2026-09-24:
         # the row said Attivo while the phone was disconnected).
-        return "Telefono assente", False
+        return _("Telefono assente"), False
     return {
         "NEAR": "Vicino",
         "MID": "Intermedio",
@@ -222,9 +222,9 @@ def association_display(bonded, present):
     "Associato" while the phone was dissociated and phone unlock was dead).
     """
     if bonded <= 0:
-        return "Non associato", False
+        return _("Non associato"), False
     if not present:
-        return "Telefono non connesso", False
+        return _("Telefono non connesso"), False
     return "Associato", True
 
 
@@ -348,19 +348,19 @@ def fingerprint_unlock_health(master, bonded, runtime=None, marker=None, loaded_
     the daemon was down. Every failure now names itself so the row is honest.
     """
     if master != "on":
-        return False, "DeskUnlock disattivato"
+        return False, _("DeskUnlock disattivato")
     if bonded <= 0:
-        return False, "Nessun telefono"
+        return False, _("Nessun telefono")
     tree = lock_screen_adapted(runtime)
     if tree is None:
-        return False, "Lock screen non adattato"
+        return False, _("Lock screen non adattato")
     marker = marker or Path(f"/run/user/{os.getuid()}/syauth/unlock-ready")
     if not marker.is_file():
-        return False, "Sblocco telefono non armato"
+        return False, _("Sblocco telefono non armato")
     if not dms_loaded_after(tree, loaded_marker):
-        return False, "Riavvia DMS"
+        return False, _("Riavvia DMS")
     if not (phone_present() if present is None else present):
-        return False, "Telefono non connesso"
+        return False, _("Telefono non connesso")
     return True, "Attivo"
 
 
@@ -574,7 +574,7 @@ class PairingDialog(QDialog):
             self.cancel.hide()
             self.finish.show()
         elif kind == "error":
-            self.status.setText(event.get("message", "Associazione non completata."))
+            self.status.setText(event.get("message", _("Associazione non completata.")))
             self.confirm.hide()
             self.reject.hide()
             self.cancel.setText(_("Chiudi"))
