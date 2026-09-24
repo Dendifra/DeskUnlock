@@ -207,7 +207,7 @@ def proximity_display_state(proximity):
         # the row said Attivo while the phone was disconnected).
         return _("Telefono assente"), False
     return {
-        "NEAR": "Vicino",
+        "NEAR": _("Vicino"),
         "MID": _("Intermedio"),
         "FAR": _("Lontano"),
     }.get(proximity["state"], _("Sconosciuto")), True
