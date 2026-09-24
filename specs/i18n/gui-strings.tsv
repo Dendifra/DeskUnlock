@@ -1,38 +1,17 @@
 # line	state	text (newlines escaped as \n)
-# line	state	text (newlines escaped as \n)
 80	DO-NOT-WRAP	Syauth: ON
 83	DO-NOT-WRAP	Syauth: OFF
 110	DO-NOT-WRAP	Powered
-204	DO-NOT-WRAP	ABSENT
-728	DO-NOT-WRAP	LANG
-728	DO-NOT-WRAP	LANGUAGE
-728	DO-NOT-WRAP	LC_ALL
-950	DO-NOT-WRAP	Tema: chiaro
-950	DO-NOT-WRAP	Tema: scuro
-1332	DO-NOT-WRAP	✓  Login e sblocco della sessione
+123	REVIEW	Mai
 201	wrapped	Servizio non disponibile
 203	wrapped	Disattivato
 208	wrapped	Telefono assente
-225	wrapped	Non associato
-227	wrapped	Telefono non connesso
-351	wrapped	DeskUnlock disattivato
-353	wrapped	Nessun telefono
-356	wrapped	Lock screen non adattato
-359	wrapped	Sblocco telefono non armato
-361	wrapped	Riavvia DMS
-550	TODO	Telefono trovato:
-550	TODO	Telefono trovato: {}\\nVerifica il codice Bluetooth sul telefono.
-550	TODO	Verifica il codice Bluetooth sul telefono.
-577	wrapped	Associazione non completata.
-848	TODO	QLabel[role="hint"] { color:
-848	TODO	QLabel[role="hint"] { color: {}; }
-123	REVIEW	Mai
-210	REVIEW	NEAR
 211	REVIEW	Intermedio
-211	REVIEW	MID
-212	REVIEW	FAR
 212	REVIEW	Lontano
 213	REVIEW	Sconosciuto
+225	wrapped	Non associato
+227	wrapped	Telefono non connesso
+228	wrapped	Associato
 248	wrapped	Telefono Android
 252	REVIEW	Nessun dispositivo associato
 252	REVIEW	Più telefoni associati
@@ -42,25 +21,73 @@
 292	REVIEW	LockScreenContent.qml
 292	REVIEW	Modules
 293	REVIEW	Pam.qml
+351	wrapped	DeskUnlock disattivato
+353	wrapped	Nessun telefono
+356	wrapped	Lock screen non adattato
+359	wrapped	Sblocco telefono non armato
+361	wrapped	Riavvia DMS
+364	wrapped	Attivo
 389	REVIEW	color: #aeb4bc;
 428	REVIEW	UnixProcessParameters
 429	REVIEW	UnixProcessFlag
-430	REVIEW	CreateNewSession
-497	REVIEW	font-size: 18px; font-weight: 600;
-503	REVIEW	font-size: 28px; font-weight: 700; letter-spacing: 3px;
+478	wrapped	Associa telefono — DeskUnlock
+497	DO-NOT-WRAP	font-size: 18px; font-weight: 600;
+499	wrapped	Preparazione di DeskUnlock…
+503	DO-NOT-WRAP	font-size: 28px; font-weight: 700; letter-spacing: 3px;
+507	wrapped	Conferma
+508	wrapped	Non corrisponde
+509	wrapped	Annulla
+510	wrapped	Fine
+548	wrapped	Cerco telefoni DeskUnlock nelle vicinanze…
+550	TODO	Telefono trovato:
+550	TODO	Telefono trovato: {}\nVerifica il codice Bluetooth sul telefono.
+550	TODO	Verifica il codice Bluetooth sul telefono.
+554	wrapped	Controlla che il codice Bluetooth coincida sui due dispositivi.
+560	wrapped	Controlla che questo numero coincida con quello mostrato sul telefono.
+566	wrapped	In attesa della tua conferma…
+577	wrapped	Associazione non completata.
+598	wrapped	Annullamento…
+677	wrapped	Associazione non completata. Puoi riprovare.
 701	REVIEW	SYAUTH_LOCALE_DIR
 710	REVIEW	Automatica (lingua di sistema)
 711	REVIEW	English
 712	REVIEW	Italiano
+728	DO-NOT-WRAP	LANG
+728	DO-NOT-WRAP	LANGUAGE
+728	DO-NOT-WRAP	LC_ALL
 762	REVIEW	XDG_CONFIG_HOME
 828	REVIEW	Fusion
+848	DO-NOT-WRAP	QLabel[role="hint"] { color:
+848	DO-NOT-WRAP	QLabel[role="hint"] { color: {}; }
+914	wrapped	Chiudi
 937	REVIEW	font-size: 11px;font-weight: 600;color: #aeb4bc;
+950	DO-NOT-WRAP	Tema: chiaro
+950	DO-NOT-WRAP	Tema: scuro
+972	wrapped	Lingua salvata: riavvia DeskUnlock per applicarla.
+998	wrapped	Autenticazione sicura con il telefono
+1024	wrapped	Caricamento…
+1034	wrapped	Autenticazione e controllo di prossimità
+1058	wrapped	DISPOSITIVO ASSOCIATO
+1087	wrapped	Telefono associato
+1120	wrapped	Dissocia
+1134	wrapped	PROSSIMITÀ
+1152	wrapped	Blocca il PC quando il telefono si allontana
+1170	wrapped	Stato
+1179	wrapped	Sensibilità
+1183	wrapped	Vicino
+1184	wrapped	Bilanciato
+1185	wrapped	Ampio
 1194	wrapped	Privacy: RSSI, baseline e stato restano locali; nessuna telemetria viene inviata.
+1202	wrapped	Diagnostica avanzata
+1212	wrapped	INATTIVITÀ
+1222	wrapped	Blocco per inattività
+1227	wrapped	Blocca il PC dopo un periodo senza attività
+1239	wrapped	Blocca dopo
+1280	wrapped	DIAGNOSTICA AVANZATA
 1288	REVIEW	RSSI raw
 1288	REVIEW	rssi raw
 1289	REVIEW	RSSI filtered
 1289	REVIEW	rssi filtered
-1290	REVIEW	Baseline
 1291	REVIEW	Delta
 1292	REVIEW	Sample age
 1292	REVIEW	sample age
@@ -71,26 +98,43 @@
 1295	REVIEW	GATT ready
 1296	REVIEW	Lock reason
 1296	REVIEW	lock reason
+1321	wrapped	UTILIZZATO PER
+1332	DO-NOT-WRAP	✓  Login e sblocco della sessione
 1333	REVIEW	✓  Conferma biometrica sul telefono
 1334	REVIEW	✓  Blocco automatico per allontanamento
 1335	REVIEW	✓  Password Linux disponibile come fallback
+1346	wrapped	STATO SISTEMA
 1361	REVIEW	Associazione
 1365	REVIEW	Ultimo sblocco
 1376	REVIEW	Sblocco con impronta
-1430	REVIEW	color: #e06c75;
+1430	DO-NOT-WRAP	color: #e06c75;
+1434	wrapped	●  DeskUnlock attivo
 1438	REVIEW	color: #63c174;
+1442	wrapped	Disattiva
+1447	wrapped	○  DeskUnlock disattivato
+1455	wrapped	Attiva
+1460	wrapped	●  Stato degradato
 1464	REVIEW	color: #d5a14f;
+1468	wrapped	Ripristina
+1484	wrapped	DeskUnlock non ha un telefono configurato
+1491	wrapped	Associa telefono
+1500	wrapped	Associazione presente · Problema DeskUnlock
+1507	wrapped	Controlla
+1520	wrapped	Associato · Connesso
+1528	wrapped	Associato · Non connesso
+1539	wrapped	Cambia telefono
 1548	REVIEW	Disponibile
 1550	REVIEW	Non disponibile
 1624	REVIEW	Operazione completata.
 1630	REVIEW	Operazione non riuscita.
 1648	REVIEW	Controllo DeskUnlock
 1654	REVIEW	Dissocia telefono
-1656	REVIEW	Dissociare il telefono da DeskUnlock?\\n\\nNon potrà più autenticare o sbloccare questo computer.\\nLa password Linux resterà disponibile.\\n\\nIl normale pairing Bluetooth non verrà eliminato.
+1656	REVIEW	Dissociare il telefono da DeskUnlock?\n\nNon potrà più autenticare o sbloccare questo computer.\nLa password Linux resterà disponibile.\n\nIl normale pairing Bluetooth non verrà eliminato.
 1684	REVIEW	Errore
 1685	REVIEW	Dissociazione non riuscita.
 1694	REVIEW	Errore sconosciuto.
 1698	REVIEW	Dissociazione non riuscita
 1705	REVIEW	Telefono dissociato
-1707	REVIEW	Il telefono è stato dissociato da DeskUnlock.\\n\\nPuoi associarne un altro con "Associa telefono".
+1707	REVIEW	Il telefono è stato dissociato da DeskUnlock.\n\nPuoi associarne un altro con "Associa telefono".
+1722	wrapped	Attendere…
 1758	REVIEW	DeskUnlock Settings
