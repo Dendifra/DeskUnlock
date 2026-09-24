@@ -720,11 +720,7 @@ mod day2_revoke_tests {
     use super::revoke_bond_by_peer_id;
 
     fn bonded_fixture(td: &TempDir) -> String {
-        fs::set_permissions(
-            td.path(),
-            std::os::unix::fs::PermissionsExt::from_mode(0o700),
-        )
-        .expect("chmod");
+        fs::set_permissions(td.path(), std::os::unix::fs::PermissionsExt::from_mode(0o700)).expect("chmod");
         let pubkey = SigningKey::from_bytes(&[9; 32]).verifying_key().to_bytes();
         let peer_id = peer_id_from_pubkey(&pubkey);
         let mut store = BondStore::empty();
@@ -757,7 +753,8 @@ mod day2_revoke_tests {
 
     /// An id that names nothing is refused instead of inventing a record.
     #[test]
-    fn an_unknown_peer_id_is_refused() {        let td = TempDir::new().expect("tempdir");
+    fn an_unknown_peer_id_is_refused() {
+        let td = TempDir::new().expect("tempdir");
         let _ = bonded_fixture(&td);
         let err = revoke_bond_by_peer_id(td.path(), "00000000000000000000000000000000").expect_err("must refuse");
         assert!(err.contains("no bond"), "got {err}");

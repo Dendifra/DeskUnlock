@@ -23,8 +23,10 @@ use hkdf::Hkdf;
 use rand::{RngCore, rngs::OsRng};
 use sha2::Sha256;
 use syauth_core::{
-    BOND_KEY_BYTES, Frame, MAC_TAG_LEN, NONCE_LEN, SYAUTH_WIRE_VERSION_V1, Signature, SigningKey, VerifyingKey, bond::PUBKEY_LEN,
-    compute_tag, pair_transaction::{LocalEvent, Message, Operation, Role, StatusMessage, Transaction},
+    BOND_KEY_BYTES, Frame, MAC_TAG_LEN, NONCE_LEN, SYAUTH_WIRE_VERSION_V1, Signature, SigningKey, VerifyingKey,
+    bond::PUBKEY_LEN,
+    compute_tag,
+    pair_transaction::{LocalEvent, Message, Operation, Role, StatusMessage, Transaction},
     peer_id_from_pubkey as core_peer_id_from_pubkey, sign_frame, verify_frame, verify_tag,
 };
 use thiserror::Error;

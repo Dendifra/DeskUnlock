@@ -76,7 +76,15 @@ mod idle_gate_tests {
     #[test]
     fn only_revoked_bonds_stop_the_daemon() {
         let td = TempDir::new().expect("tempdir");
-        let cfg = config_with(&td, &[bond(1, BondStatus::Revoked { reason: "test".to_string() })]);
+        let cfg = config_with(
+            &td,
+            &[bond(
+                1,
+                BondStatus::Revoked {
+                    reason: "test".to_string(),
+                },
+            )],
+        );
         assert!(idle_without_a_bond(&cfg).is_some());
     }
 
@@ -258,11 +266,7 @@ fn idle_without_a_bond(config: &Config) -> Option<&'static str> {
                 .list()
                 .iter()
                 .any(|bond| matches!(bond.status, syauth_core::BondStatus::Bonded));
-            if bonded {
-                None
-            } else {
-                Some("no bonded peer in the store")
-            }
+            if bonded { None } else { Some("no bonded peer in the store") }
         }
         Err(_) => Some("bonds store unreadable"),
     }
@@ -299,7 +303,8 @@ fn has_bonded_peer(config: &Config) -> bool {
     })
 }
 
-fn init_tracing(filter: &str) -> Result<()> {    let env_filter = EnvFilter::try_new(filter).with_context(|| format!("invalid --log-level filter: {filter}"))?;
+fn init_tracing(filter: &str) -> Result<()> {
+    let env_filter = EnvFilter::try_new(filter).with_context(|| format!("invalid --log-level filter: {filter}"))?;
     // The `fmt` layer prefixes every line with the `target` value
     // (defaults to the emitting module path). We want a fixed syslog
     // tag instead so `journalctl -t syauth-presenced` filters

@@ -576,8 +576,7 @@ impl Orchestrator {
     /// nothing to serve, and the operator should not have to restart anything
     /// by hand.
     pub fn set_exit_when_empty(&self, enabled: bool) {
-        self.exit_when_empty
-            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+        self.exit_when_empty.store(enabled, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Attach an audit-log appender after construction. Returns the

@@ -57,11 +57,7 @@ impl FakeLoginctl {
     fn install(dir: &Path) -> Self {
         let script = dir.join("fake-loginctl");
         let marker = dir.join(LOGINCTL_MARKER);
-        fs::write(
-            &script,
-            format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\n", marker.display()),
-        )
-        .expect("write fake loginctl");
+        fs::write(&script, format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\n", marker.display())).expect("write fake loginctl");
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod fake loginctl");
         Self { script, marker }
     }
@@ -226,11 +222,7 @@ fn a_dry_run_never_runs_the_unlocker() {
     let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
 
     assert!(stdout.contains("dry-run=1"), "stdout was {stdout:?}");
-    assert!(
-        !loginctl.was_called(),
-        "--dry-run must not unlock, saw {:?}",
-        loginctl.calls()
-    );
+    assert!(!loginctl.was_called(), "--dry-run must not unlock, saw {:?}", loginctl.calls());
 }
 
 // ---------------------------------------------------------------------------
@@ -267,7 +259,13 @@ fn the_challenge_targets_the_newest_bonded_peer() {
     let dir = bond_dir(&td);
     let older = bond(1, BondStatus::Bonded, 100);
     let newer = bond(2, BondStatus::Bonded, 200);
-    let revoked = bond(3, BondStatus::Revoked { reason: "test".to_string() }, 300);
+    let revoked = bond(
+        3,
+        BondStatus::Revoked {
+            reason: "test".to_string(),
+        },
+        300,
+    );
     write_bonds(&dir, &[older.clone(), newer.clone(), revoked]);
     let socket = td.path().join("auth.sock");
     let daemon = FakeChallengeDaemon::new(&socket, true, "ok");

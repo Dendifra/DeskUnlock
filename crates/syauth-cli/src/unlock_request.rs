@@ -238,9 +238,7 @@ fn challenge(socket: &Path, peer_id: &str, timeout: Duration) -> Result<Response
         .set_write_timeout(Some(CONNECT_TIMEOUT))
         .map_err(|err| UnlockRequestError::Exchange(err.to_string()))?;
 
-    let mut writer = stream
-        .try_clone()
-        .map_err(|err| UnlockRequestError::Exchange(err.to_string()))?;
+    let mut writer = stream.try_clone().map_err(|err| UnlockRequestError::Exchange(err.to_string()))?;
     let request = Request::Challenge {
         peer_id: peer_id.to_string(),
         nonce: nonce.to_vec(),
@@ -344,7 +342,13 @@ mod tests {
     #[test]
     fn a_revoked_newer_bond_is_not_chosen() {
         let older = bond(1, BondStatus::Bonded, 100);
-        let revoked = bond(2, BondStatus::Revoked { reason: "test".to_string() }, 200);
+        let revoked = bond(
+            2,
+            BondStatus::Revoked {
+                reason: "test".to_string(),
+            },
+            200,
+        );
         let td = secure_dir();
         write_bonds(td.path(), vec![older.clone(), revoked]);
         assert_eq!(newest_bonded_peer(td.path()).expect("peer"), older.peer_id);
