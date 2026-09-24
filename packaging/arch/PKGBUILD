@@ -1,6 +1,6 @@
 pkgname=deskunlock
 pkgver=0.1.0
-pkgrel=57
+pkgrel=58
 provides=('syauth-suite=0.1.0')
 conflicts=('syauth-suite')
 replaces=('syauth-suite')
