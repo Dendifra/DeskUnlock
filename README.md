@@ -154,14 +154,19 @@ battery management, and background-service policy vary by device and ROM.
 
 ## Quick start
 
-The public beta is distributed as a signed Android APK and an Arch/CachyOS
-package when the release is published. Verify the published SHA-256 checksums
-before installing.
+The current build is the **[v0.1.0-beta.2 pre-release](https://github.com/Dendifra/DeskUnlock/releases/tag/v0.1.0-beta.2)**: a signed Android APK and an Arch/CachyOS package. Verify the published `SHA256SUMS` before installing. Because it is a pre-release, GitHub does not mark it as the latest release; open the [releases list](https://github.com/Dendifra/DeskUnlock/releases) to find it.
 
 ### 1. Install the Linux package
 
+Download the `deskunlock-*-x86_64.pkg.tar.zst` asset, then:
+
 ```bash
-sudo pacman -U deskunlock-0.1.0-20-x86_64.pkg.tar.zst
+sudo pacman -U deskunlock-0.1.0-58-x86_64.pkg.tar.zst
+
+# Required, and easy to forget: a running daemon keeps the old binary in
+# memory even though the file on disk was replaced. Without this you are
+# testing the previous version.
+systemctl --user restart syauth-presenced.service
 ```
 
 Use normal package-manager authentication. Do not use `--nodeps`,
@@ -172,33 +177,36 @@ For a source checkout, see [docs/installation.md](docs/installation.md) and
 
 ### 2. Install the Android companion
 
-Download the signed beta APK from the future release page and sideload it
-through Android's normal package installer. Android may display a warning
-because this beta is not distributed through Google Play. See
+Download the signed APK from the same release page and sideload it through
+Android's normal package installer. Android may display a warning because this
+beta is not distributed through Google Play. See
 [docs/android-setup.md](docs/android-setup.md).
 
-The release APK uses the dedicated DeskUnlock release certificate. Release
-signing material is private and is not stored in this repository. Verify the
-published SHA-256 before installation.
+The release APK uses the dedicated DeskUnlock release certificate
+(`CN=DeskUnlock Release`). Release signing material is private and is not stored
+in this repository. Verify the published SHA-256 before installation.
 
 ### 3. Pair the devices
 
-1. Start the desktop pairing flow:
+Pairing is confirmed on **both** devices, and the computer refuses an inbound
+request it was not armed for — that is the mitigation against pairing a device
+that is not yours, so the arm step is not optional.
 
-   ```bash
-   syauth pair --adapter hci0
-   ```
-
+1. On the computer, open `syauth-settings` and click **Associa telefono**. The
+   window stays open and armed.
 2. Open DeskUnlock on Android and tap **Pair**.
-3. Select the computer. If the operating system asks for a Bluetooth
-   numeric comparison, confirm that the numbers match. This is the transport
-   step and is separate from the DeskUnlock confirmation.
-4. Complete the DeskUnlock application confirmation shown by both devices.
+3. Select the computer. If the operating system asks for a Bluetooth numeric
+   comparison, confirm that the numbers match. That is the transport step and is
+   separate from the DeskUnlock confirmation.
+4. Confirm the code shown in the computer's pairing window.
 5. Confirm the desktop sees the bond:
 
    ```bash
    syauth list
    ```
+
+If the computer refuses the request, the app now says so and tells you to arm
+pairing on the computer first. "Nothing happens" is not an expected outcome.
 
 The `syauth` command/file names are compatibility identifiers inherited from
 upstream. The product and user-facing name is DeskUnlock.
@@ -259,9 +267,37 @@ keys, tokens, private state, or exploit details.
 - retry timing and broader desktop/distro portability are not yet polished;
 - replacing an older debug APK with the release-signed APK may require a
   one-time uninstall/reinstall and pairing again;
+- **after a desktop daemon restart the phone does not always re-attach by
+  itself.** The Bluetooth link still reads *connected*, but the GATT
+  subscription is gone, so proximity and unlock stay dead until the app is
+  reopened (force-stop, then launch). Symptom to recognise: `presence.last`
+  missing from `/run/user/<uid>/syauth/`;
+- **the first activation after a pairing can take up to ~20 seconds.** The phone
+  connects while the computer is still serving its pairing-time GATT app, finds
+  the wrong characteristics, and has to rebuild the connection;
+- **repeated unpair/re-pair in quick succession** can need the same app reopen as
+  the restart case above;
+- the app cannot remove the operating system's own Bluetooth bond; do that from
+  Android settings, or re-pair (which reuses it);
 - other distributions and desktop environments are not claimed as supported.
 
 See [docs/troubleshooting.md](docs/troubleshooting.md) for reversible checks.
+
+## Languages
+
+Both surfaces ship Italian and English in **one** build — there is no
+per-language package and nothing to select.
+
+| Surface | Follows | How to change it |
+|---|---|---|
+| Desktop GUI | the desktop locale (`LANGUAGE`/`LC_ALL`/`LANG`) | change the session language, or launch a single run with `env LANG=en_US.UTF-8 syauth-settings` |
+| Android app | the phone's locale | Android settings, or the per-app language entry (Android 13+) |
+
+A locale with no catalog — `de_DE`, say — falls back to English rather than to a
+half-translated screen. English is not the source language of the GUI: the
+source is Italian, so English exists because the shipped catalog provides it,
+and `tests/settings_language.py` fails the suite if any string is left
+untranslated.
 
 ## Compatibility identifiers
 
