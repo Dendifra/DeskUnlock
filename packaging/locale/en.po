@@ -1,3 +1,30 @@
+msgid "Errore sconosciuto."
+msgstr "Unknown error."
+
+msgid "Dissociare il telefono da DeskUnlock?\n\nNon potrà più autenticare o sbloccare questo computer.\nLa password Linux resterà disponibile.\n\nIl normale pairing Bluetooth non verrà eliminato."
+msgstr "Unpair the phone from DeskUnlock?\n\nIt will no longer be able to authenticate or unlock this computer.\nThe Linux password stays available.\n\nYour normal Bluetooth pairing is not removed."
+
+msgid "Dissocia telefono"
+msgstr "Unpair phone"
+
+msgid "Controllo DeskUnlock"
+msgstr "DeskUnlock check"
+
+msgid "Operazione non riuscita."
+msgstr "Operation failed."
+
+msgid "Operazione completata."
+msgstr "Operation completed."
+
+msgid "Non disponibile"
+msgstr "Not available"
+
+msgid "Disponibile"
+msgstr "Available"
+
+msgid "Più telefoni associati"
+msgstr "Multiple phones paired"
+
 msgid "Nessun dispositivo associato"
 msgstr "No device paired"
 

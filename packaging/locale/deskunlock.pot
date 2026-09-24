@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-24 21:41+0200\n"
+"POT-Creation-Date: 2026-09-24 21:45+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -54,6 +54,18 @@ msgstr ""
 
 #: desktop/bin/syauth-settings:227 desktop/bin/syauth-settings:363
 msgid "Telefono non connesso"
+msgstr ""
+
+#: desktop/bin/syauth-settings:228 desktop/bin/syauth-settings:1464
+msgid "Associato"
+msgstr ""
+
+#: desktop/bin/syauth-settings:252
+msgid "Più telefoni associati"
+msgstr ""
+
+#: desktop/bin/syauth-settings:252 desktop/bin/syauth-settings:1425
+msgid "Nessun dispositivo associato"
 msgstr ""
 
 #: desktop/bin/syauth-settings:351
@@ -183,6 +195,7 @@ msgid "Blocca il PC quando il telefono si allontana"
 msgstr ""
 
 #: desktop/bin/syauth-settings:1110 desktop/bin/syauth-settings:1182
+#: desktop/bin/syauth-settings:1370
 msgid "Attivo"
 msgstr ""
 
@@ -332,10 +345,6 @@ msgstr ""
 msgid "Ripristina"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1425
-msgid "Nessun dispositivo associato"
-msgstr ""
-
 #: desktop/bin/syauth-settings:1433
 msgid "DeskUnlock non ha un telefono configurato"
 msgstr ""
@@ -352,10 +361,6 @@ msgstr ""
 msgid "Controlla"
 msgstr ""
 
-#: desktop/bin/syauth-settings:1464
-msgid "Associato"
-msgstr ""
-
 #: desktop/bin/syauth-settings:1469
 msgid "Associato · Connesso"
 msgstr ""
@@ -366,6 +371,44 @@ msgstr ""
 
 #: desktop/bin/syauth-settings:1488
 msgid "Cambia telefono"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1497
+msgid "Disponibile"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1499
+msgid "Non disponibile"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1573
+msgid "Operazione completata."
+msgstr ""
+
+#: desktop/bin/syauth-settings:1579
+msgid "Operazione non riuscita."
+msgstr ""
+
+#: desktop/bin/syauth-settings:1597
+msgid "Controllo DeskUnlock"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1603
+msgid "Dissocia telefono"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1605
+msgid ""
+"Dissociare il telefono da DeskUnlock?\n"
+"\n"
+"Non potrà più autenticare o sbloccare questo computer.\n"
+"La password Linux resterà disponibile.\n"
+"\n"
+"Il normale pairing Bluetooth non verrà eliminato."
+msgstr ""
+
+#: desktop/bin/syauth-settings:1643
+msgid "Errore sconosciuto."
 msgstr ""
 
 #: desktop/bin/syauth-settings:1654

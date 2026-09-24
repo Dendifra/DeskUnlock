@@ -225,7 +225,7 @@ def association_display(bonded, present):
         return _("Non associato"), False
     if not present:
         return _("Telefono non connesso"), False
-    return "Associato", True
+    return _("Associato"), True
 
 
 def last_unlock_display(last_unlock, associated):
@@ -249,7 +249,7 @@ def get_phone_info():
 
     return {
         "name": active[0] if len(active) == 1 else (
-            "Più telefoni associati" if active else "Nessun dispositivo associato"
+            _("Più telefoni associati") if active else _("Nessun dispositivo associato")
         ),
         # Existing bond records do not contain a Bluetooth address. Until a
         # peer-bound status is available, do not claim connected/disconnected.
@@ -1367,7 +1367,7 @@ class SettingsWindow(QMainWindow):
         self.proximity_state.setText(proximity_label)
         self.proximity_system_row.set_status(
             proximity_active,
-            "Attivo" if proximity_active else proximity_label,
+            _("Attivo") if proximity_active else proximity_label,
         )
         if proximity["available"] and proximity["enabled"]:
             self.proximity_state.setStyleSheet(
@@ -1494,9 +1494,9 @@ class SettingsWindow(QMainWindow):
 
         self.bluetooth_row.set_status(
             data["bluetooth"],
-            "Disponibile"
+            _("Disponibile")
             if data["bluetooth"]
-            else "Non disponibile",
+            else _("Non disponibile"),
         )
 
         # "Associato" means the phone is actually reachable, not merely that a
@@ -1570,13 +1570,13 @@ class SettingsWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 self.command_title,
-                output or "Operazione completata.",
+                output or _("Operazione completata."),
             )
         else:
             QMessageBox.critical(
                 self,
                 self.command_title,
-                output or "Operazione non riuscita.",
+                output or _("Operazione non riuscita."),
             )
         self.refresh()
 
@@ -1594,14 +1594,14 @@ class SettingsWindow(QMainWindow):
             self.run_background_command(
                 "syauth",
                 ["doctor"],
-                "Controllo DeskUnlock",
+                _("Controllo DeskUnlock"),
             )
 
     def revoke_device_clicked(self):
         answer = QMessageBox.question(
             self,
-            "Dissocia telefono",
-            (
+            _("Dissocia telefono"),
+            _(
                 "Dissociare il telefono da DeskUnlock?\n\n"
                 "Non potrà più autenticare o sbloccare "
                 "questo computer.\n"
@@ -1640,7 +1640,7 @@ class SettingsWindow(QMainWindow):
             message = (
                 result.stderr.strip()
                 or result.stdout.strip()
-                or "Errore sconosciuto."
+                or _("Errore sconosciuto.")
             )
             QMessageBox.critical(
                 self,
