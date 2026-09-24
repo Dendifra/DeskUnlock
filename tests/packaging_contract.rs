@@ -131,8 +131,18 @@ fn return_auth_is_transport_gated_and_not_retried_automatically() {
 fn settings_gui_uses_deskunlock_branding_and_no_duplicate_phone_status() {
     let settings = repo_file("desktop/bin/syauth-settings");
 
-    assert!(settings.contains("self.setWindowTitle(\"DeskUnlock\")"));
-    assert!(settings.contains("title = QLabel(\"DeskUnlock\")"));
+    // The branding assertions tolerate the translation wrapper. The copy is a
+    // string resource now, so the literal legitimately sits inside `_(...)`;
+    // what this contract cares about is that the brand is still what the window
+    // and the header show, not how the call is spelled.
+    fn shows(source: &str, call: &str, literal: &str) -> bool {
+        let plain = format!("{call}(\"{literal}\")");
+        let wrapped = format!("{call}(_(\"{literal}\"))");
+        source.contains(&plain) || source.contains(&wrapped)
+    }
+
+    assert!(shows(&settings, "self.setWindowTitle", "DeskUnlock"));
+    assert!(shows(&settings, "QLabel", "DeskUnlock"));
     assert!(settings.contains("DESKUNLOCK_LOGO"));
     // The daemon liveness row is gone: Proximity Lock already reports the
     // service state, and the redundant row read like a crash when toggled off.
