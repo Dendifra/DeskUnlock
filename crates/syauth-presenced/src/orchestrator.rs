@@ -231,8 +231,8 @@ pub enum ChallengeOutcome {
     /// the phone-side `ChallengeApprovalActivity` row.
     Denied,
     /// The response nonce was previously seen; the LRU rejected the
-    /// frame as a replay. Never produced in S-006 — the LRU is
-    /// S-007's deliverable. The variant exists so the wire-shape
+    /// frame as a replay. Produced at the post-verify check in
+    /// `issue_challenge`, covered by `tests/replay.rs`. The variant exists so the wire-shape
     /// surface is stable across S-006 → S-007.
     Replay,
     /// The response carried an Ed25519 signature whose strict
