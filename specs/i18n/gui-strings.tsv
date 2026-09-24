@@ -1,180 +1,146 @@
-# line	translatable	text (newlines escaped as \n)
-38	yes	Resolve a sibling helper next to this script.\n\n    The package installs the GUI and its helpers side by side in\n    ``/usr/bin``; a source checkout keeps them side by side in\n    ``desktop/bin``. Resolving next to this file means a checkout runs\n    its own helpers (so edits take effect immediately) instead of\n    silently driving the packaged copy. Falls back to ``/usr/bin`` when\n    no sibling exists.\n    
-80	yes	Syauth: ON
-83	yes	Syauth: OFF
-90	yes	Format an RFC3339 UTC timestamp in the system's local timezone.
-110	yes	Powered
-123	yes	Mai
-201	yes	Servizio non disponibile
-203	yes	Disattivato
-204	yes	ABSENT
-208	yes	Telefono assente
-210	yes	NEAR
-211	yes	Intermedio
-211	yes	MID
-212	yes	FAR
-212	yes	Lontano
-213	yes	Sconosciuto
-217	yes	Return `(label, active)` for the "Associazione" row.\n\n    A bond record is not an association. When the phone dissociates — or simply\n    goes away — the desktop keeps the record but has nothing left to talk to,\n    so the row must not read green (observed 2026-09-24: the card said\n    "Associato" while the phone was dissociated and phone unlock was dead).\n    
-225	yes	Non associato
-227	yes	Telefono non connesso
-228	yes	Associato
-232	yes	Return `(label, active)` for the "Ultimo sblocco" row.\n\n    A past unlock proves nothing while no phone is associated: keep the\n    timestamp readable, but only colour the row green when the association is\n    actually live.\n    
-248	yes	Telefono Android
-252	yes	Nessun dispositivo associato
-252	yes	Più telefoni associati
-269	yes	color: #63c174;font-size: 16px;
-274	yes	color: #8b929a;font-size: 16px;
-280	yes	Return the patched DMS lock tree, or None when no tree carries the hook.\n\n    The fingerprint indicator used to be gated on a `pam_syauth.so` line inside\n    the lock PAM stack. That line is gone for good: a DeskUnlock module in a\n    stack that guards the login is how the operator ended up unable to get back\n    in with the correct password — twice (2026-09-23). The phone unlock is out\n    of band now: the lock screen calls `syauth unlock-request` on the operator's\n    gesture. Every marker the patch writes must be present, so a half-applied\n    adaptation (DMS moved an anchor) reads as broken instead of "Attivo".\n    
-292	yes	Lock
-292	yes	LockScreenContent.qml
-292	yes	Modules
-293	yes	Pam.qml
-302	yes	requestPhoneUnlock
-303	yes	syauthUnlockReady
-304	yes	syauthUnlockProcess
-305	yes	fprintSuppressedByPrimaryPam
-312	yes	True when the patch recorded that the running DMS loaded `tree`.\n\n    DMS loads its extracted QML once and does not watch it, so a tree patched\n    after DMS started is inert: the lock screen keeps the stock icon and never\n    asks the phone. The patch writes `dms-lock-loaded` with the adapted tree\n    name(s) right after it restarts DMS, and that marker — not the on-disk\n    patch — is what says the running shell actually has the adaptation\n    (2026-09-24).\n    
-334	yes	True when the daemon saw a recent presence heartbeat from the phone.
-344	yes	Return `(ok, reason)` for the fingerprint/phone unlock row.\n\n    The GUI used to show "Attivo" whenever the tree was patched on disk, even\n    when DMS had loaded the unpatched copy, the runtime marker was missing, or\n    the daemon was down. Every failure now names itself so the row is honest.\n    
-351	yes	DeskUnlock disattivato
-353	yes	Nessun telefono
-356	yes	Lock screen non adattato
-359	yes	Sblocco telefono non armato
-361	yes	Riavvia DMS
-364	yes	Attivo
-389	yes	color: #aeb4bc;
-417	yes	Return QProcess parameters that put the child in its own session.\n\n    The pairing dialog launches a shell wrapper that in turn spawns the\n    real ``syauth pair`` process. Without a private session, killing the\n    wrapper leaves the real process orphaned. ``CreateNewSession`` makes\n    the wrapper a session/process-group leader so\n    :func:`terminate_process_tree` can signal the whole tree at once.\n\n    Returns ``None`` when the Qt build predates ``UnixProcessParameters``\n    (Qt < 6.6); callers then fall back to a plain ``start``.\n    
-428	yes	UnixProcessParameters
-429	yes	UnixProcessFlag
-430	yes	CreateNewSession
-439	yes	SIGKILL the process group led by ``pid``.\n\n    Pure ``os``; safe to call from a non-Qt worker thread. Never raises:\n    a group that already exited, or a signal the kernel refused, is a\n    no-op. Falls back to the bare pid when the process is not a group\n    leader.\n    
-460	yes	Reap ``process`` and every descendant it spawned.\n\n    Reads the process-group id from ``process`` and delegates to\n    :func:`kill_process_group`. Main-thread only (touches QProcess).\n    
-478	yes	Associa telefono — DeskUnlock
-496	yes	DeskUnlock
-497	yes	font-size: 18px; font-weight: 600;
-499	yes	Preparazione di DeskUnlock…
-503	yes	font-size: 28px; font-weight: 700; letter-spacing: 3px;
-507	yes	Conferma
-508	yes	Non corrisponde
-509	yes	Annulla
-510	yes	Fine
-548	yes	Cerco telefoni DeskUnlock nelle vicinanze…
-550	yes	\nVerifica il codice Bluetooth sul telefono.
-550	yes	Telefono trovato: 
-550	yes	Telefono trovato: {}\nVerifica il codice Bluetooth sul telefono.
-554	yes	Controlla che il codice Bluetooth coincida sui due dispositivi.
-560	yes	Controlla che questo numero coincida con quello mostrato sul telefono.
-566	yes	In attesa della tua conferma…
-577	yes	Associazione non completata.
-598	yes	Annullamento…
-614	yes	Arm the event-loop-independent cancel fallback (idempotent).
-634	yes	Worker-thread fallback: SIGKILL the pairing process group.\n\n        Touches no thread-unsafe Qt API; only emits a queued signal that\n        Qt delivers on the dialog's main thread.\n        
-648	yes	Main-thread handler: close only this dialog, never the app.
-677	yes	Associazione non completata. Puoi riprovare.
-701	yes	SYAUTH_LOCALE_DIR
-710	yes	Automatica (lingua di sistema)
-711	yes	English
-712	yes	Italiano
-718	yes	Return the language to use.\n\n    `configured` is the operator's choice ("auto" or a supported code); `env`\n    is the process environment. An unsupported or empty answer falls back to\n    [DEFAULT_LANGUAGE] instead of to the desktop's locale, so a `de_DE` desktop\n    reads a coherent English GUI rather than whatever mixed catalog happens to\n    exist.\n    
-728	yes	LANG
-728	yes	LANGUAGE
-728	yes	LC_ALL
-739	yes	Bind the module-level `_` to `language`.\n\n    English is the source language, so it maps to the identity: no catalog\n    lookup and no failure mode when `/usr/share/locale` is empty.\n    
-762	yes	XDG_CONFIG_HOME
-768	yes	Return every persisted GUI setting as a dict.\n\n    Unknown keys are dropped so a hand-edited file cannot inject surprise.\n    
-784	yes	Merge `updates` into gui.conf instead of rewriting the file.\n\n    The previous writer replaced the whole file, so saving the theme dropped\n    every other setting; with two keys that is a bug waiting to happen. Values\n    that are `None` are removed. Best-effort: a read-only config dir must not\n    crash the GUI.\n    
-806	yes	Return the persisted theme, defaulting to dark.
-812	yes	Persist the theme without disturbing the other settings.
-817	yes	Return the persisted language choice, defaulting to auto.
-822	yes	Persist the language choice.
-827	yes	Apply `theme` to the whole application (palette + hint labels).
-828	yes	Fusion
-848	yes	QLabel[role="hint"] { color: 
-848	yes	QLabel[role="hint"] { color: {}; }
-914	yes	Chiudi
-937	yes	font-size: 11px;font-weight: 600;color: #aeb4bc;
-949	yes	The label always starts with "Tema" and names the current theme.
-950	yes	Tema: chiaro
-950	yes	Tema: scuro
-953	yes	Switch the app theme immediately and remember the choice.
-960	yes	Remember the language choice.\n\n        Unlike the theme this cannot be applied live: every label in this window\n        was built with the translation that was installed at startup, so the new\n        language lands on the next launch. Saying so beats an entry that looks\n        like it did nothing.\n        
-972	yes	Lingua salvata: riavvia DeskUnlock per applicarla.
-998	yes	Autenticazione sicura con il telefono
-1024	yes	Caricamento…
-1034	yes	Autenticazione e controllo di prossimità
-1058	yes	DISPOSITIVO ASSOCIATO
-1087	yes	Telefono associato
-1120	yes	Dissocia
-1134	yes	PROSSIMITÀ
-1145	yes	Proximity Lock
-1152	yes	Blocca il PC quando il telefono si allontana
-1170	yes	Stato
-1179	yes	Sensibilità
-1183	yes	Vicino
-1184	yes	Bilanciato
-1185	yes	Ampio
-1194	yes	Privacy: RSSI, baseline e stato restano locali; nessuna telemetria viene inviata.
-1202	yes	Diagnostica avanzata
-1212	yes	INATTIVITÀ
-1222	yes	Blocco per inattività
-1227	yes	Blocca il PC dopo un periodo senza attività
-1239	yes	Blocca dopo
-1243	yes	 minuti
-1280	yes	DIAGNOSTICA AVANZATA
-1288	yes	RSSI raw
-1288	yes	rssi raw
-1289	yes	RSSI filtered
-1289	yes	rssi filtered
-1290	yes	Baseline
-1291	yes	Delta
-1292	yes	Sample age
-1292	yes	sample age
-1293	yes	Proximity state
-1293	yes	proximity state
-1294	yes	Heartbeat age
-1294	yes	heartbeat age
-1295	yes	GATT ready
-1296	yes	Lock reason
-1296	yes	lock reason
-1321	yes	UTILIZZATO PER
-1332	yes	✓  Login e sblocco della sessione
-1333	yes	✓  Conferma biometrica sul telefono
-1334	yes	✓  Blocco automatico per allontanamento
-1335	yes	✓  Password Linux disponibile come fallback
-1346	yes	STATO SISTEMA
-1357	yes	Bluetooth
-1361	yes	Associazione
-1365	yes	Ultimo sblocco
-1376	yes	Sblocco con impronta
-1430	yes	color: #e06c75;
-1434	yes	●  DeskUnlock attivo
-1438	yes	color: #63c174;
-1442	yes	Disattiva
-1447	yes	○  DeskUnlock disattivato
-1455	yes	Attiva
-1460	yes	●  Stato degradato
-1464	yes	color: #d5a14f;
-1468	yes	Ripristina
-1484	yes	DeskUnlock non ha un telefono configurato
-1491	yes	Associa telefono
-1500	yes	Associazione presente · Problema DeskUnlock
-1507	yes	Controlla
-1520	yes	Associato · Connesso
-1528	yes	Associato · Non connesso
-1539	yes	Cambia telefono
-1548	yes	Disponibile
-1550	yes	Non disponibile
-1624	yes	Operazione completata.
-1630	yes	Operazione non riuscita.
-1648	yes	Controllo DeskUnlock
-1654	yes	Dissocia telefono
-1656	yes	Dissociare il telefono da DeskUnlock?\n\nNon potrà più autenticare o sbloccare questo computer.\nLa password Linux resterà disponibile.\n\nIl normale pairing Bluetooth non verrà eliminato.
-1684	yes	Errore
-1685	yes	Dissociazione non riuscita.\n\n
-1694	yes	Errore sconosciuto.
-1698	yes	Dissociazione non riuscita
-1705	yes	Telefono dissociato
-1707	yes	Il telefono è stato dissociato da DeskUnlock.\n\nPuoi associarne un altro con "Associa telefono".
-1722	yes	Attendere…
-1758	yes	DeskUnlock Settings
+# line	state	text (newlines escaped as \n)	italian already in the file
+80	TODO	Syauth: ON
+83	TODO	Syauth: OFF
+110	TODO	Powered
+123	TODO	Mai
+201	TODO	Servizio non disponibile
+203	TODO	Disattivato
+204	TODO	ABSENT
+208	TODO	Telefono assente
+210	TODO	NEAR
+211	TODO	Intermedio
+211	TODO	MID
+212	TODO	FAR
+212	TODO	Lontano
+213	TODO	Sconosciuto
+225	TODO	Non associato
+227	TODO	Telefono non connesso
+228	wrapped	Associato
+248	TODO	Telefono Android
+252	TODO	Nessun dispositivo associato
+252	TODO	Più telefoni associati
+269	TODO	color: #63c174;font-size: 16px;
+274	TODO	color: #8b929a;font-size: 16px;
+292	TODO	Lock
+292	TODO	LockScreenContent.qml
+292	TODO	Modules
+293	TODO	Pam.qml
+351	TODO	DeskUnlock disattivato
+353	TODO	Nessun telefono
+356	TODO	Lock screen non adattato
+359	TODO	Sblocco telefono non armato
+361	TODO	Riavvia DMS
+364	wrapped	Attivo
+389	TODO	color: #aeb4bc;
+428	TODO	UnixProcessParameters
+429	TODO	UnixProcessFlag
+430	TODO	CreateNewSession
+478	wrapped	Associa telefono — DeskUnlock
+497	TODO	font-size: 18px; font-weight: 600;
+499	wrapped	Preparazione di DeskUnlock…
+503	TODO	font-size: 28px; font-weight: 700; letter-spacing: 3px;
+507	wrapped	Conferma
+508	wrapped	Non corrisponde
+509	wrapped	Annulla
+510	wrapped	Fine
+548	wrapped	Cerco telefoni DeskUnlock nelle vicinanze…
+550	TODO	Telefono trovato:
+550	TODO	Telefono trovato: {}\nVerifica il codice Bluetooth sul telefono.
+550	TODO	Verifica il codice Bluetooth sul telefono.
+554	wrapped	Controlla che il codice Bluetooth coincida sui due dispositivi.
+560	wrapped	Controlla che questo numero coincida con quello mostrato sul telefono.
+566	wrapped	In attesa della tua conferma…
+577	TODO	Associazione non completata.
+598	wrapped	Annullamento…
+677	wrapped	Associazione non completata. Puoi riprovare.
+701	TODO	SYAUTH_LOCALE_DIR
+710	TODO	Automatica (lingua di sistema)
+711	TODO	English
+712	TODO	Italiano
+728	TODO	LANG
+728	TODO	LANGUAGE
+728	TODO	LC_ALL
+762	TODO	XDG_CONFIG_HOME
+828	TODO	Fusion
+848	TODO	QLabel[role="hint"] { color:
+848	TODO	QLabel[role="hint"] { color: {}; }
+914	wrapped	Chiudi
+937	TODO	font-size: 11px;font-weight: 600;color: #aeb4bc;
+950	TODO	Tema: chiaro
+950	TODO	Tema: scuro
+972	wrapped	Lingua salvata: riavvia DeskUnlock per applicarla.
+998	wrapped	Autenticazione sicura con il telefono
+1024	wrapped	Caricamento…
+1034	wrapped	Autenticazione e controllo di prossimità
+1058	wrapped	DISPOSITIVO ASSOCIATO
+1087	wrapped	Telefono associato
+1120	wrapped	Dissocia
+1134	wrapped	PROSSIMITÀ
+1152	wrapped	Blocca il PC quando il telefono si allontana
+1170	wrapped	Stato
+1179	wrapped	Sensibilità
+1183	wrapped	Vicino
+1184	wrapped	Bilanciato
+1185	wrapped	Ampio
+1194	TODO	Privacy: RSSI, baseline e stato restano locali; nessuna telemetria viene inviata.
+1202	wrapped	Diagnostica avanzata
+1212	wrapped	INATTIVITÀ
+1222	wrapped	Blocco per inattività
+1227	wrapped	Blocca il PC dopo un periodo senza attività
+1239	wrapped	Blocca dopo
+1280	wrapped	DIAGNOSTICA AVANZATA
+1288	TODO	RSSI raw
+1288	TODO	rssi raw
+1289	TODO	RSSI filtered
+1289	TODO	rssi filtered
+1290	TODO	Baseline
+1291	TODO	Delta
+1292	TODO	Sample age
+1292	TODO	sample age
+1293	TODO	Proximity state
+1293	TODO	proximity state
+1294	TODO	Heartbeat age
+1294	TODO	heartbeat age
+1295	TODO	GATT ready
+1296	TODO	Lock reason
+1296	TODO	lock reason
+1321	wrapped	UTILIZZATO PER
+1332	TODO	✓  Login e sblocco della sessione
+1333	TODO	✓  Conferma biometrica sul telefono
+1334	TODO	✓  Blocco automatico per allontanamento
+1335	TODO	✓  Password Linux disponibile come fallback
+1346	wrapped	STATO SISTEMA
+1361	TODO	Associazione
+1365	TODO	Ultimo sblocco
+1376	TODO	Sblocco con impronta
+1430	TODO	color: #e06c75;
+1434	wrapped	●  DeskUnlock attivo
+1438	TODO	color: #63c174;
+1442	wrapped	Disattiva
+1447	wrapped	○  DeskUnlock disattivato
+1455	wrapped	Attiva
+1460	wrapped	●  Stato degradato
+1464	TODO	color: #d5a14f;
+1468	wrapped	Ripristina
+1484	wrapped	DeskUnlock non ha un telefono configurato
+1491	wrapped	Associa telefono
+1500	wrapped	Associazione presente · Problema DeskUnlock
+1507	wrapped	Controlla
+1520	wrapped	Associato · Connesso
+1528	wrapped	Associato · Non connesso
+1539	wrapped	Cambia telefono
+1548	TODO	Disponibile
+1550	TODO	Non disponibile
+1624	TODO	Operazione completata.
+1630	TODO	Operazione non riuscita.
+1648	TODO	Controllo DeskUnlock
+1654	TODO	Dissocia telefono
+1656	TODO	Dissociare il telefono da DeskUnlock?\n\nNon potrà più autenticare o sbloccare questo computer.\nLa password Linux resterà disponibile.\n\nIl normale pairing Bluetooth non verrà eliminato.
+1684	TODO	Errore
+1685	TODO	Dissociazione non riuscita.
+1694	TODO	Errore sconosciuto.
+1698	TODO	Dissociazione non riuscita
+1705	TODO	Telefono dissociato
+1707	TODO	Il telefono è stato dissociato da DeskUnlock.\n\nPuoi associarne un altro con "Associa telefono".
+1722	wrapped	Attendere…
+1758	TODO	DeskUnlock Settings
