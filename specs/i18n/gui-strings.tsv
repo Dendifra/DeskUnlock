@@ -1,146 +1,95 @@
-# line	state	text (newlines escaped as \n)	italian already in the file
-80	TODO	Syauth: ON
-83	TODO	Syauth: OFF
-110	TODO	Powered
-123	TODO	Mai
+# line	state	text (newlines escaped as \n)
+80	DO-NOT-WRAP	Syauth: ON
+83	DO-NOT-WRAP	Syauth: OFF
+110	DO-NOT-WRAP	Powered
+204	DO-NOT-WRAP	ABSENT
+728	DO-NOT-WRAP	LANG
+728	DO-NOT-WRAP	LANGUAGE
+728	DO-NOT-WRAP	LC_ALL
+950	DO-NOT-WRAP	Tema: chiaro
+950	DO-NOT-WRAP	Tema: scuro
+1332	DO-NOT-WRAP	✓  Login e sblocco della sessione
 201	TODO	Servizio non disponibile
 203	TODO	Disattivato
-204	TODO	ABSENT
 208	TODO	Telefono assente
-210	TODO	NEAR
-211	TODO	Intermedio
-211	TODO	MID
-212	TODO	FAR
-212	TODO	Lontano
-213	TODO	Sconosciuto
 225	TODO	Non associato
 227	TODO	Telefono non connesso
-228	wrapped	Associato
-248	TODO	Telefono Android
-252	TODO	Nessun dispositivo associato
-252	TODO	Più telefoni associati
-269	TODO	color: #63c174;font-size: 16px;
-274	TODO	color: #8b929a;font-size: 16px;
-292	TODO	Lock
-292	TODO	LockScreenContent.qml
-292	TODO	Modules
-293	TODO	Pam.qml
 351	TODO	DeskUnlock disattivato
 353	TODO	Nessun telefono
 356	TODO	Lock screen non adattato
 359	TODO	Sblocco telefono non armato
 361	TODO	Riavvia DMS
-364	wrapped	Attivo
-389	TODO	color: #aeb4bc;
-428	TODO	UnixProcessParameters
-429	TODO	UnixProcessFlag
-430	TODO	CreateNewSession
-478	wrapped	Associa telefono — DeskUnlock
-497	TODO	font-size: 18px; font-weight: 600;
-499	wrapped	Preparazione di DeskUnlock…
-503	TODO	font-size: 28px; font-weight: 700; letter-spacing: 3px;
-507	wrapped	Conferma
-508	wrapped	Non corrisponde
-509	wrapped	Annulla
-510	wrapped	Fine
-548	wrapped	Cerco telefoni DeskUnlock nelle vicinanze…
 550	TODO	Telefono trovato:
-550	TODO	Telefono trovato: {}\nVerifica il codice Bluetooth sul telefono.
+550	TODO	Telefono trovato: {}\\nVerifica il codice Bluetooth sul telefono.
 550	TODO	Verifica il codice Bluetooth sul telefono.
-554	wrapped	Controlla che il codice Bluetooth coincida sui due dispositivi.
-560	wrapped	Controlla che questo numero coincida con quello mostrato sul telefono.
-566	wrapped	In attesa della tua conferma…
 577	TODO	Associazione non completata.
-598	wrapped	Annullamento…
-677	wrapped	Associazione non completata. Puoi riprovare.
-701	TODO	SYAUTH_LOCALE_DIR
-710	TODO	Automatica (lingua di sistema)
-711	TODO	English
-712	TODO	Italiano
-728	TODO	LANG
-728	TODO	LANGUAGE
-728	TODO	LC_ALL
-762	TODO	XDG_CONFIG_HOME
-828	TODO	Fusion
 848	TODO	QLabel[role="hint"] { color:
 848	TODO	QLabel[role="hint"] { color: {}; }
-914	wrapped	Chiudi
-937	TODO	font-size: 11px;font-weight: 600;color: #aeb4bc;
-950	TODO	Tema: chiaro
-950	TODO	Tema: scuro
-972	wrapped	Lingua salvata: riavvia DeskUnlock per applicarla.
-998	wrapped	Autenticazione sicura con il telefono
-1024	wrapped	Caricamento…
-1034	wrapped	Autenticazione e controllo di prossimità
-1058	wrapped	DISPOSITIVO ASSOCIATO
-1087	wrapped	Telefono associato
-1120	wrapped	Dissocia
-1134	wrapped	PROSSIMITÀ
-1152	wrapped	Blocca il PC quando il telefono si allontana
-1170	wrapped	Stato
-1179	wrapped	Sensibilità
-1183	wrapped	Vicino
-1184	wrapped	Bilanciato
-1185	wrapped	Ampio
-1194	TODO	Privacy: RSSI, baseline e stato restano locali; nessuna telemetria viene inviata.
-1202	wrapped	Diagnostica avanzata
-1212	wrapped	INATTIVITÀ
-1222	wrapped	Blocco per inattività
-1227	wrapped	Blocca il PC dopo un periodo senza attività
-1239	wrapped	Blocca dopo
-1280	wrapped	DIAGNOSTICA AVANZATA
-1288	TODO	RSSI raw
-1288	TODO	rssi raw
-1289	TODO	RSSI filtered
-1289	TODO	rssi filtered
-1290	TODO	Baseline
-1291	TODO	Delta
-1292	TODO	Sample age
-1292	TODO	sample age
-1293	TODO	Proximity state
-1293	TODO	proximity state
-1294	TODO	Heartbeat age
-1294	TODO	heartbeat age
-1295	TODO	GATT ready
-1296	TODO	Lock reason
-1296	TODO	lock reason
-1321	wrapped	UTILIZZATO PER
-1332	TODO	✓  Login e sblocco della sessione
-1333	TODO	✓  Conferma biometrica sul telefono
-1334	TODO	✓  Blocco automatico per allontanamento
-1335	TODO	✓  Password Linux disponibile come fallback
-1346	wrapped	STATO SISTEMA
-1361	TODO	Associazione
-1365	TODO	Ultimo sblocco
-1376	TODO	Sblocco con impronta
-1430	TODO	color: #e06c75;
-1434	wrapped	●  DeskUnlock attivo
-1438	TODO	color: #63c174;
-1442	wrapped	Disattiva
-1447	wrapped	○  DeskUnlock disattivato
-1455	wrapped	Attiva
-1460	wrapped	●  Stato degradato
-1464	TODO	color: #d5a14f;
-1468	wrapped	Ripristina
-1484	wrapped	DeskUnlock non ha un telefono configurato
-1491	wrapped	Associa telefono
-1500	wrapped	Associazione presente · Problema DeskUnlock
-1507	wrapped	Controlla
-1520	wrapped	Associato · Connesso
-1528	wrapped	Associato · Non connesso
-1539	wrapped	Cambia telefono
-1548	TODO	Disponibile
-1550	TODO	Non disponibile
-1624	TODO	Operazione completata.
-1630	TODO	Operazione non riuscita.
-1648	TODO	Controllo DeskUnlock
-1654	TODO	Dissocia telefono
-1656	TODO	Dissociare il telefono da DeskUnlock?\n\nNon potrà più autenticare o sbloccare questo computer.\nLa password Linux resterà disponibile.\n\nIl normale pairing Bluetooth non verrà eliminato.
-1684	TODO	Errore
-1685	TODO	Dissociazione non riuscita.
-1694	TODO	Errore sconosciuto.
-1698	TODO	Dissociazione non riuscita
-1705	TODO	Telefono dissociato
-1707	TODO	Il telefono è stato dissociato da DeskUnlock.\n\nPuoi associarne un altro con "Associa telefono".
-1722	wrapped	Attendere…
-1758	TODO	DeskUnlock Settings
+123	REVIEW	Mai
+210	REVIEW	NEAR
+211	REVIEW	Intermedio
+211	REVIEW	MID
+212	REVIEW	FAR
+212	REVIEW	Lontano
+213	REVIEW	Sconosciuto
+248	REVIEW	Telefono Android
+252	REVIEW	Nessun dispositivo associato
+252	REVIEW	Più telefoni associati
+269	REVIEW	color: #63c174;font-size: 16px;
+274	REVIEW	color: #8b929a;font-size: 16px;
+292	REVIEW	Lock
+292	REVIEW	LockScreenContent.qml
+292	REVIEW	Modules
+293	REVIEW	Pam.qml
+389	REVIEW	color: #aeb4bc;
+428	REVIEW	UnixProcessParameters
+429	REVIEW	UnixProcessFlag
+430	REVIEW	CreateNewSession
+497	REVIEW	font-size: 18px; font-weight: 600;
+503	REVIEW	font-size: 28px; font-weight: 700; letter-spacing: 3px;
+701	REVIEW	SYAUTH_LOCALE_DIR
+710	REVIEW	Automatica (lingua di sistema)
+711	REVIEW	English
+712	REVIEW	Italiano
+762	REVIEW	XDG_CONFIG_HOME
+828	REVIEW	Fusion
+937	REVIEW	font-size: 11px;font-weight: 600;color: #aeb4bc;
+1194	REVIEW	Privacy: RSSI, baseline e stato restano locali; nessuna telemetria viene inviata.
+1288	REVIEW	RSSI raw
+1288	REVIEW	rssi raw
+1289	REVIEW	RSSI filtered
+1289	REVIEW	rssi filtered
+1290	REVIEW	Baseline
+1291	REVIEW	Delta
+1292	REVIEW	Sample age
+1292	REVIEW	sample age
+1293	REVIEW	Proximity state
+1293	REVIEW	proximity state
+1294	REVIEW	Heartbeat age
+1294	REVIEW	heartbeat age
+1295	REVIEW	GATT ready
+1296	REVIEW	Lock reason
+1296	REVIEW	lock reason
+1333	REVIEW	✓  Conferma biometrica sul telefono
+1334	REVIEW	✓  Blocco automatico per allontanamento
+1335	REVIEW	✓  Password Linux disponibile come fallback
+1361	REVIEW	Associazione
+1365	REVIEW	Ultimo sblocco
+1376	REVIEW	Sblocco con impronta
+1430	REVIEW	color: #e06c75;
+1438	REVIEW	color: #63c174;
+1464	REVIEW	color: #d5a14f;
+1548	REVIEW	Disponibile
+1550	REVIEW	Non disponibile
+1624	REVIEW	Operazione completata.
+1630	REVIEW	Operazione non riuscita.
+1648	REVIEW	Controllo DeskUnlock
+1654	REVIEW	Dissocia telefono
+1656	REVIEW	Dissociare il telefono da DeskUnlock?\\n\\nNon potrà più autenticare o sbloccare questo computer.\\nLa password Linux resterà disponibile.\\n\\nIl normale pairing Bluetooth non verrà eliminato.
+1684	REVIEW	Errore
+1685	REVIEW	Dissociazione non riuscita.
+1694	REVIEW	Errore sconosciuto.
+1698	REVIEW	Dissociazione non riuscita
+1705	REVIEW	Telefono dissociato
+1707	REVIEW	Il telefono è stato dissociato da DeskUnlock.\\n\\nPuoi associarne un altro con "Associa telefono".
+1758	REVIEW	DeskUnlock Settings

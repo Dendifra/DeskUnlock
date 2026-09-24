@@ -21,13 +21,28 @@ setting silently, with no error and no crash.
 
 Copy numbers, measured with Python's AST (not a regex — see below):
 
-- **145** visible strings in `desktop/bin/syauth-settings`
-- **51** wrapped in `_()` (the arguments of display calls a script can take safely)
-- **94** still to wrap by hand: ternaries, variables assigned to labels, f-strings,
-  dialog bodies
+- **145** visible strings
+- **51** wrapped in `_()` (arguments of display calls, which a script can take safely)
+- **10** that must **never** be wrapped, because the code compares them
+- **16** clearly displayed and still to wrap
+- **68** that need a human call: `REVIEW` in the worklist
 
-`gui-strings.tsv` is the worklist: `line`, `state` (`wrapped` / `TODO`), `text`.
-Docstrings and same-in-both-languages tokens are already filtered out.
+`gui-strings.tsv` is the worklist: `line`, `state`, `text`. The states are
+`wrapped`, `TODO` (wrap it), `DO-NOT-WRAP` (a compared value) and `REVIEW`.
+
+## Why "by hand" is a judgement, not typing
+
+The ten `DO-NOT-WRAP` entries are the whole argument. `if "Syauth: ON" in output:`
+matches text printed by `syauth-control`; wrapping that literal in `_()` means a
+catalog can rename it, the comparison stops matching, and the master switch reads
+**OFF forever** — no error, no crash, no test failure. A script cannot tell that
+`"Syauth: ON"` is a parse target while `"Servizio non disponibile"` two hundred
+lines below is copy. That distinction is the work.
+
+The same split appears inside one construct: in `"NEAR": "Vicino"` the **key** is a
+state code the daemon emits and must stay, while the **value** is what the operator
+reads and must be translated.
+
 
 ## No catalog ships until the 94 are done
 
