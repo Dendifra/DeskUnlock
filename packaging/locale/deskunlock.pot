@@ -1,0 +1,238 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the PACKAGE package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: PACKAGE VERSION\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-09-24 20:56+0200\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: desktop/bin/syauth-settings:478
+msgid "Associa telefono — DeskUnlock"
+msgstr ""
+
+#: desktop/bin/syauth-settings:496 desktop/bin/syauth-settings:855
+#: desktop/bin/syauth-settings:989
+msgid "DeskUnlock"
+msgstr ""
+
+#: desktop/bin/syauth-settings:499 desktop/bin/syauth-settings:546
+msgid "Preparazione di DeskUnlock…"
+msgstr ""
+
+#: desktop/bin/syauth-settings:507
+msgid "Conferma"
+msgstr ""
+
+#: desktop/bin/syauth-settings:508
+msgid "Non corrisponde"
+msgstr ""
+
+#: desktop/bin/syauth-settings:509
+msgid "Annulla"
+msgstr ""
+
+#: desktop/bin/syauth-settings:510
+msgid "Fine"
+msgstr ""
+
+#: desktop/bin/syauth-settings:548
+msgid "Cerco telefoni DeskUnlock nelle vicinanze…"
+msgstr ""
+
+#: desktop/bin/syauth-settings:554
+msgid "Controlla che il codice Bluetooth coincida sui due dispositivi."
+msgstr ""
+
+#: desktop/bin/syauth-settings:560
+msgid "Controlla che questo numero coincida con quello mostrato sul telefono."
+msgstr ""
+
+#: desktop/bin/syauth-settings:566
+msgid "In attesa della tua conferma…"
+msgstr ""
+
+#: desktop/bin/syauth-settings:569 desktop/bin/syauth-settings:1087
+msgid "Telefono associato"
+msgstr ""
+
+#: desktop/bin/syauth-settings:580 desktop/bin/syauth-settings:680
+#: desktop/bin/syauth-settings:914 desktop/bin/syauth-settings:1309
+msgid "Chiudi"
+msgstr ""
+
+#: desktop/bin/syauth-settings:598
+msgid "Annullamento…"
+msgstr ""
+
+#: desktop/bin/syauth-settings:677
+msgid "Associazione non completata. Puoi riprovare."
+msgstr ""
+
+#: desktop/bin/syauth-settings:972
+msgid "Lingua salvata: riavvia DeskUnlock per applicarla."
+msgstr ""
+
+#: desktop/bin/syauth-settings:998
+msgid "Autenticazione sicura con il telefono"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1024 desktop/bin/syauth-settings:1172
+msgid "Caricamento…"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1034
+msgid "Autenticazione e controllo di prossimità"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1058
+msgid "DISPOSITIVO ASSOCIATO"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1120
+msgid "Dissocia"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1134
+msgid "PROSSIMITÀ"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1145
+msgid "Proximity Lock"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1152
+msgid "Blocca il PC quando il telefono si allontana"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1161 desktop/bin/syauth-settings:1233
+msgid "Attivo"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1170
+msgid "Stato"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1179
+msgid "Sensibilità"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1183
+msgid "Vicino"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1184
+msgid "Bilanciato"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1185
+msgid "Ampio"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1194
+msgid ""
+"Privacy: RSSI, baseline e stato restano locali; nessuna telemetria viene "
+"inviata."
+msgstr ""
+
+#: desktop/bin/syauth-settings:1202 desktop/bin/syauth-settings:1274
+msgid "Diagnostica avanzata"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1212
+msgid "INATTIVITÀ"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1222
+msgid "Blocco per inattività"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1227
+msgid "Blocca il PC dopo un periodo senza attività"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1239
+msgid "Blocca dopo"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1280
+msgid "DIAGNOSTICA AVANZATA"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1321
+msgid "UTILIZZATO PER"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1346
+msgid "STATO SISTEMA"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1434
+msgid "●  DeskUnlock attivo"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1442
+msgid "Disattiva"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1447
+msgid "○  DeskUnlock disattivato"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1455
+msgid "Attiva"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1460
+msgid "●  Stato degradato"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1468
+msgid "Ripristina"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1484
+msgid "DeskUnlock non ha un telefono configurato"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1491
+msgid "Associa telefono"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1500
+msgid "Associazione presente · Problema DeskUnlock"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1507
+msgid "Controlla"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1515
+msgid "Associato"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1520
+msgid "Associato · Connesso"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1528
+msgid "Associato · Non connesso"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1539
+msgid "Cambia telefono"
+msgstr ""
+
+#: desktop/bin/syauth-settings:1722
+msgid "Attendere…"
+msgstr ""
