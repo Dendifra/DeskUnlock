@@ -26,6 +26,7 @@ import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.sy.syauth.android.R
 import com.sy.syauth.android.history.ChallengeHistoryDao
 import com.sy.syauth.android.history.ChallengeHistoryRecord
 import java.time.Clock
@@ -39,16 +40,9 @@ import java.util.concurrent.atomic.AtomicLong
  */
 public const val NOTIFICATION_CHANNEL_HISTORY: String = "syauth-challenge-history"
 
-/** Human-readable channel name surfaced in `Settings → Apps → syauth → Notifications`. */
-public const val NOTIFICATION_CHANNEL_HISTORY_NAME: String = "DeskUnlock"
-
-/**
- * Channel description. Tells the operator the channel is the audit
- * surface and safe to mute — the unlock prompts use a separate,
- * high-importance channel.
- */
-public const val NOTIFICATION_CHANNEL_HISTORY_DESCRIPTION: String =
-    "History of computer unlock requests."
+// The channel name and description are user-visible, so they live in string
+// resources: `values/` carries the English source (and the default), `values-it/`
+// the Italian copy.
 
 /**
  * Per-SPEC rate-limit window between visible audit posts. Audit
@@ -183,10 +177,10 @@ public fun ensureChannel(context: Context) {
     if (existing != null) return
     val channel = NotificationChannel(
         NOTIFICATION_CHANNEL_HISTORY,
-        NOTIFICATION_CHANNEL_HISTORY_NAME,
+        context.getString(R.string.syauth_notification_history_channel_name),
         NotificationManager.IMPORTANCE_LOW,
     ).apply {
-        description = NOTIFICATION_CHANNEL_HISTORY_DESCRIPTION
+        description = context.getString(R.string.syauth_notification_history_channel_description)
         setShowBadge(false)
     }
     nm.createNotificationChannel(channel)
@@ -203,8 +197,8 @@ private fun buildNotification(
         intent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
-    val title = "DeskUnlock"
-    val text = "Unlock request"
+    val title = context.getString(R.string.syauth_notification_unlock_title)
+    val text = context.getString(R.string.syauth_notification_unlock_text)
     return NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_HISTORY)
         .setContentTitle(title)
         .setContentText(text)

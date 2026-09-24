@@ -9,7 +9,23 @@
 -->
 <resources>
     <string name="app_name">DeskUnlock</string>
+
+    <!--
+      BiometricPrompt sheet shown by the system on an unlock request. The
+      format argument names (%1$s = hostname) mirror the SPEC §9 Q2 prompt
+      template.
+    -->
     <string name="syauth_biometric_prompt_title">DeskUnlock</string>
     <string name="syauth_biometric_prompt_subtitle_fmt">Unlock the session on %1$s</string>
     <string name="syauth_biometric_prompt_cancel">Cancel</string>
+
+    <!--
+      Audit notification and its channel. English is the default, so a locale
+      with no catalog falls back to a complete screen. Italian lives in
+      values-it/.
+    -->
+    <string name="syauth_notification_unlock_title">DeskUnlock</string>
+    <string name="syauth_notification_unlock_text">Unlock request</string>
+    <string name="syauth_notification_history_channel_name">DeskUnlock</string>
+    <string name="syauth_notification_history_channel_description">History of computer unlock requests.</string>
 </resources>

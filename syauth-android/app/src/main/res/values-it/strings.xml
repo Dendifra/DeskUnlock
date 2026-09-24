@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Italian copy. `values/` holds the English source and is the default, so any
+  locale without a catalog falls back to English rather than to a
+  half-translated screen.
+-->
+<resources>
+    <string name="app_name">DeskUnlock</string>
+
+    <string name="syauth_biometric_prompt_title">DeskUnlock</string>
+    <string name="syauth_biometric_prompt_subtitle_fmt">Sblocca la sessione su %1$s</string>
+    <string name="syauth_biometric_prompt_cancel">Annulla</string>
+
+    <string name="syauth_notification_unlock_title">DeskUnlock</string>
+    <string name="syauth_notification_unlock_text">Richiesta di sblocco</string>
+    <string name="syauth_notification_history_channel_name">DeskUnlock</string>
+    <string name="syauth_notification_history_channel_description">Cronologia delle richieste di sblocco del computer.</string>
+</resources>
