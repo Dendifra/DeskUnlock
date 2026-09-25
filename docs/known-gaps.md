@@ -18,6 +18,51 @@
 
 ## Open deviations
 
+### `DEV-007` — bond key on disk instead of the kernel keyring (opened 2026-09-25)
+
+**SPEC clause:** §3.2 D6 — "Bond key storage | Linux: kernel keyring via
+`linux-keyutils` crate, fallback `libsecret` ... | Keys never leave secure
+storage" — and its rejected alternative, verbatim: "Plaintext
+`~/.config/syauth/`; environment variable; **file with 0600** (all leak on root
+compromise without any defense)".
+
+**Shipped behaviour.** The daemon stores the 32-byte bond key as
+`/var/lib/syauth/keys/<peer_id>.bin`, mode 600, owned by the operator, and reads
+it back from that file on every challenge. That is the alternative D6 rejects.
+`crates/syauth-core/src/secrets.rs` implements what D6 asks for — a `KeyStore`
+trait with a `KernelKeyring` backend over `linux-keyutils`, a libsecret
+`SecretService` fallback, and a `Zeroizing` payload type — and the crate root
+re-exports it. Nothing on the unlock path calls it.
+
+**Why this is a row and not a fix.** D6 balances "no key at rest" against "the
+key must survive a reboot", and this codebase chose the second without changing
+the first. The choice may even be defensible — a keyring entry is scoped to a
+session that does not survive a reboot on every workload — but it was made in
+code, not on purpose and not in writing, so the SPEC has been promising a
+mechanism the product does not use.
+
+**Source locations (deviation):**
+- `crates/syauth-core/src/pair_recovery.rs` — `keys_dir` and `active_key_path`,
+  the file layout. Marker at `keys_dir`.
+- `crates/syauth-core/src/secrets.rs` — the D6 implementation, complete and
+  unused by the daemon.
+
+**Authorized by:** operator, 2026-09-25, verbatim: "direi b te che dici?" —
+record the deviation rather than amend D6. The session context: the deviation is
+pre-existing and was surfaced by the `/threat` review (THREAT-20260925 T-129),
+not introduced here.
+
+**Status:** open, recorded. Not a licence to add more file-based secret storage.
+
+**Closure condition:** the daemon loads and stores the bond key through
+`syauth_core::KeyStore` (at minimum `BackendKind::Kernel`), the file store is
+removed, and a test proves a bond survives a daemon restart through the keyring
+alone. If a reboot-survival requirement makes the keyring insufficient, that
+finding belongs in the row that closes this one, with the keyring as the stated
+fallback rather than the file.
+
+---
+
 ### `DEV-006` — pam_syauth in the login greeter (opened 2026-09-24)
 
 **SPEC clause:** §3.2 D7 — "Module is `auth required` for `sudo` and

@@ -534,6 +534,25 @@ fn revoke_bond_by_peer_id(bond_dir: &std::path::Path, peer_id: &str) -> Result<(
         .mark_revoked(peer_id, "phone: device dissociated")
         .map_err(|err| err.to_string())?;
     store.save(&path).map_err(|err| err.to_string())?;
+    // The key that authenticated the association dies with it. Marking the bond
+    // revoked stops it being served; a key left behind outlives the association
+    // in a place nobody looks, and the operator's mental model after "Revoke"
+    // is that the association is gone. Threat model T-130.
+    //
+    // A failure here does NOT fail the revocation: the bond is revoked, which is
+    // the security-relevant half, and refusing the whole operation over an
+    // unlink would leave the desktop serving a bond the phone has dropped.
+    let key = syauth_core::pair_recovery::active_key_path(bond_dir, peer_id);
+    match std::fs::remove_file(&key) {
+        Ok(()) => tracing::info!(target: "syauth_presenced", peer_id, "revocation removed the bond key"),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => tracing::warn!(
+            target: "syauth_presenced",
+            peer_id,
+            error = %err,
+            "could not remove the bond key; the bond is revoked and the file remains"
+        ),
+    }
     tracing::info!(target: "syauth_presenced", peer_id, "day-2 revocation applied from the phone");
     Ok(())
 }
@@ -749,6 +768,27 @@ mod day2_revoke_tests {
         let store = BondStore::load(&td.path().join("bonds.toml")).expect("load");
         let bond = store.list().iter().find(|b| b.peer_id == peer_id).expect("bond");
         assert!(bond.is_revoked(), "the bond must be revoked, got {:?}", bond.status);
+    }
+
+    /// The key that authenticated the association dies with it. Threat model
+    /// T-130: the bond was marked revoked while keys/<peer_id>.bin stayed on
+    /// disk, so the material outlived the association it belonged to.
+    #[test]
+    fn a_phone_revocation_removes_the_bond_key() {
+        let td = TempDir::new().expect("tempdir");
+        let peer_id = bonded_fixture(&td);
+        let key = syauth_core::pair_recovery::active_key_path(td.path(), &peer_id);
+        std::fs::create_dir_all(key.parent().expect("key parent")).expect("keys dir");
+        std::fs::write(&key, [7u8; 32]).expect("write key");
+        assert!(key.exists(), "the fixture key must exist before the revocation");
+
+        revoke_bond_by_peer_id(td.path(), &peer_id).expect("revoke");
+
+        assert!(
+            !key.exists(),
+            "a revoked bond's key must not survive the revocation: {}",
+            key.display()
+        );
     }
 
     /// An id that names nothing is refused instead of inventing a record.

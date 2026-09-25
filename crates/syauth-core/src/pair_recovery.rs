@@ -100,6 +100,9 @@ pub fn pending_bond_path(bond_dir: &Path) -> PathBuf {
 }
 
 /// Path of the per-peer key directory.
+// SPEC-DEVIATION: DEV-007 — the bond key is a 0600 file, not the kernel keyring
+// D6 asks for; syauth_core::KeyStore implements D6 and the daemon does not call
+// it — see docs/known-gaps.md.
 #[must_use]
 pub fn keys_dir(bond_dir: &Path) -> PathBuf {
     bond_dir.join(KEYS_DIR_NAME)
