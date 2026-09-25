@@ -364,6 +364,32 @@ mod tests {
         assert_eq!(active.list()[0].peer_id, peer_id());
     }
 
+    /// The key that authenticates every unlock must not be readable by anyone
+    /// but its owner, and that must not depend on the process umask.
+    ///
+    /// This is the regression guard for a real trap: the key is written to a
+    /// temporary file and then renamed into place, and `rename` preserves the
+    /// temporary's mode. On a host with `umask 022` a file created without an
+    /// explicit mode is 0644, so a refactor that drops the `set_permissions`
+    /// before the rename silently ships world-readable key material. This
+    /// machine and the CI container both run umask 022, so the assertion below
+    /// fails if that ever happens. Threat model T-106/T-107/T-110.
+    #[test]
+    fn the_bond_key_and_its_directory_are_not_world_accessible() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        stage(dir.path(), TRANSACTION, &peer_id(), ADDRESS, &bond(), &bond_key()).expect("stage");
+        promote(dir.path(), &peer_id()).expect("promote");
+
+        let key = active_key_path(dir.path(), &peer_id());
+        let file_mode = fs::metadata(&key).expect("key metadata").permissions().mode() & 0o777;
+        assert_eq!(0o600, file_mode, "the bond key must be 0600, got {file_mode:o}");
+
+        let parent = key.parent().expect("key parent");
+        let dir_mode = fs::metadata(parent).expect("dir metadata").permissions().mode() & 0o777;
+        assert_eq!(0o700, dir_mode, "the key directory must be 0700, got {dir_mode:o}");
+    }
+
     #[test]
     fn promote_is_idempotent_and_replaces_the_same_peer() {
         let dir = tempfile::tempdir().expect("tempdir");
