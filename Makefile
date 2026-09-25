@@ -85,7 +85,7 @@ bench:
 #   3. cargo audit  (non-fatal in lint; sibling `audit` target is fatal)
 #   4. cargo deny check  (fatal)
 .PHONY: lint
-lint: scope-discipline privacy-check
+lint: scope-discipline privacy-check android-test-compiles
 	@echo "Running clippy..."
 	$(CARGO) clippy --workspace --all-targets --all-features -- -D warnings
 	@echo "Checking formatting..."
@@ -107,6 +107,20 @@ lint: scope-discipline privacy-check
 .PHONY: privacy-check
 privacy-check:
 	@bash scripts/privacy-check.sh
+
+## android-test-compiles: Compile the instrumented test source set. No device or
+## emulator needed — and no gate did this before, which is why the suite stopped
+## compiling on 2026-09-22 and nobody noticed for three days.
+.PHONY: android-test-compiles
+android-test-compiles:
+	@if [ ! -f crates/syauth-mobile/target/syauth_mobile.aar ]; then \
+		echo "android-test-compiles: skipping (no AAR — run 'make android-aar' with NDK_HOME)"; \
+		exit 0; \
+	fi; \
+	cd syauth-android && JAVA_HOME="$${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk}" \
+		./gradlew --quiet :app:assembleDebugAndroidTest >/dev/null \
+		&& echo "android-test-compiles: ok" \
+		|| { echo "FAILED: the instrumented test source set does not compile"; exit 1; }
 
 scope-discipline:
 	@echo "Running scope-discipline grep..."

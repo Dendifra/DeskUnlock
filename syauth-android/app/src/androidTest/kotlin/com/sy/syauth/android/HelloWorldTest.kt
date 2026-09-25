@@ -70,7 +70,13 @@ class HelloWorldTest {
 
         // Recompute the expected rendered string via the same UniFFI
         // surface the activity calls; assert byte-equality.
-        val expected = OOB_RENDER_PREFIX + oobCodeForBond(helloBondKey()).joinToString(" ")
+        // The UniFFI surface returns the code already joined: four words
+        // separated by spaces. It returned a list when this test was written,
+        // and the joinToString survived the API change here while the
+        // production caller (UniffiOobCalculator.compute) was updated to take
+        // the String directly. That mismatch is why the instrumented source set
+        // stopped compiling and nobody noticed: no gate compiles it.
+        val expected = OOB_RENDER_PREFIX + oobCodeForBond(helloBondKey())
         composeTestRule
             .onNodeWithText(expected)
             .assertIsDisplayed()
