@@ -383,7 +383,7 @@ A first-time user pairs in under 3 minutes, has `sudo` working with a tap in und
 | ID | Threat | Mitigation in v0.1 | Status |
 |----|--------|---------------------|--------|
 | T-001 | BLE link-layer relay | Mandatory user gesture (biometric) on phone for every unlock | **Mitigated** |
-| T-002 | Replay | 16-byte nonce + 64-entry LRU cache, 10 s TTL | **Mitigated** |
+| T-002 | Replay | 16-byte nonce + 64-entry LRU cache in the daemon, checked **after** signature verification | **Mitigated** |
 | T-003 | MitM during pairing | LE Secure Connections numeric comparison + independent app-level numeric OOB code | **Mitigated** |
 | T-004 | Rogue device bonding (user is tricked into pairing) | Pairing must be initiated by `syauth pair` on the desktop; inbound bond requests are not accepted | **Mitigated** |
 | T-005 | PAM stack misconfiguration leading to bypass | Ship `syauth install-pam` helper; document `auth required` semantics; recommend keeping `pam_unix` as fallback | **Mitigated by docs + tooling** |

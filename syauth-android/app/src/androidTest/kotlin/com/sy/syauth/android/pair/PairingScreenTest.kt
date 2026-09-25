@@ -15,6 +15,7 @@ package com.sy.syauth.android.pair
 
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import android.content.Context
@@ -22,6 +23,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.sy.syauth.android.R
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -125,6 +127,23 @@ class PairingScreenTest {
             .onNodeWithTag(PairingTestTags.OOB_CANCEL)
             .assertIsDisplayed()
             .assertHasClickAction()
+
+        // The code must sit ABOVE the accept button. Presence is not enough:
+        // "the operator reads the code before tapping" is only a layout fact if
+        // the code is where the eye reaches first, and this is the assertion
+        // that makes it one instead of a hope. Threat model T-114 / T-122.
+        val codeBottom = composeTestRule
+            .onNodeWithTag(PairingTestTags.OOB_CODE)
+            .getUnclippedBoundsInRoot()
+            .bottom
+        val acceptTop = composeTestRule
+            .onNodeWithTag(PairingTestTags.OOB_YES)
+            .getUnclippedBoundsInRoot()
+            .top
+        assertTrue(
+            "the OOB code must be rendered above the accept button, got code bottom=$codeBottom and button top=$acceptTop",
+            codeBottom <= acceptTop,
+        )
     }
 
     // ──── TC-12 ────

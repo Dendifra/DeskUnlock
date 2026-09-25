@@ -5,7 +5,10 @@
 //! Layered as roadmap items land:
 //!
 //! - **S-002** — v1 wire-format [`Frame`] encoder / decoder.
-//! - **S-003** — sliding LRU + TTL replay nonce cache.
+//! - **S-003** — replay defence. The cache lives in the daemon
+//!   (`syauth_presenced::orchestrator::NonceCache`), not here: this crate once
+//!   shipped a second implementation with a TTL that nothing called, and
+//!   having two made the SPEC describe the one that never ran.
 //! - **S-004** — Ed25519 signing + BLAKE3-keyed-hash MAC (this commit).
 //! - **S-005** — bond store TOML schema.
 //! - **S-006** — kernel-keyring / libsecret `KeyStore` abstraction.
@@ -25,7 +28,6 @@ pub mod frame;
 pub mod mac;
 pub mod pair_recovery;
 pub mod pair_transaction;
-pub mod replay;
 pub mod secrets;
 pub mod sign;
 
@@ -38,7 +40,6 @@ pub use frame::{
     SYAUTH_WIRE_VERSION_V1, TAG_LEN, VERSION_LEN, VERSION_OFFSET,
 };
 pub use mac::{BOND_KEY_BYTES, MAC_TAG_LEN, compute_tag, verify_tag};
-pub use replay::{Acceptance, DEFAULT_REPLAY_CAP, DEFAULT_REPLAY_TTL, ReplayCache};
 pub use secrets::{
     BackendKind, InMemoryKeyStore, KEYRING_ID_PREFIX, KeyStore, LOG_LINE_KERNEL, LOG_LINE_SECRET_SERVICE, SECRET_SERVICE_ATTR_ID,
     SECRET_SERVICE_ATTR_KIND, SECRET_SERVICE_ATTR_KIND_VALUE, SECRET_SERVICE_COLLECTION, SECRET_SERVICE_CONTENT_TYPE, SecretError, detect,
