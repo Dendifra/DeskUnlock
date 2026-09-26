@@ -60,6 +60,8 @@ pub const PIDFILE_BASENAME: &str = "presenced.pid";
 /// holds both the socket (S-002+) and the pidfile (S-001).
 pub const RUNTIME_SUBDIR: &str = "syauth";
 
+const BLUEZ_RETRY_DELAY: Duration = Duration::from_secs(5);
+
 /// Top-level error surface for `run()`. The binary's `main` wraps
 /// these into `anyhow::Error` so the user-visible message at exit is
 /// consistent across the lock path and the socket path.
@@ -311,6 +313,13 @@ async fn wait_for_reason(
     }
 }
 
+async fn wait_for_bluez_retry(shutdown: &mut tokio::sync::oneshot::Receiver<()>) -> bool {
+    tokio::select! {
+        _ = shutdown => false,
+        _ = tokio::time::sleep(BLUEZ_RETRY_DELAY) => true,
+    }
+}
+
 /// Try to construct an [`Orchestrator`] over a [`PersistentPeripheral`]
 /// and spawn it. Returns `(None, None)` (and logs a `warn`) if no
 /// non-revoked bond exists, the key file is missing or malformed, or
@@ -331,7 +340,7 @@ async fn wait_for_reason(
 /// short-circuit before any BlueZ DBus call is made.
 async fn maybe_spawn_orchestrator(
     config: &Config,
-    shutdown: tokio::sync::oneshot::Receiver<()>,
+    mut shutdown: tokio::sync::oneshot::Receiver<()>,
     pairing_broker: PairingBroker,
 ) -> (
     Option<tokio::task::JoinHandle<()>>,
@@ -354,14 +363,18 @@ async fn maybe_spawn_orchestrator(
     // spin up on the next reload.
     let (pair_commit_tx, pair_commit_rx) = mpsc::channel::<PairCommitRequest>(4);
     let peripheral: Arc<dyn Peripheral + Send + Sync> = match config.peripheral_mode {
-        PeripheralMode::Real => match PersistentPeripheral::new(DEFAULT_ADAPTER_NAME, pairing_broker.clone(), pair_commit_tx).await {
-            Ok(p) => {
-                spawn_pair_session_listener(Arc::clone(&p));
-                p
-            }
-            Err(err) => {
-                warn_no_orchestrator(&format!("BlueZ adapter open failed: {err}"));
-                return (None, None, None);
+        PeripheralMode::Real => loop {
+            match PersistentPeripheral::new(DEFAULT_ADAPTER_NAME, pairing_broker.clone(), pair_commit_tx.clone()).await {
+                Ok(p) => {
+                    spawn_pair_session_listener(Arc::clone(&p));
+                    break p;
+                }
+                Err(err) => {
+                    warn_no_orchestrator(&format!("BlueZ adapter open failed: {err}; retrying"));
+                    if !wait_for_bluez_retry(&mut shutdown).await {
+                        return (None, None, None);
+                    }
+                }
             }
         },
         PeripheralMode::Fake => seed_fake_peripheral(config),
@@ -827,6 +840,14 @@ mod day2_revoke_tests {
     }
 
     /// Repeating it is harmless and keeps the first reason.
+    #[tokio::test]
+    async fn bluez_retry_wait_stops_when_shutdown_arrives() {
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
+        shutdown_tx.send(()).expect("shutdown receiver exists");
+
+        assert!(!super::wait_for_bluez_retry(&mut shutdown_rx).await);
+    }
+
     #[test]
     fn a_repeated_revocation_keeps_the_first_reason() {
         let td = TempDir::new().expect("tempdir");

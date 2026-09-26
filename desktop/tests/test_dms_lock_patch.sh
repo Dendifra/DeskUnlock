@@ -164,6 +164,19 @@ else
     bad "04b niente restart al secondo giro" "count=$(grep -c 'restart dms.service' "$SYAUTH_TEST_SYSTEMCTL_LOG")"
 fi
 
+rm -f "$T/loaded"
+SYAUTH_DMS_DIR="$T" SYAUTH_UNLOCK_READY="$T/marker" SYAUTH_DMS_LOADED="$T/loaded" SYAUTH_PRESENCED_ACTIVE=0 bash "$PATCH" >/dev/null 2>&1
+if [[ "$(cat "$T/loaded" 2>/dev/null)" == "$(basename "$DIR")" ]]; then
+    ok "04c un marker perso viene ricreato senza riavviare DMS"
+else
+    bad "04c ricreazione marker" "loaded=$(cat "$T/loaded" 2>/dev/null)"
+fi
+if [[ "$(grep -c 'restart dms.service' "$SYAUTH_TEST_SYSTEMCTL_LOG")" -eq 1 ]]; then
+    ok "04d la ricreazione del marker non riavvia DMS"
+else
+    bad "04d niente restart durante ricreazione marker" "count=$(grep -c 'restart dms.service' "$SYAUTH_TEST_SYSTEMCTL_LOG")"
+fi
+
 # ---------------------------------------------------------------------------
 # TC 03 — anchors missing: the indicator is not applied, nothing is damaged,
 # and the safety action still runs (a PAM service must never keep our module).

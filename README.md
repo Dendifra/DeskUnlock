@@ -154,14 +154,14 @@ battery management, and background-service policy vary by device and ROM.
 
 ## Quick start
 
-The current build is the **[v0.1.0-beta.2 pre-release](https://github.com/Dendifra/DeskUnlock/releases/tag/v0.1.0-beta.2)**: a signed Android APK and an Arch/CachyOS package. Verify the published `SHA256SUMS` before installing. Because it is a pre-release, GitHub does not mark it as the latest release; open the [releases list](https://github.com/Dendifra/DeskUnlock/releases) to find it.
+The current build is the **[v0.1.1 release](https://github.com/Dendifra/DeskUnlock/releases/tag/v0.1.1)**: a signed Android APK and an Arch/CachyOS package. Verify the published `SHA256SUMS` before installing.
 
 ### 1. Install the Linux package
 
 Download the `deskunlock-*-x86_64.pkg.tar.zst` asset, then:
 
 ```bash
-sudo pacman -U deskunlock-0.1.0-71-x86_64.pkg.tar.zst
+sudo pacman -U deskunlock-0.1.1-1-x86_64.pkg.tar.zst
 ```
 
 When Plasma Login is installed, the package wires its PAM service and orders

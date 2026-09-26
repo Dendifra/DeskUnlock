@@ -377,10 +377,11 @@ dms_active_or_starting() {
     systemctl --user -q is-active dms.service 2>/dev/null && return 0
     [[ "$(systemctl --user show -p ActiveState --value dms.service 2>/dev/null || true)" == "activating" ]]
 }
-if [[ -n "$adapted_names" && "$changed_any" == "1" ]] \
-    && dms_active_or_starting; then
-    printf 'syauth-dms-lock-patch: riavvio DMS durante l\x27avvio per caricare l\x27albero adattato (%s)\n' "$adapted_names" >&2
-    systemctl --user restart dms.service >/dev/null 2>&1 || true
+if [[ -n "$adapted_names" ]] && dms_active_or_starting; then
+    if [[ "$changed_any" == "1" ]]; then
+        printf 'syauth-dms-lock-patch: riavvio DMS durante l\x27avvio per caricare l\x27albero adattato (%s)\n' "$adapted_names" >&2
+        systemctl --user restart dms.service >/dev/null 2>&1 || true
+    fi
     mkdir -p "$(dirname "$LOADED_MARKER")" 2>/dev/null || true
     printf '%s\n' "$adapted_names" > "$LOADED_MARKER" 2>/dev/null || true
 fi

@@ -317,7 +317,7 @@ endif
 # deploy/version.env; the values are duplicated here only to keep the
 # Make invocation self-contained.
 
-PACKAGE_VERSION ?= 0.1.0
+PACKAGE_VERSION ?= 0.1.1
 RPM_RELEASE     ?= 1
 DEB_REVISION    ?= 1
 DIST_PREFIX     ?= syauth-$(PACKAGE_VERSION)
