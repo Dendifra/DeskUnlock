@@ -70,6 +70,12 @@ syauth-transport = { version = "0.1", path = "crates/syauth-transport" }
 syauth-mobile = { version = "0.1", path = "crates/syauth-mobile" }
 uuid = { version = "1" }
 
+[profile.dev]
+# `line-tables-only`: backtrace with file:line, no variable/type metadata.
+# Cuts target/debug roughly 60% (13G -> 4.9G) versus cargo's default `debug = 2`
+# while keeping panic/backtrace frames readable for e2e diagnosis.
+debug = 1
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

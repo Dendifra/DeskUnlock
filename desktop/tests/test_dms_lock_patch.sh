@@ -188,44 +188,5 @@ else
     bad "03b ancoraggi mancanti: il QML non viene toccato" "prima=$qml_before dopo=$qml_after"
 fi
 
-# ---------------------------------------------------------------------------
-# TC 05 — the runtime marker the lock screen reads: present only when the
-# master switch is on, a bond exists and the daemon is running. The env
-# overrides keep the test off the host's real state files.
-# ---------------------------------------------------------------------------
-T3="$(mktemp -d)"
-printf '[[bond]]\nkind = "Bonded"\npeer_id = "aaaa"\n' >"$T3/bonds.toml"
-
-SYAUTH_DMS_DIR="$T3/none" SYAUTH_UNLOCK_READY="$T3/marker" SYAUTH_PRESENCED_ACTIVE=1 \
-    SYAUTH_BONDS_FILE="$T3/bonds.toml" SYAUTH_DISABLED_FILE="$T3/nodisabled" \
-    bash "$PATCH" >/dev/null 2>&1
-if [[ -f "$T3/marker" ]]; then
-    ok "05 il marker esiste con master on + bond + demone attivo"
-else
-    bad "05 il marker esiste quando phone unlock e' pronto" "marker assente"
-fi
-
-rm -f "$T3/marker"
-SYAUTH_DMS_DIR="$T3/none" SYAUTH_UNLOCK_READY="$T3/marker" SYAUTH_PRESENCED_ACTIVE=0 \
-    SYAUTH_BONDS_FILE="$T3/bonds.toml" SYAUTH_DISABLED_FILE="$T3/nodisabled" \
-    bash "$PATCH" >/dev/null 2>&1
-if [[ ! -e "$T3/marker" ]]; then
-    ok "05b il marker sparisce quando il demone non c'e'"
-else
-    bad "05b il marker sparisce senza demone" "marker ancora presente"
-fi
-
-: > "$T3/marker"
-touch "$T3/disabled"
-SYAUTH_DMS_DIR="$T3/none" SYAUTH_UNLOCK_READY="$T3/marker" SYAUTH_PRESENCED_ACTIVE=1 \
-    SYAUTH_BONDS_FILE="$T3/bonds.toml" SYAUTH_DISABLED_FILE="$T3/disabled" \
-    bash "$PATCH" >/dev/null 2>&1
-if [[ ! -e "$T3/marker" ]]; then
-    ok "05c il master off toglie il marker (nessun override silenzioso)"
-else
-    bad "05c il master off toglie il marker" "marker ancora presente"
-fi
-rm -rf "$T3"
-
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

@@ -58,12 +58,25 @@ signature checks or disable Play Protect globally.
    syauth-control status
    ```
 
+   The first activation may show a protected authorization popup so the
+   per-user service manager can start at boot. On systems with Plasma Login,
+   the package wires PAM and orders the greeter after Bluetooth; password
+   fallback remains enabled.
+
 5. Lock the desktop and interact with the lock screen. The first genuine mouse
    movement, keyboard input, or Enter causes one authentication request; the
    Android biometric approval then completes the unlock.
 
 The lock surface appearing, or synthetic pointer initialization, does not
 start authentication by itself.
+
+## Boot readiness
+
+The Plasma integration creates
+`/etc/systemd/system/plasmalogin.service.d/deskunlock.conf` with
+`After=bluetooth.service`. This prevents the greeter from becoming
+interactive before the phone transport can initialize. If the integration was
+enabled manually, run `/usr/lib/syauth/syauth-pam-sync install` as root.
 
 ## Source build
 

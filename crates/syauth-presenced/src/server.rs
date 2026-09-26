@@ -49,6 +49,16 @@ pub const LISTEN_MODE: u32 = 0o600;
 /// waits in the kernel listen queue until a permit releases.
 pub const CONCURRENT_ACCEPT_CAP: usize = 4;
 
+/// Live backend handles published after the daemon has bound its socket.
+/// The initial value is empty while BlueZ starts.
+#[derive(Clone, Default)]
+pub struct BackendState {
+    /// Reload channel for the live orchestrator.
+    pub reload_tx: Option<mpsc::Sender<ReloadCommand>>,
+    /// Live challenge orchestrator, when BlueZ initialization succeeded.
+    pub orchestrator: Option<Arc<Orchestrator>>,
+}
+
 /// Stub `reason` field the S-002 responder writes back on every
 /// `Request::Challenge`. Real outcomes (`offline`, `denied`,
 /// `replay`, `bad-signature`, `response-timeout`, `ok`) are wired in
@@ -159,6 +169,9 @@ pub struct ServeConfig {
     /// whose nonce matches what the orchestrator will send.
     /// Production always `None`.
     pub test_fixed_nonce: Option<[u8; NONCE_BYTES]>,
+    /// Optional live backend state. The latest state is read for each request
+    /// so socket readiness is independent of BlueZ.
+    pub backend_rx: Option<watch::Receiver<BackendState>>,
     /// Wall-clock time captured at daemon boot. Surfaced in every
     /// `Response::Status` so the `syauth status` client can render
     /// `started_at=<RFC3339>` without a separate probe. `None`
@@ -183,10 +196,13 @@ where
     set_socket_mode(&config.socket_path)?;
     let _guard = SocketGuard::new(&config.socket_path);
     let expected_uid = config.expected_uid.unwrap_or_else(|| nix::unistd::geteuid().as_raw());
-    let reload_tx = config.reload_tx.clone();
-    let orchestrator = config.orchestrator.clone();
+    let backend = BackendState {
+        reload_tx: config.reload_tx.clone(),
+        orchestrator: config.orchestrator.clone(),
+    };
     let test_fixed_nonce = config.test_fixed_nonce;
     let started_at = config.started_at.unwrap_or_else(SystemTime::now);
+    let backend_rx = config.backend_rx.clone();
     let semaphore = Arc::new(Semaphore::new(CONCURRENT_ACCEPT_CAP));
     tracing::info!(
         socket = %config.socket_path.display(),
@@ -226,8 +242,8 @@ where
                     stream,
                     expected_uid,
                     permit,
-                    reload_tx.clone(),
-                    orchestrator.clone(),
+                    backend.clone(),
+                    backend_rx.clone(),
                     test_fixed_nonce,
                     started_at,
                 );
@@ -257,8 +273,8 @@ fn spawn_connection(
     stream: UnixStream,
     expected_uid: u32,
     permit: OwnedSemaphorePermit,
-    reload_tx: Option<mpsc::Sender<ReloadCommand>>,
-    orchestrator: Option<Arc<Orchestrator>>,
+    backend: BackendState,
+    backend_rx: Option<watch::Receiver<BackendState>>,
     test_fixed_nonce: Option<[u8; NONCE_BYTES]>,
     started_at: SystemTime,
 ) -> JoinHandle<()> {
@@ -267,7 +283,17 @@ fn spawn_connection(
         // releases it (even on panic) and unblocks any queued accept
         // waiting on the cap.
         let _permit = permit;
-        if let Err(err) = handle_connection(stream, expected_uid, reload_tx, orchestrator, test_fixed_nonce, started_at).await {
+        if let Err(err) = handle_connection(
+            stream,
+            expected_uid,
+            backend.reload_tx,
+            backend.orchestrator,
+            backend_rx,
+            test_fixed_nonce,
+            started_at,
+        )
+        .await
+        {
             tracing::debug!(error = %err, "connection handler returned with error");
         }
     })
@@ -283,6 +309,7 @@ async fn handle_connection(
     expected_uid: u32,
     reload_tx: Option<mpsc::Sender<ReloadCommand>>,
     orchestrator: Option<Arc<Orchestrator>>,
+    backend_rx: Option<watch::Receiver<BackendState>>,
     test_fixed_nonce: Option<[u8; NONCE_BYTES]>,
     started_at: SystemTime,
 ) -> Result<(), HandlerError> {
@@ -304,6 +331,13 @@ async fn handle_connection(
             "accepting connection from unexpected uid (filesystem ACL is primary defense)"
         );
     }
+    let (reload_tx, orchestrator) = match backend_rx {
+        Some(rx) => {
+            let state = rx.borrow().clone();
+            (state.reload_tx, state.orchestrator)
+        }
+        None => (reload_tx, orchestrator),
+    };
     let (mut read_half, mut write_half) = stream.into_split();
     let request: Request = read_frame(&mut read_half).await?;
     tracing::debug!(?request, "request decoded");

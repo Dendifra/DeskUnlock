@@ -1,6 +1,7 @@
 pkgname=deskunlock
 pkgver=0.1.0
-pkgrel=61
+pkgrel=72
+install=deskunlock.install
 provides=('syauth-suite=0.1.0')
 conflicts=('syauth-suite')
 replaces=('syauth-suite')
@@ -42,6 +43,7 @@ package() {
         [[ -f "$file" ]] || continue
         install -Dm755 "$file" "$pkgdir/usr/lib/syauth/$(basename "$file")"
     done
+    install -Dm644 packaging/arch/deskunlock.install "$pkgdir/deskunlock.install"
     for file in desktop/systemd/*.service desktop/systemd/*.timer desktop/systemd/*.path; do
         install -Dm644 "$file" "$pkgdir/usr/lib/systemd/user/$(basename "$file")"
     done

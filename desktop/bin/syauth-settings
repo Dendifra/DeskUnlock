@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -137,6 +138,13 @@ def get_syauth_state():
         "bonded": bonded,
         "revoked": revoked,
         "last_unlock": last_unlock,
+        # The presence daemon is what actually uses Bluetooth: an adapter that
+        # is Powered but not served says "Disponibile" and misleads the
+        # operator into thinking the phone link is up (observed 2026-09-26).
+        "daemon_active": run_command(
+            ["systemctl", "--user", "is-active", "syauth-presenced"]
+        ).strip()
+        == "active",
     }
 
 
@@ -247,13 +255,26 @@ def get_phone_info():
         if len(fields) == 4 and fields[2] == "bonded":
             active.append(fields[1].strip() or "Telefono Android")
 
+    # Telemetry freshness: the daemon rewrites rssi.last on every sample the
+    # phone pushes over GATT (2 s cadence). A stale or missing file means the
+    # phone is not talking even when Bluetooth is "Connected" at the radio
+    # level (observed 2026-09-26: the GUI stayed green while the phone was
+    # mute after a disk cleanup).
+    sample_age_ms = None
+    try:
+        rssi = Path("/run/user/1000/syauth/rssi.last").read_text()
+        match = re.search(r"sample_epoch_ms=(\d+)", rssi)
+        if match:
+            sample_age_ms = int(time.time() * 1000) - int(match.group(1))
+    except OSError:
+        pass
+
     return {
         "name": active[0] if len(active) == 1 else (
             _("Più telefoni associati") if active else _("Nessun dispositivo associato")
         ),
-        # Existing bond records do not contain a Bluetooth address. Until a
-        # peer-bound status is available, do not claim connected/disconnected.
-        "connected": None,
+        "samples_fresh": sample_age_ms is not None and sample_age_ms <= 10000,
+        "sample_age_ms": sample_age_ms,
         "paired": len(active) == 1,
     }
 
@@ -833,6 +854,10 @@ class SettingsWindow(QMainWindow):
         self.setWindowTitle(_("DeskUnlock"))
         self.setMinimumWidth(520)
         self.setMaximumWidth(620)
+        # Small screens: the content scrolls instead of forcing the window
+        # taller than the display (observed 2026-09-26: vertical was
+        # effectively fixed because the cards dictated the minimum height).
+        self.setMinimumHeight(420)
 
         icon = deskunlock_icon()
 
@@ -847,7 +872,16 @@ class SettingsWindow(QMainWindow):
         root = QWidget()
         self.setCentralWidget(root)
 
-        main = QVBoxLayout(root)
+        outer = QVBoxLayout(root)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        scroll.setWidget(content)
+
+        main = QVBoxLayout(content)
         main.setContentsMargins(28, 24, 28, 24)
         main.setSpacing(16)
 
@@ -881,9 +915,11 @@ class SettingsWindow(QMainWindow):
 
         main.addLayout(footer)
 
+        outer.addWidget(scroll)
+
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
-        self.timer.start(2000)
+        self.timer.start(4000)
 
         self.refresh()
 
@@ -1048,8 +1084,22 @@ class SettingsWindow(QMainWindow):
             "color: #aeb4bc;"
         )
 
+        # Detail line under the state: a small, dim hint, not a second
+        # headline — the colour of the state label already carries the
+        # verdict (2026-09-26: the long "Associato · Telefono muto" style
+        # texts read as errors and were confusing).
+        self.phone_hint = QLabel()
+        hint_font = self.phone_hint.font()
+        hint_font.setPointSize(8)
+        self.phone_hint.setFont(hint_font)
+        self.phone_hint.setStyleSheet(
+            "color: #7d848e;"
+        )
+        self.phone_hint.setVisible(False)
+
         text.addWidget(self.phone_name)
         text.addWidget(self.phone_state)
+        text.addWidget(self.phone_hint)
 
         layout.addWidget(icon_label)
         layout.addSpacing(10)
@@ -1337,11 +1387,17 @@ class SettingsWindow(QMainWindow):
 
         main.addWidget(card)
 
+    def _set_phone_hint(self, text):
+        self.phone_hint.setText(text)
+        self.phone_hint.setVisible(bool(text))
+
     def refresh(self):
         master = get_master_state()
         data = get_syauth_state()
         proximity = get_proximity_state()
         idle = get_idle_settings()
+        phone = get_phone_info()
+        samples_ok = phone["samples_fresh"]
 
         self.idle_toggle.blockSignals(True)
         self.idle_toggle.setChecked(idle["enabled"])
@@ -1364,12 +1420,18 @@ class SettingsWindow(QMainWindow):
         self.proximity_profile.blockSignals(False)
 
         proximity_label, proximity_active = proximity_display_state(proximity)
+        if proximity["available"] and proximity["enabled"] and not samples_ok:
+            # The phone is not talking even though the watcher is armed: no
+            # proximity decision is possible, so the row must not stay green
+            # on stale samples (observed 2026-09-26 during a phone reboot).
+            proximity_label = _("Telefono non rilevato")
+            proximity_active = False
         self.proximity_state.setText(proximity_label)
         self.proximity_system_row.set_status(
             proximity_active,
             _("Attivo") if proximity_active else proximity_label,
         )
-        if proximity["available"] and proximity["enabled"]:
+        if proximity["available"] and proximity["enabled"] and samples_ok:
             self.proximity_state.setStyleSheet(
                 "color: #63c174;"
                 if proximity["state"] == "NEAR"
@@ -1417,8 +1479,6 @@ class SettingsWindow(QMainWindow):
                 _("Ripristina")
             )
 
-        phone = get_phone_info()
-
         self.phone_name.setText(
             phone["name"]
             if data["bonded"] > 0
@@ -1428,13 +1488,19 @@ class SettingsWindow(QMainWindow):
         self.device_action.hide()
         self.device_revoke.hide()
 
+        # Short state + colour carries the verdict; the dim hint line below
+        # explains it without looking like an error (2026-09-26).
+        self.phone_hint.setVisible(False)
+        self.phone_hint.setText("")
+
         if data["bonded"] == 0:
             self.phone_state.setText(
-                _("DeskUnlock non ha un telefono configurato")
+                _("Non associato")
             )
             self.phone_state.setStyleSheet(
                 "color: #e06c75;"
             )
+            self._set_phone_hint(_("Associa un telefono per iniziare"))
 
             self.device_action.setText(
                 _("Associa telefono")
@@ -1446,11 +1512,12 @@ class SettingsWindow(QMainWindow):
 
         elif master == "degraded":
             self.phone_state.setText(
-                _("Associazione presente · Problema DeskUnlock")
+                _("Associato")
             )
             self.phone_state.setStyleSheet(
                 "color: #e06c75;"
             )
+            self._set_phone_hint(_("Problema DeskUnlock · premi Controlla"))
 
             self.device_action.setText(
                 _("Controlla")
@@ -1460,21 +1527,35 @@ class SettingsWindow(QMainWindow):
             )
             self.device_action.show()
 
-        elif phone["connected"] is None:
-            self.phone_state.setText(_("Associato"))
-            self.phone_state.setProperty("role", "hint")
-
-        elif phone["connected"]:
+        elif master == "off":
             self.phone_state.setText(
-                _("Associato · Connesso")
+                _("Non associato")
+            )
+            self.phone_state.setStyleSheet(
+                "color: #e06c75;"
+            )
+            self._set_phone_hint(_("DeskUnlock è disattivato"))
+
+        elif phone["samples_fresh"]:
+            self.phone_state.setText(
+                _("Associato")
             )
             self.phone_state.setStyleSheet(
                 "color: #63c174;"
             )
 
+        elif phone["paired"]:
+            self.phone_state.setText(
+                _("Associato")
+            )
+            self.phone_state.setStyleSheet(
+                "color: #d5a14f;"
+            )
+            self._set_phone_hint(_("Il telefono non sta comunicando"))
+
         else:
             self.phone_state.setText(
-                _("Associato · Non connesso")
+                _("Associato")
             )
             self.phone_state.setStyleSheet(
                 "color: #aeb4bc;"
@@ -1492,17 +1573,39 @@ class SettingsWindow(QMainWindow):
                 )
                 self.device_action.show()
 
-        self.bluetooth_row.set_status(
-            data["bluetooth"],
-            _("Disponibile")
-            if data["bluetooth"]
-            else _("Non disponibile"),
-        )
+        if master == "off":
+            self.bluetooth_row.set_status(
+                False,
+                _("Non utilizzato (DeskUnlock spento)"),
+            )
+        elif not data["bluetooth"]:
+            self.bluetooth_row.set_status(
+                False,
+                _("Non disponibile"),
+            )
+        elif not data["daemon_active"]:
+            self.bluetooth_row.set_status(
+                False,
+                _("Demone non attivo"),
+            )
+        elif not samples_ok:
+            self.bluetooth_row.set_status(
+                False,
+                _("Telefono non rilevato"),
+            )
+        else:
+            self.bluetooth_row.set_status(
+                True,
+                _("Disponibile"),
+            )
 
         # "Associato" means the phone is actually reachable, not merely that a
-        # bond file exists on disk.
+        # bond file exists on disk. Same fast freshness signal as the phone,
+        # Bluetooth and proximity rows so the whole card flips together
+        # (2026-09-26: the 60 s presence window left these rows green for the
+        # first minute of a phone reboot).
         association_label, associated = association_display(
-            data["bonded"], phone_present()
+            data["bonded"], samples_ok
         )
 
         self.bond_row.set_status(
@@ -1525,6 +1628,7 @@ class SettingsWindow(QMainWindow):
         phone_unlock_armed, phone_unlock_reason = fingerprint_unlock_health(
             master,
             data["bonded"],
+            present=samples_ok,
         )
         self.fingerprint_row.set_status(
             phone_unlock_armed,

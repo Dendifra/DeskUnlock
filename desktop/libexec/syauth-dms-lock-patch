@@ -37,32 +37,35 @@ notify() {
     command -v notify-send >/dev/null 2>&1 && notify-send --app-name=DeskUnlock "$1" || true
 }
 
-# The runtime marker the lock screen reads: phone unlock is armed only when
-# the master switch is on, at least one bond exists and the daemon runs.
-# The 30 s timer tick refreshes it, so the icon follows the real state and
-# never lingers after a dissociation or a master switch-off. Kept before the
-# tree loop (and its early exit) because the marker is runtime state that
-# must follow reality even while DMS has no extracted tree.
+# Path the lock screen watches for "phone unlock is usable right now". The
+# marker itself is maintained by syauth-unlock-marker (a 10 s timer that
+# checks the phone is actually reachable); this script only embeds the
+# path into the QML.
 MARKER="${SYAUTH_UNLOCK_READY:-$RUNTIME/syauth/unlock-ready}"
+
+# The first timer tick may run before DMS has extracted its runtime tree.
+# Waiting here lets the adaptation happen during DMS startup instead of on a
+# later visible 60-second tick.
+DMS_TREE_WAIT_SECONDS=60
+
 # Written with the adapted tree name(s) right after DMS is restarted to load
 # the patch. The GUI reads it to tell "patched on disk" from "actually loaded"
 # without a fragile process-start-time comparison.
 LOADED_MARKER="${SYAUTH_DMS_LOADED:-$RUNTIME/syauth/dms-lock-loaded}"
-BONDS_FILE="${SYAUTH_BONDS_FILE:-/var/lib/syauth/bonds.toml}"
-DISABLED_FILE="${SYAUTH_DISABLED_FILE:-$HOME/.config/syauth/disabled}"
-if [[ "${SYAUTH_PRESENCED_ACTIVE:-auto}" == "auto" ]]; then
-    if systemctl --user -q is-active syauth-presenced 2>/dev/null; then PRESENCED=1; else PRESENCED=0; fi
-else
-    PRESENCED="$SYAUTH_PRESENCED_ACTIVE"
-fi
-if [[ "$PRESENCED" == "1" && ! -e "$DISABLED_FILE" ]] && grep -q 'kind = "Bonded"' "$BONDS_FILE" 2>/dev/null; then
-    mkdir -p "$(dirname "$MARKER")" 2>/dev/null || true
-    : > "$MARKER" 2>/dev/null || true
-else
-    rm -f "$MARKER" 2>/dev/null || true
-fi
 
-[[ -d "$SEARCH_ROOT" ]] || exit 0
+dms_tree_ready() {
+    local dir
+    for dir in "$SEARCH_ROOT"/*/; do
+        [[ -f "$dir/Modules/Lock/Pam.qml" ]] && return 0
+    done
+    return 1
+}
+
+deadline=$((SECONDS + DMS_TREE_WAIT_SECONDS))
+while ! dms_tree_ready && [[ "$SECONDS" -lt "$deadline" ]]; do
+    sleep 1
+done
+dms_tree_ready || exit 0
 
 status=0
 changed_any=0
@@ -236,6 +239,10 @@ if content.is_file():
         "    MouseArea {\n"
         "        anchors.fill: parent\n"
         "        hoverEnabled: true\n"
+        # The lock screen must not show a pointer: this full-screen area
+        # exists only to notice movement, and a visible white arrow on the
+        # lock screen reads as a glitch (observed 2026-09-26).
+        "        cursorShape: Qt.BlankCursor\n"
         "        property real syauthEnterX: 0\n"
         "        property real syauthEnterY: 0\n"
         "        property bool syauthHoverActive: false\n"
@@ -366,11 +373,13 @@ done
 # the patched tree; the next tick sees an already-adapted tree, does not
 # change anything and does not restart again. No loop.
 adapted_names="$(IFS=,; printf '%s' "${adapted_trees[*]:-}")"
-loaded_names="$(cat "$LOADED_MARKER" 2>/dev/null || true)"
-if [[ -n "$adapted_names" ]] \
-    && { [[ "$changed_any" == "1" ]] || [[ "$loaded_names" != "$adapted_names" ]]; } \
-    && systemctl --user -q is-active dms.service 2>/dev/null; then
-    printf 'syauth-dms-lock-patch: riavvio DMS per caricare l\x27albero adattato (%s)\n' "$adapted_names" >&2
+dms_active_or_starting() {
+    systemctl --user -q is-active dms.service 2>/dev/null && return 0
+    [[ "$(systemctl --user show -p ActiveState --value dms.service 2>/dev/null || true)" == "activating" ]]
+}
+if [[ -n "$adapted_names" && "$changed_any" == "1" ]] \
+    && dms_active_or_starting; then
+    printf 'syauth-dms-lock-patch: riavvio DMS durante l\x27avvio per caricare l\x27albero adattato (%s)\n' "$adapted_names" >&2
     systemctl --user restart dms.service >/dev/null 2>&1 || true
     mkdir -p "$(dirname "$LOADED_MARKER")" 2>/dev/null || true
     printf '%s\n' "$adapted_names" > "$LOADED_MARKER" 2>/dev/null || true
