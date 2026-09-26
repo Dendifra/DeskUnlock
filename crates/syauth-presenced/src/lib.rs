@@ -33,4 +33,4 @@ pub use runtime::{
     BOND_KEY_FILE_EXT, Config, DEFAULT_AUDIT_LOG_PATH, DEFAULT_BONDS_FILE, DEFAULT_KEYS_DIR, DEFAULT_SOCKET_BASENAME, InjectedResponse,
     PIDFILE_BASENAME, PeripheralMode, RUNTIME_SUBDIR, RunError, ShutdownReason, run,
 };
-pub use server::{CONCURRENT_ACCEPT_CAP, LISTEN_MODE, STUB_CHALLENGE_REASON, ServeConfig, ServeError, serve};
+pub use server::{BackendState, CONCURRENT_ACCEPT_CAP, LISTEN_MODE, STUB_CHALLENGE_REASON, ServeConfig, ServeError, serve};

@@ -64,8 +64,9 @@ Before release, scan both payload and final package for:
 
 `deskunlock.install` invokes `/usr/lib/syauth/syauth-pam-sync install` from
 `post_install` and `post_upgrade` when `plasmalogin` exists. The helper is
-idempotent, preserves the `system-login` password fallback, and no
-`post_remove` callback strips PAM configuration during package renames.
+idempotent, preserves the `system-login` password fallback, and orders the
+Plasma greeter after `bluetooth.service`. No `post_remove` callback strips PAM
+configuration during package renames.
 
 ## Arch packaging
 

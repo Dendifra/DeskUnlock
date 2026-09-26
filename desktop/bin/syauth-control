@@ -52,6 +52,19 @@ start_unit() {
     systemctl --user start "$1"
 }
 
+ensure_linger() {
+    local uid user
+    uid="$(id -u)"
+    if [[ "$(loginctl show-user "$uid" -p Linger --value 2>/dev/null || true)" == "yes" ]]; then
+        return 0
+    fi
+    user="${USER:-$(id -un)}"
+    if ! loginctl enable-linger "$user"; then
+        echo "Syauth: impossibile abilitare il servizio al boot per $user" >&2
+        return 1
+    fi
+}
+
 # Proximity Lock is optional. Turning it off in the GUI stops its watcher on
 # purpose, so a stopped proximity unit must not drag the whole session to
 # DEGRADED: authentication — the master switch's actual job — is still up.
@@ -109,6 +122,7 @@ off_cmd() {
     systemctl --user disable --now syauth-proximity.service >/dev/null 2>&1 || true
     systemctl --user disable --now syauth-presenced.service >/dev/null 2>&1 || true
     systemctl --user disable --now syauth-idle-lock.service >/dev/null 2>&1 || true
+    systemctl --user disable --now syauth-unlock-marker.timer >/dev/null 2>&1 || true
 
     # `gatt.ready` is the orchestrator-check marker under /run/syauth; the
     # daemon's presence/telemetry markers live under the user runtime dir.
@@ -123,6 +137,7 @@ off_cmd() {
 }
 
 on_cmd() {
+    ensure_linger || return 1
     rm -f "$MARKER"
     command -v logger >/dev/null 2>&1 &&
         logger -t syauth-control "master ON by uid=$(id -u) pid=$$ ppid=$PPID comm=$(ps -o comm= -p "$PPID" 2>/dev/null || echo '?')" || true
@@ -135,6 +150,7 @@ on_cmd() {
     enable_unit syauth-reconcile.timer
     enable_unit syauth-dms-lock-patch.timer
     enable_unit syauth-idle-lock.service
+    enable_unit syauth-unlock-marker.timer
 
     if ! start_unit syauth-presenced.service; then
         echo "Syauth ON fallito: presenced"
@@ -153,6 +169,7 @@ on_cmd() {
     fi
 
     systemctl --user start syauth-idle-lock.service >/dev/null 2>&1 || true
+    start_unit syauth-unlock-marker.timer
     echo "Syauth: ON"
 }
 

@@ -64,6 +64,9 @@ test:
 	python3 tests/settings_system_status.py
 	python3 tests/settings_fingerprint_health.py
 	bash desktop/tests/test_dms_lock_patch.sh
+	bash desktop/tests/test_greeter_install.sh
+	bash desktop/tests/test_user_linger.sh
+	bash desktop/tests/test_unit_activation.sh
 	python3 -m unittest desktop.tests.test_pairing_dialog
 
 # Run all tests with verbose output.
@@ -124,8 +127,11 @@ android-test-compiles:
 
 scope-discipline:
 	@echo "Running scope-discipline grep..."
-	@if git grep -nE \
-	    '(v0\.[0-9]+ ?(demo|will|follow.?up|reinstates|candidate))|(for the v0\.)|(production (version|will))|(demo only)|(temporary until)|(placeholder until)' \
+	@forbidden_scope=$$(printf '%s' \
+	    '(v0\.' '[0-9]+ ?(demo|will|follow.?up|reinstates|candidate))|' \
+	    '(for the ' 'v0\.)|(production ' '(version|will))|' \
+	    '(demo ' 'only)|(temporary ' 'until)|(placeholder until)'); \
+	if git grep -nE "$$forbidden_scope" \
 	    -- 'crates/' 'syauth-android/app/src/main/' 'deploy/' \
 	    ':!:*tests/*' ':!:*test/*' ':!:*build/*' ':!:*target/*'; then \
 	  echo ""; \

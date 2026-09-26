@@ -23,8 +23,13 @@
 # Idempotent: a service that already carries the line is left alone.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PAM_DIR="${SYAUTH_PAM_DIR:-/etc/pam.d}"
 SERVICE="${SYAUTH_GREETER_SERVICE:-plasmalogin}"
+SYNC_BIN="${SYAUTH_PAM_SYNC_BIN:-/usr/lib/syauth/syauth-pam-sync}"
+if [[ ! -x "$SYNC_BIN" && -x "$SCRIPT_DIR/../desktop/libexec/syauth-pam-sync" ]]; then
+    SYNC_BIN="$SCRIPT_DIR/../desktop/libexec/syauth-pam-sync"
+fi
 
 if [[ "$(id -u)" -ne 0 ]]; then
     echo "enable-greeter-unlock: run as root (sudo)" >&2
@@ -42,5 +47,9 @@ if grep -q "pam_syauth" "$service_file"; then
     exit 0
 fi
 
-syauth install-pam --service "$SERVICE" --pam-dir "$PAM_DIR" --with-presenced=false --yes
+if [[ -x "$SYNC_BIN" ]]; then
+    SYAUTH_PAM_DIR="$PAM_DIR" SYAUTH_GREETER_SERVICE="$SERVICE" "$SYNC_BIN" install
+else
+    syauth install-pam --service "$SERVICE" --pam-dir "$PAM_DIR" --with-presenced=false --yes
+fi
 echo "enable-greeter-unlock: phone unlock armed at the $SERVICE greeter (password fallback preserved)"

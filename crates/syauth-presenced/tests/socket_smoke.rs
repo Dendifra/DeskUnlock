@@ -21,7 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use syauth_presenced::{LISTEN_MODE, Request, Response, STUB_CHALLENGE_REASON, ServeConfig, read_frame, serve, write_frame};
+use syauth_presenced::{BackendState, LISTEN_MODE, Request, Response, STUB_CHALLENGE_REASON, ServeConfig, read_frame, serve, write_frame};
 use tempfile::TempDir;
 use tokio::{
     net::UnixStream,
@@ -88,6 +88,7 @@ impl Daemon {
             // existing assertions stay green.
             orchestrator: None,
             test_fixed_nonce: None,
+            backend_rx: Some(tokio::sync::watch::channel(BackendState::default()).1),
             started_at: None,
         };
         let handle = tokio::spawn(async move {
@@ -143,6 +144,13 @@ async fn send_challenge(stream: &mut UnixStream) -> Result<(), syauth_presenced:
         nonce: TEST_NONCE.to_vec(),
     };
     write_frame(stream, &request).await
+}
+
+#[tokio::test]
+async fn socket_binds_before_backend_state_is_available() {
+    let mut daemon = Daemon::spawn(Some(current_uid())).await;
+    assert!(daemon.socket.exists(), "the PAM socket must not wait for BlueZ");
+    daemon.shutdown().await;
 }
 
 #[tokio::test]

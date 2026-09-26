@@ -33,6 +33,16 @@ reload_user_manager() {
     systemctl --user daemon-reload
 }
 
+ensure_linger() {
+    local uid user
+    uid="$(id -u)"
+    if [[ "$(loginctl show-user "$uid" -p Linger --value 2>/dev/null || true)" == "yes" ]]; then
+        return 0
+    fi
+    user="${USER:-$(id -un)}"
+    loginctl enable-linger "$user" || warn "servizio al boot non abilitato per $user"
+}
+
 start_dms() {
     # DMS must remain available even when the Syauth master switch is OFF.
     systemctl --user start --no-block dms.service ||
@@ -78,11 +88,13 @@ activate_core() {
     fi
 
     mark_pairing_mode_when_unassociated
+    ensure_linger
     unit_enable_start syauth-presenced.service
     unit_enable_start syauth-proximity.service
     unit_enable_start syauth-reconcile.path
     unit_enable_start syauth-reconcile.timer
     unit_enable_start syauth-dms-lock-patch.timer
+    unit_enable_start syauth-unlock-marker.timer
     systemctl --user enable syauth-idle-lock.service >/dev/null 2>&1 || true
 
     systemctl --user start --no-block syauth-idle-lock.service >/dev/null 2>&1 || true
