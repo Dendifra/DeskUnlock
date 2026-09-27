@@ -26,7 +26,7 @@ import sys
 
 paths = [Path(p) for p in sys.argv[1:]]
 
-serial = re.compile(r"\bR[A-Z0-9]{9,13}\b")
+serial = re.compile(r"\bR[0-9][A-Z0-9]{8,12}\b")
 peer_assignment = re.compile(r"(?i)\b(peer_id|peer-id)(\s*[=:]\s*)[0-9a-f]{24,64}\b")
 bond_key_assignment = re.compile(r"(?i)\bbond_key_hex(\s*[=:]\s*)[0-9a-f]{64}\b")
 keystore_alias = re.compile(r"\bsyauth\.ed25519\.[A-Za-z0-9._-]{8,}\b")

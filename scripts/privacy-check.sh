@@ -34,8 +34,8 @@ if [[ -n "$AUDIT_USER" && "$AUDIT_USER" != "root" && "$AUDIT_USER" != "user" ]];
     report "local developer login appears in the tracked tree:" "$user_hits"
 fi
 
-serials="$(git grep -nE '\bR[A-Z0-9]{9,13}\b' -- README.md SECURITY.md CHANGELOG.md docs specs 2>/dev/null || true)"
-report "device serial in public documentation:" "$serials"
+serials="$(git grep -nE '\bR[0-9][A-Z0-9]{8,12}\b' -- . 2>/dev/null || true)"
+report "device serial in tracked tree:" "$serials"
 
 identifiers="$(git grep -nE '(peer_id|peer-id)[=: ]+[0-9a-fA-F]{24,64}|bond_key_hex[=: ]+[0-9a-fA-F]{64}|syauth\.ed25519\.[A-Za-z0-9._-]{8,}' -- README.md SECURITY.md CHANGELOG.md docs specs 2>/dev/null |
                grep -Ev 'syauth\.ed25519\.(peer-xyz|AABBCCDDEE01)' || true)"

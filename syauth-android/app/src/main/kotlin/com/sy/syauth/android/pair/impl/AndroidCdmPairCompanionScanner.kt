@@ -30,7 +30,7 @@
 // API surface: API 33+ exposes the `Executor`-shaped
 // `associate(AssociationRequest, Executor, Callback)` overload. The
 // app's `minSdk` is 26, but the production callers (the Compose
-// pair flow on the connected R5CY214FQHM running API 35) take this
+// pair flow on the connected <DEVICE_SERIAL> running API 35) take this
 // path; the [associate] function returns a typed failure on
 // pre-API-33 hosts.
 package com.sy.syauth.android.pair.impl

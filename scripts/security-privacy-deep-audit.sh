@@ -88,8 +88,8 @@ if [[ -n "$AUDIT_USER" && "$AUDIT_USER" != "root" && "$AUDIT_USER" != "user" ]];
 fi
 
 OUT="$TMP/serials.txt"
-git grep -nE '\bR[A-Z0-9]{9,13}\b' -- README.md SECURITY.md CHANGELOG.md docs specs 2>/dev/null >"$OUT" || true
-if [[ -s "$OUT" ]]; then print_hits "$OUT"; bad "device-serial-shaped identifiers found in public docs"; else ok "no device serials in public docs"; fi
+git grep -nE '\bR[0-9][A-Z0-9]{8,12}\b' -- . 2>/dev/null >"$OUT" || true
+if [[ -s "$OUT" ]]; then print_hits "$OUT"; bad "device-serial-shaped identifiers found in tracked tree"; else ok "no device serials in tracked tree"; fi
 
 OUT="$TMP/private-identifiers.txt"
 git grep -nE '(peer_id|peer-id)[=: ]+[0-9a-fA-F]{24,64}|bond_key_hex[=: ]+[0-9a-fA-F]{64}|syauth\.ed25519\.[A-Za-z0-9._-]{8,}' -- README.md SECURITY.md CHANGELOG.md docs specs 2>/dev/null >"$OUT" || true
@@ -122,7 +122,7 @@ history_fail() {
 
 history_fail "machine-specific mount/backup path" '/mnt/(Dati|Backups|GoogleDrive)(/|$)|/run/media/[A-Za-z0-9_.-]+/'
 history_fail "private-key material" '-----BEGIN (RSA |OPENSSH |EC |PGP )?PRIVATE KEY-----'
-history_fail "device serial" '\bR[A-Z0-9]{9,13}\b'
+history_fail "device serial" '\bR[0-9][A-Z0-9]{8,12}\b'
 history_fail "peer/key identifier" '(peer_id|peer-id)[=: ]+[0-9a-fA-F]{24,64}|bond_key_hex[=: ]+[0-9a-fA-F]{64}|syauth\.ed25519\.[A-Za-z0-9._-]{8,}'
 
 if [[ -n "$AUDIT_USER" && "$AUDIT_USER" != "root" && "$AUDIT_USER" != "user" ]]; then
