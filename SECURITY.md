@@ -1,8 +1,8 @@
 # Security policy
 
-DeskUnlock is authentication software and is currently beta software
-(`v0.1.0-beta.1`). Do not treat it as independently certified or as a
-replacement for evaluating the security of the Linux host and phone.
+DeskUnlock is authentication software and the current public release is
+`v0.1.1`. Do not treat it as independently certified or as a replacement for
+evaluating the security of the Linux host and phone.
 
 ## Reporting a vulnerability
 
@@ -30,7 +30,8 @@ The Android app does not request `INTERNET` in the committed manifest.
 
 The release APK is signed with a dedicated DeskUnlock release certificate. The
 private release key is outside this repository and must never be committed or
-published. Users should verify the SHA-256 checksum published with a beta APK.
+published. Users should verify the SHA-256 checksum published with each release
+asset set.
 
 ## Limitations
 
