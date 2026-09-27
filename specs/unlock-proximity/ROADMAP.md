@@ -1166,7 +1166,7 @@ response bytes — `denied` if equal to `DENIED_FRAME_BYTES`,
 
 **Description:** Ship `scripts/e2e-unlock.sh` that drives
 `pamtester syauth-test $USER authenticate` 100 times against the
-connected R5CY214FQHM phone with `SYAUTH_REAL_RADIOS=1`, extracts
+connected <DEVICE_SERIAL> phone with `SYAUTH_REAL_RADIOS=1`, extracts
 elapsed-ms from `/var/lib/syauth/last.log`, computes p50 / p95 / p99,
 and fails the build if **p50 > 1.5 s** OR **p99 > 2.0 s** (the SPEC
 §4.3 contract). Marked `#[ignore]` in CI; runnable on the

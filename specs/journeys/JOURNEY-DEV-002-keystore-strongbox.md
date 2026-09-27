@@ -367,12 +367,12 @@ the file is left untouched on disk; the home route surfaces a
 ### TC-07: BondRecord schema migration — new record round-trips
 
 **Given** a freshly-paired bond record carrying `keystoreAlias =
-"syauth.ed25519.peer-xyz"`, the bond_key, the host name, the peer id,
+"syauth.ed25519.<KEYSTORE_ALIAS>"`, the bond_key, the host name, the peer id,
 and the phone pubkey.
 **When** `BondStore.save(record)` writes the record and a subsequent
 `BondStore.load()` reads it back.
 **Then** the loaded `BondRecord` is byte-identical to the saved one;
-the on-disk TOML contains `keystore_alias = "syauth.ed25519.peer-xyz"`;
+the on-disk TOML contains `keystore_alias = "syauth.ed25519.<KEYSTORE_ALIAS>"`;
 no `phone_signing_key_hex` line is present.
 
 ### TC-08: `InMemorySigningKeyProvider` has no production callers
@@ -573,7 +573,7 @@ plan, captured in writing per AGENTS.md):
 > evidence (Keystore wiring shipped, `InMemorySigningKeyProvider`
 > deleted, schema bumped). DEV-001 was then reopened because the LESC
 > pair flow had never actually run against a real device; that ran
-> tonight's R5CY214FQHM e2e session, which surfaced three runtime
+> tonight's <DEVICE_SERIAL> e2e session, which surfaced three runtime
 > defects in the DEV-002 keystore path that had been masked while the
 > code was unreachable. This appendix walks every bullet of the
 > DEV-002 row's strict closure condition (original-row + reopen-row
@@ -671,7 +671,7 @@ The radio-free test
 `runPostBondExchange_success_propagates_keystore_alias_and_pubkey_into_bonded`
 in `RealPairBackendRuntimeTest.kt` proves the end-to-end propagation:
 given a fake Keystore generator returning alias
-`syauth.ed25519.AABBCCDDEE01` and a canonical 32-byte pubkey, the
+`syauth.ed25519.<KEYSTORE_ALIAS>` and a canonical 32-byte pubkey, the
 `LescResult.Bonded` the backend resolves carries those exact values.
 
 ### Radio-free Robolectric / JUnit unit test pinning the SPEC §3.2 D6 contract (Deliverable 3)
@@ -785,7 +785,7 @@ bullets:
 The reopen-row adds three additional bullets the original closure did
 not require:
 
-10. **A real pair flow against the connected R5CY214FQHM device
+10. **A real pair flow against the connected <DEVICE_SERIAL> device
     produces a `BondRecord` containing a non-empty `keystoreAlias`.**
 
     Static evidence: the production code paths (RealPairBackend →
@@ -809,7 +809,7 @@ not require:
     shows zero bytes of Ed25519 private key material.**
 
     ```
-    $ adb -s R5CY214FQHM shell run-as com.sy.syauth.android cat files/syauth-bond.toml
+    $ adb -s <DEVICE_SERIAL> shell run-as com.sy.syauth.android cat files/syauth-bond.toml
     schema_version = 2
     host_name = "fedora"
     peer_id = "AA:BB:CC:DD:EE:12"

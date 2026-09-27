@@ -4,7 +4,7 @@
 - Source roadmap: [specs/unlock-proximity/ROADMAP.md](../unlock-proximity/ROADMAP.md) — Step S-019.
 - Feature: `scripts/e2e-unlock.sh` benchmark harness that drives 100
   `pamtester syauth-test $USER authenticate` invocations against the
-  real R5CY214FQHM phone with `SYAUTH_REAL_RADIOS=1`, parses
+  real <DEVICE_SERIAL> phone with `SYAUTH_REAL_RADIOS=1`, parses
   `/var/lib/syauth/last.log` (audit format SPEC §3 #8 +
   JOURNEY-S-006), computes p50/p95/p99 from
   `elapsed_ms = t_end_ms - t_start_ms`, and fails non-zero on
@@ -17,7 +17,7 @@
 
 When **I am the operator who has shipped the syauth daemon
 (`syauth-presenced`), installed `pam_syauth.so` against the
-`syauth-test` PAM service, paired my R5CY214FQHM phone, and want to
+`syauth-test` PAM service, paired my <DEVICE_SERIAL> phone, and want to
 prove the SPEC §4.3 latency contract (`p50 < 1.5 s, p99 < 2.0 s`)
 holds end-to-end on real radios**, I want to **run a single command
 that drives 100 unlocks, summarizes the percentile distribution as
@@ -446,7 +446,7 @@ audit log path and a one-line fix hint; no JSON line is emitted.
 
 ### TC-08: Real-radio run with phone in range (REQUIRES OPERATOR)
 
-**Given** a paired R5CY214FQHM phone in range, daemon up,
+**Given** a paired <DEVICE_SERIAL> phone in range, daemon up,
 pamtester installed, PAM service `syauth-test` configured.
 
 **When** the operator runs `SYAUTH_REAL_RADIOS=1 make e2e-unlock`.

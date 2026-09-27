@@ -767,7 +767,7 @@ closure; the manifest is already in the unified state.
 
 #### Bullet — "A real e2e run completes both the pair and the unlock flows on the connected device with the resulting direction"
 
-- **Pair flow e2e** — completed end-to-end against R5CY214FQHM
+- **Pair flow e2e** — completed end-to-end against <DEVICE_SERIAL>
   earlier in this `/march` run. The runtime evidence (desktop's 6-digit
   numeric-comparison code, numeric app-OOB code, phone-side `BOND_BONDED`
   broadcast, `post-bond exchange complete` logcat line, desktop's
