@@ -74,7 +74,8 @@ section "Tracked-tree privacy"
 
 OUT="$TMP/home.txt"
 git grep -nE '/home/[A-Za-z0-9_.-]+|/Users/[A-Za-z0-9_.-]+' -- . 2>/dev/null \
-  | grep -Ev '\$root/home/\.config|/home/(user|UID)([^A-Za-z0-9_.-]|$)|/Users/(user|example)([^A-Za-z0-9_.-]|$)' >"$OUT" || true
+  | grep -v '^scripts/security-privacy-deep-audit.sh:' \
+  | grep -Ev '\$(root|ROOT)/home/\.config|/home/(user|UID)([^A-Za-z0-9_.-]|$)|/Users/(user|example)([^A-Za-z0-9_.-]|$)' >"$OUT" || true
 if [[ -s "$OUT" ]]; then print_hits "$OUT"; bad "personal-looking home paths found"; else ok "no personal-looking home paths"; fi
 
 OUT="$TMP/mounts.txt"
