@@ -1,25 +1,15 @@
 #!/usr/bin/env bash
-# Fast tracked-tree privacy gate. This runs under `make lint` and intentionally
-# stays cheaper than `security-privacy-deep-audit.sh`, which scans all refs,
-# history and published artifacts.
-#
-# Usage:
-#   bash scripts/privacy-check.sh
-# Optional local identity check:
-#   SYAUTH_AUDIT_USER=<login> bash scripts/privacy-check.sh
+# Fast tracked-tree privacy gate. This runs under `make lint`; the deeper
+# security-privacy-deep-audit.sh also scans history, refs and release assets.
 
 set -uo pipefail
-
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
-FICTIONAL_MAC='^(AA|BB|CC|DD|00|11|02):'
-ALLOWED_HOME='^/home/(user|UID|\.config)(/|$)'
 AUDIT_USER="${SYAUTH_AUDIT_USER:-$(id -un 2>/dev/null || true)}"
 fail=0
 
 report() {
-    local title="$1"
-    local body="$2"
+    local title="$1" body="$2"
     [[ -z "$body" ]] && return 0
     echo "PRIVACY: $title" >&2
     printf '%s\n' "$body" | sed 's/^/  /' >&2
@@ -27,15 +17,14 @@ report() {
 }
 
 macs="$(git grep -hoEi '\b([0-9a-f]{2}:){5}[0-9a-f]{2}\b' -- . 2>/dev/null |
-        grep -Ev "$FICTIONAL_MAC" | sort -u || true)"
+        grep -Ev '^(AA|BB|CC|DD|00|11|02):' | sort -u || true)"
 report "real-looking device address in the tracked tree:" "$macs"
 
-homes="$(git grep -hoE '/home/[A-Za-z0-9_.-]+(/[^[:space:]"'\''`)]*)?' -- . 2>/dev/null |
-         grep -Ev "$ALLOWED_HOME" | sort -u || true)"
+homes="$(git grep -nE '/home/[A-Za-z0-9_.-]+|/Users/[A-Za-z0-9_.-]+' -- . 2>/dev/null |
+         grep -Ev '\$root/home/\.config|/home/(user|UID)([^A-Za-z0-9_.-]|$)|/Users/(user|example)([^A-Za-z0-9_.-]|$)' || true)"
 report "personal-looking home directory in the tracked tree:" "$homes"
 
-mounts="$(git grep -hoE '/mnt/(Dati|Backups|GoogleDrive)(/[^[:space:]"'\''`)]*)?|/run/media/[A-Za-z0-9_.-]+(/[^[:space:]"'\''`)]*)?' -- . 2>/dev/null |
-          sort -u || true)"
+mounts="$(git grep -nE '/mnt/(Dati|Backups|GoogleDrive)(/|$)|/run/media/[A-Za-z0-9_.-]+/' -- . 2>/dev/null || true)"
 report "machine-specific mount/backup path in the tracked tree:" "$mounts"
 
 if [[ -n "$AUDIT_USER" && "$AUDIT_USER" != "root" && "$AUDIT_USER" != "user" ]]; then
@@ -43,13 +32,13 @@ if [[ -n "$AUDIT_USER" && "$AUDIT_USER" != "root" && "$AUDIT_USER" != "user" ]];
     report "local developer login appears in the tracked tree:" "$user_hits"
 fi
 
-# Samsung/Android serials commonly start with R and are long uppercase/digit
-# identifiers. The pattern is intentionally limited to public docs/specs to
-# avoid confusing hashes/constants in source code with device IDs.
 serials="$(git grep -nE '\bR[A-Z0-9]{9,13}\b' -- README.md SECURITY.md CHANGELOG.md docs specs 2>/dev/null || true)"
-report "device-serial-shaped identifier in public documentation:" "$serials"
+report "device serial in public documentation:" "$serials"
 
-keys="$(git grep -lE 'BEGIN (RSA |OPENSSH |EC |PGP |)?PRIVATE KEY|BEGIN PRIVATE KEY' -- . 2>/dev/null || true)"
+identifiers="$(git grep -nE '(peer_id|peer-id)[=: ]+[0-9a-fA-F]{24,64}|bond_key_hex[=: ]+[0-9a-fA-F]{64}|syauth\.ed25519\.[A-Za-z0-9._-]{8,}' -- README.md SECURITY.md CHANGELOG.md docs specs 2>/dev/null || true)"
+report "real-looking peer/key identifier in public documentation:" "$identifiers"
+
+keys="$(git grep -lE -- '-----BEGIN (RSA |OPENSSH |EC |PGP )?PRIVATE KEY-----' -- . 2>/dev/null || true)"
 report "private-key material marker is tracked:" "$keys"
 
 sensitive_names="$(git ls-files | grep -Ei '(^|/)(\.env($|\.)|.*\.(pem|p12|pfx|key|cred)$|bonds\.toml$|.*private.*key.*)' || true)"
