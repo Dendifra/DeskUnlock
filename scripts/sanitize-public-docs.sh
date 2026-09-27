@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Sanitize machine/operator identifiers from public documentation.
-# This intentionally edits only tracked documentation/spec text. Production
-# source code and test fixtures are not rewritten.
+# Sanitize machine/operator identifiers from project-owned public documentation.
+# Production source, tests and third-party/legal texts are never rewritten.
 #
 # Usage:
 #   bash scripts/sanitize-public-docs.sh
@@ -12,11 +11,11 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 mapfile -d '' FILES < <(
-  git ls-files -z -- '*.md' '*.txt' '*.rst' '*.adoc'
+  git ls-files -z -- README.md SECURITY.md CHANGELOG.md 'docs/**' 'specs/**'
 )
 
 if (( ${#FILES[@]} == 0 )); then
-  echo "No tracked documentation files found."
+  echo "No tracked project documentation files found."
   exit 0
 fi
 
@@ -39,6 +38,8 @@ allowed_home = {"user", "UID", ".config", "example"}
 changed = []
 
 for path in paths:
+    if not path.is_file():
+        continue
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
@@ -69,7 +70,6 @@ else:
     print("No sanitization changes required.")
 PY
 
-# The fast gate must pass after sanitization. It does not replace manual review.
 bash scripts/privacy-check.sh
 
 echo
