@@ -5,6 +5,7 @@
 #                  cargo deny check, scope-discipline grep).
 #   - `make test` (workspace, all targets, all features).
 #   - `make build` (release; verifies `libpam_syauth.so` ships).
+#   - deep public-repository privacy/history/release audit.
 #
 # System libraries the bluer / libpam-sys / libbluetooth-sys build
 # scripts consume are installed from Arch repositories in every job.
@@ -106,6 +107,24 @@ jobs:
 
       - name: Verify syauth-presenced daemon exists
         run: test -x target/release/syauth-presenced
+
+  privacy:
+    name: privacy (tree + history + release)
+    runs-on: ubuntu-latest
+    env:
+      SYAUTH_AUDIT_USER: denis
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all public refs
+        run: git fetch --force --prune origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+
+      - name: Deep security/privacy audit
+        run: bash scripts/security-privacy-deep-audit.sh v0.1.1
 
   # NOTE: the Android assembleDebug job depends on the Rust-built
   # `crates/syauth-mobile/target/syauth_mobile.aar` (UniFFI Kotlin
