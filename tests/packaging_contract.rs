@@ -15,17 +15,12 @@ fn health_treats_pam_module_as_readable_regular_file() {
     assert!(!health.contains("check_exec \"PAM module\""));
 }
 
-/// DeskUnlock must never modify a PAM stack by itself.
-///
-/// Twice on 2026-09-23 the operator could not get back into their session with
-/// the correct password because `pam_syauth.so` sat in the lock stack
-/// (`/etc/pam.d/dankshell`) ahead of `pam_unix`: the module holds the
-/// authentication phase while it waits for the phone, so the lock screen's own
-/// prompt starves and nothing the operator types gets through. The unlock moved
-/// out of band (`syauth unlock-request`), so the package now ships **no**
-/// automatic PAM integration at all — and this test is what keeps it that way.
+/// The package may configure only the Plasma login greeter. It must never
+/// modify the lock-screen PAM stack: the lock path remains out of band through
+/// `syauth unlock-request`, so the password prompt cannot be starved by a
+/// phone timeout.
 #[test]
-fn arch_package_never_touches_a_pam_stack() {
+fn arch_package_configures_only_the_plasma_greeter() {
     let build = repo_file("packaging/arch/PKGBUILD");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
@@ -36,27 +31,12 @@ fn arch_package_never_touches_a_pam_stack() {
     assert!(build.contains("/usr/share/icons/hicolor/256x256/apps/deskunlock.png"));
     assert!(!build.contains("'ghostty'"));
 
-    assert!(
-        !build.contains("install=deskunlock.install"),
-        "an install hook can re-add our module to a PAM stack"
-    );
-    assert!(
-        !build.contains("libalpm/hooks"),
-        "a pacman hook re-applied the PAM integration after every plasma/pam update"
-    );
+    assert!(build.contains("install=deskunlock.install"));
+    assert!(!build.contains("libalpm/hooks"));
     assert!(!build.contains("/etc/pam.d/"), "the package must not ship PAM service files");
-    assert!(
-        !root.join("packaging/arch/deskunlock.install").exists(),
-        "the install script only ever ran the PAM sync"
-    );
-    assert!(
-        !root.join("desktop/libexec/syauth-pam-sync").exists(),
-        "the PAM sync wrote our module into a login stack"
-    );
-    assert!(
-        !root.join("desktop/hooks/syauth-pam.hook").exists(),
-        "the pacman hook re-applied the PAM integration after every plasma/pam update"
-    );
+    assert!(root.join("packaging/arch/deskunlock.install").exists());
+    assert!(root.join("desktop/libexec/syauth-pam-sync").exists());
+    assert!(!root.join("desktop/hooks/syauth-pam.hook").exists());
 }
 
 /// The lock-screen adaptation may show DMS's fingerprint indicator, but it must

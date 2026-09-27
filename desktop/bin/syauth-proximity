@@ -12,7 +12,10 @@ READY_MARKER="$RUNTIME_SUBDIR/challenge-ready.last"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/syauth"
 CONFIG_PATH="$CONFIG_DIR/proximity.conf"
 
-CHECK_INTERVAL_SECONDS=1
+# The phone pushes one RSSI sample every 2 s: a 2 s tick processes every
+# sample exactly once and halves the loop's CPU (2026-09-26 resource
+# pass: the bash loop was the heaviest item of the whole stack).
+CHECK_INTERVAL_SECONDS=2
 RSSI_STALE_AFTER_MS=5000
 HEARTBEAT_STALE_AFTER_MS=60000
 LEAVE_NEAR_LOCK_DELAY_MS=5000
@@ -66,6 +69,16 @@ HEARTBEAT_AGE_MS=0
 STATE_CHANGED=0
 LEFT_NEAR_SINCE_MS=0
 NEAR_SEEN_SINCE_LOCK=1
+HEARTBEAT_AGE_CACHE=-1
+# loginctl is a D-Bus round trip and the tick runs every second: the session
+# id never changes and a lock is noticed within a few seconds, so both
+# lookups are cached. This was the heaviest CPU item of the whole stack
+# (2026-09-26: ~14 s of CPU per hour for two calls per tick).
+LOCK_CACHE_TICKS=3
+CACHED_SID=""
+CACHED_LOCKED=0
+LOCKED_TICKS_LEFT=0
+[[ "${SYAUTH_PROXIMITY_TEST:-0}" == 1 ]] && LOCK_CACHE_TICKS=1
 
 log() {
     echo "syauth-proximity: $*"
@@ -76,7 +89,11 @@ now_ms() {
         printf '%s\n' "$SYAUTH_TEST_NOW_MS"
         return
     fi
-    date +%s%3N
+    # `date +%s%3N` was one process spawn per tick; bash's EPOCHREALTIME is
+    # the same clock with zero cost (LC_ALL=C is exported at the top, so the
+    # decimal separator is a dot).
+    local t="${EPOCHREALTIME/./}"
+    printf '%s\n' "${t:0:13}"
 }
 
 profile_value() {
@@ -264,7 +281,19 @@ marker_age_ms() {
 }
 
 heartbeat_valid() {
-    HEARTBEAT_AGE_MS="$(marker_age_ms "$HEARTBEAT_MARKER")"
+    # The age is cached for the tick: the marker stat is a process spawn and
+    # this predicate is evaluated more than once per tick. Test mode reads the
+    # injected age directly — it is a plain variable, and tests flip it
+    # between calls within the same tick.
+    if [[ "${SYAUTH_PROXIMITY_TEST:-0}" == 1 ]]; then
+        HEARTBEAT_AGE_MS="$(marker_age_ms "$HEARTBEAT_MARKER")"
+        (( HEARTBEAT_AGE_MS <= HEARTBEAT_STALE_AFTER_MS ))
+        return
+    fi
+    if (( HEARTBEAT_AGE_CACHE < 0 )); then
+        HEARTBEAT_AGE_CACHE="$(marker_age_ms "$HEARTBEAT_MARKER")"
+    fi
+    HEARTBEAT_AGE_MS="$HEARTBEAT_AGE_CACHE"
     (( HEARTBEAT_AGE_MS <= HEARTBEAT_STALE_AFTER_MS ))
 }
 
@@ -301,28 +330,72 @@ read_rssi_sample() {
     (( RSSI_AGE_MS <= RSSI_STALE_AFTER_MS ))
 }
 
+# Integer math on values scaled by 100 (two decimals). Every awk call in
+# this file used to be a process spawn on a one-second loop — the single
+# heaviest CPU cost of the whole stack (2026-09-26: ~14 s of CPU per hour).
+# Same results, zero subprocesses.
+scale100() {
+    local v="$1" sign=1 int frac
+    [[ "$v" == -* ]] && { sign=-1; v="${v#-}"; }
+    [[ "$v" == +* ]] && v="${v#+}"
+    int="${v%%.*}"
+    frac="${v#*.}"
+    [[ "$frac" == "$v" ]] && frac=""
+    int="${int:-0}"
+    frac="${frac}00"
+    printf '%s' "$(( sign * (10#$int * 100 + 10#${frac:0:2}) ))"
+}
+
+unscale100() {
+    local scaled="$1" sign="" value
+    (( scaled < 0 )) && { sign="-"; scaled=$(( -scaled )); }
+    value=$(( scaled / 100 ))
+    printf '%s%s.%02d' "$sign" "$value" "$(( scaled % 100 ))"
+}
+
+rounded_div() {
+    local num="$1" den="$2"
+    if (( num >= 0 )); then
+        printf '%s' "$(( (num + den / 2) / den ))"
+    else
+        printf '%s' "$(( (num - den / 2) / den ))"
+    fi
+}
+
 float_add() {
-    awk -v left="$1" -v right="$2" 'BEGIN { printf "%.4f\n", left + right }'
+    local sum
+    sum=$(( $(scale100 "$1") + $(scale100 "$2") ))
+    printf '%s00' "$(unscale100 "$sum")"
 }
 
 float_average() {
-    awk -v sum="$1" -v count="$2" 'BEGIN { printf "%.2f\n", sum / count }'
+    local count="$2"
+    (( count == 0 )) && { printf '0.00'; return; }
+    unscale100 "$(rounded_div "$(scale100 "$1")" "$count")"
 }
 
 float_range() {
-    awk -v low="$1" -v high="$2" 'BEGIN { printf "%.2f\n", high - low }'
+    printf '%s' "$(unscale100 $(( $(scale100 "$1") - $(scale100 "$2") )))"
 }
 
 float_delta() {
-    awk -v filtered="$1" -v baseline="$2" 'BEGIN { printf "%.2f\n", filtered - baseline }'
+    float_range "$1" "$2"
 }
 
 float_ge() {
-    awk -v left="$1" -v right="$2" 'BEGIN { exit !(left >= right) }'
+    (( $(scale100 "$1") >= $(scale100 "$2") ))
 }
 
 float_le() {
-    awk -v left="$1" -v right="$2" 'BEGIN { exit !(left <= right) }'
+    (( $(scale100 "$1") <= $(scale100 "$2") ))
+}
+
+baseline_blend() {
+    local old sample num
+    old="$(scale100 "$1")"
+    sample="$(scale100 "$2")"
+    num=$(( old * (100 - BASELINE_ALPHA_PERCENT) + sample * BASELINE_ALPHA_PERCENT ))
+    unscale100 "$(rounded_div "$num" 100)"
 }
 
 bootstrap_baseline() {
@@ -364,7 +437,7 @@ update_near_baseline() {
     [[ "$RETURN_MODE" != "$RETURN_MODE_SETTLING" ]] || return 0
     near_delta="$(profile_value "$PROFILE" near_delta)"
     if float_ge "$delta" "$near_delta" && float_le "$delta" 0; then
-        BASELINE="$(awk -v old="$BASELINE" -v sample="$filtered" -v alpha="$BASELINE_ALPHA_PERCENT" 'BEGIN { printf "%.2f\n", old * (100 - alpha) / 100 + sample * alpha / 100 }')"
+        BASELINE="$(baseline_blend "$BASELINE" "$filtered")"
         save_config || true
     fi
 }
@@ -618,12 +691,24 @@ engine_initialize() {
 engine_tick() {
     load_config
     load_runtime
+    HEARTBEAT_AGE_CACHE=-1
     local now sid locked
     now="$(now_ms)"
-    sid="$(session_id)"
-    locked=0
-    if [[ -n "$sid" ]] && session_is_locked "$sid"; then
-        locked=1
+    if [[ -z "$CACHED_SID" ]]; then
+        CACHED_SID="$(session_id)"
+    fi
+    sid="$CACHED_SID"
+    if (( LOCKED_TICKS_LEFT <= 0 )); then
+        if [[ -n "$sid" ]] && session_is_locked "$sid"; then
+            CACHED_LOCKED=1
+        else
+            CACHED_LOCKED=0
+        fi
+        LOCKED_TICKS_LEFT=$LOCK_CACHE_TICKS
+    fi
+    (( LOCKED_TICKS_LEFT-- ))
+    locked=$CACHED_LOCKED
+    if (( locked == 1 )); then
         [[ "$LOCK_REASON" == PROXIMITY && "$LOCK_ISSUED" == "$LOCK_REQUEST_PENDING" ]] && LOCK_ISSUED=$LOCK_OBSERVED
     elif [[ "$RETURN_MODE" == "$RETURN_MODE_SETTLING" ]]; then
         : # preserve return settling until fresh RSSI re-synchronizes the model.

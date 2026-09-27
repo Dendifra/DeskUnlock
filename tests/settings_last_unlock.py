@@ -107,7 +107,8 @@ class SettingsPhoneIdentityTests(unittest.TestCase):
             phone = settings.get_phone_info()
         self.assertEqual(phone["name"], "Galaxy S26")
         self.assertTrue(phone["paired"])
-        self.assertIsNone(phone["connected"])
+        self.assertIn("samples_fresh", phone)
+        self.assertIn("sample_age_ms", phone)
         command.assert_called_once_with(["syauth", "list"])
 
     def test_revoked_phone_and_unrelated_bluetooth_devices_are_not_selected(self):

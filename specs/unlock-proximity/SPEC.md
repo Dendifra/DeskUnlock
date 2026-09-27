@@ -452,7 +452,7 @@ SPEC §4.3 target (< 2 s) met for fast users; slow users land near the
 
 **E2E**
 
-- `scripts/e2e-unlock.sh`: requires the connected R5CY214FQHM phone +
+- `scripts/e2e-unlock.sh`: requires the connected <DEVICE_SERIAL> phone +
   a paired desktop. Drives `pamtester syauth-test dmitriy authenticate`
   100 times in a row, captures the elapsed-ms distribution from the audit
   log, fails if p99 > 2.0 s OR p50 > 1.5 s. `#[ignore]`-gated under

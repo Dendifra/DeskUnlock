@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.1] - 2026-09-26
+
+- Retry BlueZ GATT initialization after a transient boot race.
+- Recreate the DMS loaded-tree marker without restarting DMS when the tree is already adapted.
+- Keep the GUI readiness indicator correct after daemon restarts.
+
 ## [0.1.0-beta.1] - 2026-09-22
 
 First DeskUnlock public beta candidate.

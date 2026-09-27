@@ -45,6 +45,14 @@ bad() {
 make_fixture() {
     local root="$1"
     mkdir -p "$root/home/.config" "$root/bin"
+    cat >"$root/bin/loginctl" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+    show-user) echo Linger=yes ;;
+    enable-linger) exit 0 ;;
+esac
+EOF
+    chmod +x "$root/bin/loginctl"
     cat >"$root/bin/systemctl" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >>"$root/calls"

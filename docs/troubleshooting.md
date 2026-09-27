@@ -56,6 +56,21 @@ Restore Bluetooth and bring the phone into normal range, then wait for the
 companion association to recover. Password/PAM fallback remains available when
 the phone or Bluetooth path is unavailable.
 
+## Phone login is unavailable immediately after boot
+
+Check the boot ordering and readiness socket:
+
+```bash
+systemctl is-active bluetooth.service
+systemctl is-active plasmalogin.service
+test -S /run/user/$(id -u)/syauth/auth.sock && echo ready
+```
+
+The package orders Plasma Login after Bluetooth and `syauth-control on` enables
+user-service persistence at boot. If the drop-in is missing, run
+`sudo /usr/lib/syauth/syauth-pam-sync install`. Password fallback remains
+available while the phone transport is unavailable.
+
 ## Service is not running
 
 Read-only checks:

@@ -9,7 +9,10 @@ ConditionPathExists=!%h/.config/syauth/disabled
 
 [Timer]
 OnBootSec=20s
-OnUnitActiveSec=30s
+# 60 s: the script is idempotent and cheap, but every tick still costs a
+# bash+python startup; halving the cadence halves that churn and the marker
+# stays fresh enough for the GUI (2026-09-26 resource pass).
+OnUnitActiveSec=60s
 Persistent=false
 
 [Install]

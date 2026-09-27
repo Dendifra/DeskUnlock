@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 SOURCE="${1:-$HOME/syauth}"
 DEST="${2:-$HOME/DeskUnlock}"
-KIT="${3:-$HOME/Downloads/deskunlock-github-kit.zip}"
+KIT="${3:-${DESKUNLOCK_PUBLICATION_KIT:-$HOME/Downloads/deskunlock-github-kit.zip}}"
 
 fail() {
     echo "STOP: $*" >&2
@@ -16,12 +16,7 @@ fail() {
 [[ ! -e "$DEST" ]] || fail "destination already exists: $DEST"
 command -v rsync >/dev/null || fail "rsync not installed"
 command -v unzip >/dev/null || fail "unzip not installed"
-
-if [[ ! -f "$KIT" ]]; then
-    alt="/mnt/GoogleDrive/Download/deskunlock-github-kit.zip"
-    [[ -f "$alt" ]] && KIT="$alt"
-fi
-[[ -f "$KIT" ]] || fail "publication kit zip not found"
+[[ -f "$KIT" ]] || fail "publication kit zip not found; pass it as argument 3 or set DESKUNLOCK_PUBLICATION_KIT"
 
 echo "Creating isolated staging tree:"
 echo "  source: $SOURCE"

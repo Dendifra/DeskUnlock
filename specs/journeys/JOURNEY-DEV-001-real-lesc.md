@@ -447,7 +447,7 @@ Files deleted:
 The first-pass closure on 2026-05-17T08-30-00Z was withdrawn (see
 `docs/known-gaps.md` DEV-001 reopen note and
 `specs/auto/RUN-2026-05-17T07-56-16Z.md` POST-MARCH E2E FINDINGS).
-The defects the post-march e2e run on R5CY214FQHM surfaced —
+The defects the post-march e2e run on <DEVICE_SERIAL> surfaced —
 
 1. desktop scanned for a phone-advertised UUID instead of advertising
    the pair-mode UUID itself (the inverse of SPEC §3.2 D8),
@@ -568,7 +568,7 @@ Mechanical closure conditions verified:
   `BUILD SUCCESSFUL` (APK at
   `syauth-android/app/build/outputs/apk/debug/app-debug.apk`).
 
-Runtime closure (orchestrator-driven on the connected R5CY214FQHM):
+Runtime closure (orchestrator-driven on the connected <DEVICE_SERIAL>):
 - Rebuild the AAR (`scripts/build_aar.sh`), rebuild the APK
   (`./gradlew :app:assembleDebug`), `adb install -r`,
   `adb shell input keyevent KEYCODE_WAKEUP`, launch the app, run
@@ -624,7 +624,7 @@ plan, captured in writing per AGENTS.md):
 
 The re-march closure above shipped a `BluetoothLeScanner`-backed
 phone-side scan that compiled, lint-passed, and tested green in
-Robolectric — but failed end-to-end on the connected R5CY214FQHM
+Robolectric — but failed end-to-end on the connected <DEVICE_SERIAL>
 because Samsung One UI on the Galaxy S25 Ultra (Android 15) requires
 `BLUETOOTH_PRIVILEGED` for any unprivileged `startScan(filters,
 settings, callback)` call (full BLE diagnostic in
@@ -742,7 +742,7 @@ Mechanical closure conditions verified:
   test became `start_scan_associates_with_current_and_previous_minute_slot_uuids`,
   net delta +2).
 
-Runtime closure (orchestrator-driven on the connected R5CY214FQHM):
+Runtime closure (orchestrator-driven on the connected <DEVICE_SERIAL>):
 rebuild the APK (`./gradlew :app:assembleDebug`), `adb install -r`,
 launch the app, tap "Pair with computer", run
 `sudo syauth pair --adapter hci0 --yes --timeout-secs 120` on the
@@ -765,7 +765,7 @@ section of this journey doc; the prior `## Closure (re-march …)` and
 
 `2026-05-17T19-48-31Z` (UTC). Captured at the end of the orchestrator
 session that drove the on-device pair to completion against
-R5CY214FQHM ("fedora" desktop, BlueZ `hci0`).
+<DEVICE_SERIAL> ("fedora" desktop, BlueZ `hci0`).
 
 ### Closure-condition evidence (bullet-by-bullet)
 
@@ -890,7 +890,7 @@ satisfied.
 
 #### NEW bullet (the AGENTS.md hardening clause) — "a real e2e run on a connected Android device must complete a full LESC pair, 4-word OOB confirmation, and bond persistence"
 
-The orchestrator-driven session against R5CY214FQHM produced the
+The orchestrator-driven session against <DEVICE_SERIAL> produced the
 following evidence:
 
 **Desktop 6-digit code** — captured in the session's
@@ -929,7 +929,7 @@ re-pair rejection probe. After the first pair completed, a second
 `syauth pair --yes` against the same phone exits with:
 
 ```
-bond store error: peer already bonded: peer_id=fbd6cd666d0af720a5db0efd72b47cb5
+bond store error: peer already bonded: peer_id=<PEER_ID>
 ```
 
 The `peer_id` is `BLAKE3(host_pubkey || phone_pubkey)[..16]` per the
@@ -951,7 +951,7 @@ via direct read and via the re-pair rejection above. Mechanical
 proof: the second `syauth pair --yes` invocation reads
 `/var/lib/syauth/bonds.toml` through `BondStore::load`, finds the
 bond, and exits with `peer already bonded:
-peer_id=fbd6cd666d0af720a5db0efd72b47cb5` — i.e. `syauth list` and
+peer_id=<PEER_ID>` — i.e. `syauth list` and
 `syauth pair`'s pre-flight check both see the same bond record.
 
 ### Phone-side metadata caveat (DEV-002 territory, NOT a DEV-001 gap)

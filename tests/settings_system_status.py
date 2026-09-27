@@ -121,9 +121,16 @@ class SystemStatusCardHonestyTests(unittest.TestCase):
                 return "5a5481f3e60858d387de52e12f4552ec\tPixel 8\tbonded\n"
             return ""
 
+        phone_info = {
+            "name": "Pixel 8",
+            "paired": True,
+            "samples_fresh": phone_present,
+            "sample_age_ms": 0 if phone_present else None,
+        }
         for patcher in (
             patch.object(settings, "run_command", side_effect=fake_run),
             patch.object(settings, "phone_present", return_value=phone_present),
+            patch.object(settings, "get_phone_info", return_value=phone_info),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)

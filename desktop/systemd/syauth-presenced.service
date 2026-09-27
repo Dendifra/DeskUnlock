@@ -6,9 +6,6 @@ ConditionPathExists=!%h/.config/syauth/disabled
 [Service]
 Type=simple
 
-ExecStartPre=/usr/bin/rm -f /run/syauth/gatt.ready
-ExecStartPre=/usr/bin/syauth-wait-bluez
-
 ExecStart=/usr/lib/syauth/syauth-presenced
 
 ExecStartPost=-/usr/bin/syauth-check-orchestrator

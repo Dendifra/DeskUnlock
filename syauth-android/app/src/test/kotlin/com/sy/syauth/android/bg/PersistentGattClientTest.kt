@@ -314,6 +314,62 @@ class PersistentGattClientTest {
     }
 
     @Test
+    fun a_silent_link_is_forced_to_reconnect_by_the_liveness_watchdog() {
+        // 2026-09-26: after a desktop reboot the ACL vanished without any
+        // disconnect callback, so the client kept believing it was connected
+        // and produced no log for minutes. The liveness watchdog must tear
+        // down a link that delivered no callback for LIVENESS_STALE_AFTER_MS.
+        val handle = newShadowGatt()
+        val opener = RecordingOpener(handle)
+        val service = makeServiceWithBothChars()
+        shadowGattAddService(handle, service)
+        val client = PersistentGattClient(
+            context = ctx(),
+            adapter = BluetoothAdapter.getDefaultAdapter(),
+            peerId = TEST_PEER_ID,
+            deviceMac = TEST_DEVICE_MAC,
+            onChallenge = { _, _ -> },
+            gattOpener = opener,
+        )
+        client.start()
+
+        val callback = opener.lastCallback!!
+        callback.onConnectionStateChange(
+            handle,
+            BluetoothGatt.GATT_SUCCESS,
+            BluetoothProfile.STATE_CONNECTED,
+        )
+        callback.onServicesDiscovered(handle, BluetoothGatt.GATT_SUCCESS)
+        val cccd = service
+            .getCharacteristic(SYAUTH_CHALLENGE_CHAR_UUID)
+            .getDescriptor(TEST_CCCD_UUID)
+        callback.onDescriptorWrite(handle, cccd, BluetoothGatt.GATT_SUCCESS)
+        assertEquals("the connection is up and ready", 1, opener.openCalls)
+
+        // The link goes silent: no further callbacks arrive at all.
+        shadowOf(Looper.getMainLooper())
+            .idleFor(PersistentGattClient.LIVENESS_CHECK_INTERVAL_MS * 2, TimeUnit.MILLISECONDS)
+        assertEquals(
+            "inside the liveness window the link is left alone",
+            1,
+            opener.openCalls,
+        )
+
+        shadowOf(Looper.getMainLooper())
+            .idleFor(PersistentGattClient.LIVENESS_CHECK_INTERVAL_MS * 3, TimeUnit.MILLISECONDS)
+        assertEquals(
+            "a silent link is torn down and re-opened",
+            2,
+            opener.openCalls,
+        )
+        assertEquals(
+            "the recovery attempt connects directly (fast) instead of background-scanning",
+            false,
+            opener.lastAutoConnect,
+        )
+    }
+
+    @Test
     fun on_services_discovered_subscribes_via_cccd() {
         val handle = newShadowGatt()
         val opener = RecordingOpener(handle)

@@ -1,3 +1,9 @@
+syauth (0.1.1-1) unstable; urgency=medium
+
+  * Retry BlueZ startup and restore the DMS readiness marker after daemon restarts.
+
+ -- syauth contributors <noreply@anthropic.com>  Sat, 26 Sep 2026 23:30:00 +0200
+
 syauth (0.1.0-1) unstable; urgency=medium
 
   * Initial release (Closes: #1).

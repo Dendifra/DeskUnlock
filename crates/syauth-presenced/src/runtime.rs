@@ -23,14 +23,14 @@ use syauth_transport::{
 use tokio::{
     io::AsyncReadExt,
     signal::unix::{SignalKind, signal},
-    sync::mpsc,
+    sync::{mpsc, watch},
     time::Instant,
 };
 
 use crate::{
     lock::{LockError, PidFileLock},
     orchestrator::{Orchestrator, RELOAD_DEBOUNCE, ROTATION_LOG_TARGET, ReloadCommand, ReloadTrigger, align_to_next_minute},
-    server::{self, ServeConfig, ServeError},
+    server::{self, BackendState, ServeConfig, ServeError},
 };
 
 /// Default `--socket` value. Anchored in
@@ -59,6 +59,8 @@ pub const PIDFILE_BASENAME: &str = "presenced.pid";
 /// Name of the syauth subdirectory under `${XDG_RUNTIME_DIR}` that
 /// holds both the socket (S-002+) and the pidfile (S-001).
 pub const RUNTIME_SUBDIR: &str = "syauth";
+
+const BLUEZ_RETRY_DELAY: Duration = Duration::from_secs(5);
 
 /// Top-level error surface for `run()`. The binary's `main` wraps
 /// these into `anyhow::Error` so the user-visible message at exit is
@@ -220,15 +222,25 @@ pub async fn run(config: Config) -> Result<ShutdownReason, RunError> {
 
     let (orch_shutdown_tx, orch_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let pairing_broker = PairingBroker::default();
-    let (orch_task, reload_tx, orch_handle) = maybe_spawn_orchestrator(&config, orch_shutdown_rx, pairing_broker).await;
+    let (backend_tx, backend_rx) = watch::channel(BackendState::default());
+    let init_config = config.clone();
+    let init_task = tokio::spawn(async move {
+        let (orch_task, reload_tx, orchestrator) = maybe_spawn_orchestrator(&init_config, orch_shutdown_rx, pairing_broker).await;
+        let _ = backend_tx.send(BackendState { reload_tx, orchestrator });
+        orch_task
+    });
 
+    // Bind the PAM socket before waiting for BlueZ. The backend state is
+    // published later by `init_task`, so an unavailable adapter cannot delay
+    // the login greeter's readiness.
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let serve_config = ServeConfig {
         socket_path: config.socket.clone(),
         expected_uid: config.expected_uid,
-        reload_tx: reload_tx.clone(),
-        orchestrator: orch_handle,
+        reload_tx: None,
+        orchestrator: None,
         test_fixed_nonce: config.test_fixed_nonce,
+        backend_rx: Some(backend_rx.clone()),
         started_at: Some(std::time::SystemTime::now()),
     };
     let serve_task = tokio::spawn(async move {
@@ -238,12 +250,19 @@ pub async fn run(config: Config) -> Result<ShutdownReason, RunError> {
         .await
     });
 
-    let inotify_task = reload_tx.as_ref().map(|tx| spawn_inotify_watcher(&config.bonds_file, tx.clone()));
+    let inotify_task = Some(spawn_inotify_watcher(&config.bonds_file, backend_rx.clone()));
 
-    let reason = wait_for_reason(&mut sigterm, &mut sigint, &mut sighup, reload_tx.as_ref()).await;
+    let reason = wait_for_reason(&mut sigterm, &mut sigint, &mut sighup, &backend_rx).await;
     tracing::info!(?reason, "shutdown signal received, draining");
     let _ = shutdown_tx.send(());
     let _ = orch_shutdown_tx.send(());
+    let orch_task = if init_task.is_finished() {
+        init_task.await.ok().flatten()
+    } else {
+        init_task.abort();
+        let _ = init_task.await;
+        None
+    };
     if let Some(handle) = orch_task {
         let _ = handle.await;
     }
@@ -273,7 +292,7 @@ async fn wait_for_reason(
     sigterm: &mut tokio::signal::unix::Signal,
     sigint: &mut tokio::signal::unix::Signal,
     sighup: &mut tokio::signal::unix::Signal,
-    reload_tx: Option<&mpsc::Sender<ReloadCommand>>,
+    backend_rx: &watch::Receiver<BackendState>,
 ) -> ShutdownReason {
     loop {
         tokio::select! {
@@ -281,6 +300,7 @@ async fn wait_for_reason(
             _ = sigterm.recv() => return ShutdownReason::Sigterm,
             _ = sigint.recv() => return ShutdownReason::Sigint,
             _ = sighup.recv() => {
+                let reload_tx = backend_rx.borrow().reload_tx.clone();
                 if let Some(tx) = reload_tx {
                     if let Err(err) = tx.send(ReloadCommand { trigger: ReloadTrigger::Sighup }).await {
                         tracing::warn!(target: ROTATION_LOG_TARGET, error = %err, "SIGHUP reload push failed");
@@ -290,6 +310,13 @@ async fn wait_for_reason(
                 }
             }
         }
+    }
+}
+
+async fn wait_for_bluez_retry(shutdown: &mut tokio::sync::oneshot::Receiver<()>) -> bool {
+    tokio::select! {
+        _ = shutdown => false,
+        _ = tokio::time::sleep(BLUEZ_RETRY_DELAY) => true,
     }
 }
 
@@ -313,7 +340,7 @@ async fn wait_for_reason(
 /// short-circuit before any BlueZ DBus call is made.
 async fn maybe_spawn_orchestrator(
     config: &Config,
-    shutdown: tokio::sync::oneshot::Receiver<()>,
+    mut shutdown: tokio::sync::oneshot::Receiver<()>,
     pairing_broker: PairingBroker,
 ) -> (
     Option<tokio::task::JoinHandle<()>>,
@@ -336,14 +363,18 @@ async fn maybe_spawn_orchestrator(
     // spin up on the next reload.
     let (pair_commit_tx, pair_commit_rx) = mpsc::channel::<PairCommitRequest>(4);
     let peripheral: Arc<dyn Peripheral + Send + Sync> = match config.peripheral_mode {
-        PeripheralMode::Real => match PersistentPeripheral::new(DEFAULT_ADAPTER_NAME, pairing_broker.clone(), pair_commit_tx).await {
-            Ok(p) => {
-                spawn_pair_session_listener(Arc::clone(&p));
-                p
-            }
-            Err(err) => {
-                warn_no_orchestrator(&format!("BlueZ adapter open failed: {err}"));
-                return (None, None, None);
+        PeripheralMode::Real => loop {
+            match PersistentPeripheral::new(DEFAULT_ADAPTER_NAME, pairing_broker.clone(), pair_commit_tx.clone()).await {
+                Ok(p) => {
+                    spawn_pair_session_listener(Arc::clone(&p));
+                    break p;
+                }
+                Err(err) => {
+                    warn_no_orchestrator(&format!("BlueZ adapter open failed: {err}; retrying"));
+                    if !wait_for_bluez_retry(&mut shutdown).await {
+                        return (None, None, None);
+                    }
+                }
             }
         },
         PeripheralMode::Fake => seed_fake_peripheral(config),
@@ -416,7 +447,7 @@ async fn maybe_spawn_orchestrator(
 /// (SPEC §8 Risks row, belt-and-suspenders for SIGHUP delivery loss).
 /// Watcher init failure logs a `warn` and the daemon falls back to
 /// SIGHUP-only.
-fn spawn_inotify_watcher(bonds_file: &Path, reload_tx: mpsc::Sender<ReloadCommand>) -> tokio::task::JoinHandle<()> {
+fn spawn_inotify_watcher(bonds_file: &Path, mut backend_rx: watch::Receiver<BackendState>) -> tokio::task::JoinHandle<()> {
     let bonds_file = bonds_file.to_path_buf();
     tokio::spawn(async move {
         let parent = match bonds_file.parent() {
@@ -459,6 +490,14 @@ fn spawn_inotify_watcher(bonds_file: &Path, reload_tx: mpsc::Sender<ReloadComman
                     // collapses into one reload.
                     tokio::time::sleep(Duration::from_millis(RELOAD_DEBOUNCE.as_millis() as u64)).await;
                     while event_rx.try_recv().is_ok() {}
+                    let reload_tx = loop {
+                        if let Some(tx) = backend_rx.borrow().reload_tx.clone() {
+                            break tx;
+                        }
+                        if backend_rx.changed().await.is_err() {
+                            return;
+                        }
+                    };
                     if let Err(err) = reload_tx
                         .send(ReloadCommand {
                             trigger: ReloadTrigger::Inotify,
@@ -801,6 +840,14 @@ mod day2_revoke_tests {
     }
 
     /// Repeating it is harmless and keeps the first reason.
+    #[tokio::test]
+    async fn bluez_retry_wait_stops_when_shutdown_arrives() {
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
+        shutdown_tx.send(()).expect("shutdown receiver exists");
+
+        assert!(!super::wait_for_bluez_retry(&mut shutdown_rx).await);
+    }
+
     #[test]
     fn a_repeated_revocation_keeps_the_first_reason() {
         let td = TempDir::new().expect("tempdir");
