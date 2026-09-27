@@ -1,0 +1,66 @@
+# DeskUnlock — release workflow.
+#
+# One package, and it is the one we validate: `deskunlock` for Arch/CachyOS.
+# The source tarball is for every other distribution, and it is the artefact
+# this workflow can build reliably because it needs nothing but git.
+#
+# What this workflow deliberately does NOT do:
+#
+#   - Fedora RPM and Debian deb. They were inherited from the upstream project
+#     and never worked here: the `mock` job installs a Fedora package on a
+#     non-Fedora runner, and the `pbuilder` chroot has no Rust, so
+#     `dpkg-checkbuilddeps` fails on `cargo rustc (>= 1.85)`. Shipping a package
+#     that was never executed is a promise we cannot keep.
+#
+#   - The Arch package itself. `packaging/arch/PKGBUILD` depends on `dms-shell`,
+#     which is a CachyOS package, so a stock Arch container cannot resolve it.
+#     The operator builds it on the machine that runs it and attaches it.
+#
+#   - The signed Android APK. Signing needs the release keystore, and that key
+#     does not live in CI. The operator signs locally, where the APK was also
+#     tested.
+#
+# Required secrets: none. GITHUB_TOKEN is implicit and read-only.
+# Third-party Actions are pinned to immutable commit SHAs.
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  PACKAGE_VERSION: "0.1.1"
+
+jobs:
+  # The source tarball is the one artefact with no toolchain and no platform
+  # assumption: `git archive` from the tag. Everything else is built where it
+  # can be tested, which is the operator's machine.
+  build-source:
+    name: build (source tarball)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Build source tarball
+        run: make dist
+
+      - name: Upload source artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: source-tarball
+          path: target/syauth-${{ env.PACKAGE_VERSION }}.tar.gz
+          if-no-files-found: error
+
+  # Nothing publishes from here on purpose. CI builds and verifies the source
+  # artefact; release notes and signed binary assets are handled locally and
+  # uploaded only after their checksums/signatures have been verified.

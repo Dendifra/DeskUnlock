@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/syauth"
+CONFIG_PATH="$CONFIG_DIR/idle.conf"
+IDLE_LOCK_BIN="${SYAUTH_IDLE_LOCK_BIN:-/usr/lib/syauth/syauth-idle-lock-bin}"
+
+read_setting() {
+    local key="$1" default="$2" value
+    value="$(awk -F= -v key="$key" '$1 == key { print $2; exit }' "$CONFIG_PATH" 2>/dev/null || true)"
+    printf '%s\n' "${value:-$default}"
+}
+
+write_settings() {
+    local enabled="$1" minutes="$2" temp
+    mkdir -p "$CONFIG_DIR"
+    chmod 700 "$CONFIG_DIR" 2>/dev/null || true
+    temp="$(mktemp "$CONFIG_DIR/.idle.XXXXXX")"
+    chmod 600 "$temp"
+    printf 'idle_lock_enabled=%s\nidle_lock_minutes=%s\n' "$enabled" "$minutes" > "$temp"
+    mv -f "$temp" "$CONFIG_PATH"
+}
+
+valid_minutes() {
+    [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 120 ))
+}
+
+case "${1:-status}" in
+    status)
+        printf 'idle_lock_enabled=%s\n' "$(read_setting idle_lock_enabled 1)"
+        printf 'idle_lock_minutes=%s\n' "$(read_setting idle_lock_minutes 10)"
+        printf 'mechanism=ext-idle-notify-v1\n'
+        ;;
+    enable)
+        minutes="$(read_setting idle_lock_minutes 10)"
+        valid_minutes "$minutes" || minutes=10
+        write_settings 1 "$minutes"
+        ;;
+    disable)
+        minutes="$(read_setting idle_lock_minutes 10)"
+        valid_minutes "$minutes" || minutes=10
+        write_settings 0 "$minutes"
+        ;;
+    minutes)
+        valid_minutes "${2:-}" || { echo "minutes must be between 1 and 120" >&2; exit 2; }
+        write_settings "$(read_setting idle_lock_enabled 1)" "$2"
+        ;;
+    run)
+        [[ -r "$CONFIG_PATH" ]] || write_settings 1 10
+        export SYAUTH_IDLE_CONFIG="$CONFIG_PATH"
+        exec "$IDLE_LOCK_BIN" run
+        ;;
+    *)
+        echo "Usage: syauth-idle-lock {status|enable|disable|minutes <1..120>|run}" >&2
+        exit 2
+        ;;
+esac

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DeskUnlock launcher adaptive-icon background. The canonical logo has
+     transparent edges, so a neutral black field preserves its contrast. -->
+<resources>
+    <color name="ic_launcher_background">#000000</color>
+</resources>

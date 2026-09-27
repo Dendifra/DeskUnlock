@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+MODE="${1:---bootstrap}"
+DISABLED_MARKER="$HOME/.config/syauth/disabled"
+
+# The daemon refuses to run with no associated phone (operator's rule,
+# 2026-09-23). Activation is also the pairing path, so it opens the pairing
+# window: without it the very first pairing could never happen.
+PAIRING_MODE_MARKER="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/syauth/pairing-mode"
+BONDS_FILE="/var/lib/syauth/bonds.toml"
+
+mark_pairing_mode_when_unassociated() {
+    if [[ -f "$BONDS_FILE" ]] && grep -q 'kind = "Bonded"' "$BONDS_FILE"; then
+        return 0
+    fi
+    mkdir -p "$(dirname "$PAIRING_MODE_MARKER")"
+    : >"$PAIRING_MODE_MARKER"
+}
+
+warn() {
+    printf 'ATTENZIONE: %s\n' "$*" >&2
+}
+
+state_ready() {
+    [[ -d /var/lib/syauth ]] &&
+        [[ -d /var/lib/syauth/keys ]] &&
+        [[ -w /var/lib/syauth ]] &&
+        [[ -w /var/lib/syauth/keys ]]
+}
+
+reload_user_manager() {
+    systemctl --user daemon-reload
+}
+
+ensure_linger() {
+    local uid user
+    uid="$(id -u)"
+    if [[ "$(loginctl show-user "$uid" -p Linger --value 2>/dev/null || true)" == "yes" ]]; then
+        return 0
+    fi
+    user="${USER:-$(id -un)}"
+    loginctl enable-linger "$user" || warn "servizio al boot non abilitato per $user"
+}
+
+start_dms() {
+    # DMS must remain available even when the Syauth master switch is OFF.
+    systemctl --user start --no-block dms.service ||
+        warn "dms.service non avviato"
+}
+
+# Enable + start one user unit, unless the operator masked it.
+#
+# `systemctl enable` fails hard on a masked unit and this script runs under
+# `set -Eeuo pipefail`: on 2026-09-23 that aborted activation half-way, so
+# the daemon never came back and the GUI looked like it would not start at
+# all. Masking is a deliberate decision, so it is respected — loudly —
+# instead of taking everything after it down with it.
+unit_enable_start() {
+    local unit="$1"
+    if [[ "$(systemctl --user is-enabled "$unit" 2>/dev/null || true)" == "masked" ]]; then
+        warn "$unit è mascherata: la lascio disattivata (decisione dell'operatore)."
+        return 0
+    fi
+    systemctl --user enable "$unit" >/dev/null
+    systemctl --user start --no-block "$unit"
+}
+
+activate_core() {
+    if [[ -e "$DISABLED_MARKER" ]]; then
+        if [[ "$MODE" == "--activate" ]]; then
+            echo "ERRORE: Syauth è disattivato. Attivalo prima del pairing." >&2
+            return 20
+        fi
+
+        echo "Syauth master OFF: servizi core lasciati disattivati."
+        return 0
+    fi
+
+    if ! state_ready; then
+        if [[ "$MODE" == "--activate" ]]; then
+            echo "ERRORE: stato Syauth non ancora inizializzato." >&2
+            return 21
+        fi
+
+        echo "Syauth non ancora associato: attivazione core rinviata al primo pairing."
+        return 0
+    fi
+
+    mark_pairing_mode_when_unassociated
+    ensure_linger
+    unit_enable_start syauth-presenced.service
+    unit_enable_start syauth-proximity.service
+    unit_enable_start syauth-reconcile.path
+    unit_enable_start syauth-reconcile.timer
+    unit_enable_start syauth-dms-lock-patch.timer
+    unit_enable_start syauth-unlock-marker.timer
+    systemctl --user enable syauth-idle-lock.service >/dev/null 2>&1 || true
+
+    systemctl --user start --no-block syauth-idle-lock.service >/dev/null 2>&1 || true
+
+    echo "Servizi core Syauth attivati."
+}
+
+case "$MODE" in
+    --bootstrap|--activate|--gui)
+        ;;
+    *)
+        echo "Uso: syauth-user-setup {--bootstrap|--activate|--gui}" >&2
+        exit 2
+        ;;
+esac
+
+reload_user_manager
+start_dms
+activate_core
+
+if [[ "$MODE" == "--gui" ]]; then
+    exec /usr/bin/syauth-settings
+fi

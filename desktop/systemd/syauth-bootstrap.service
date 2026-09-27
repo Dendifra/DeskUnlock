@@ -1,0 +1,7 @@
+[Unit]
+Description=Initialize Syauth user infrastructure
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/syauth-user-setup --bootstrap

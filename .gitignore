@@ -1,0 +1,30 @@
+/target
+/crates/syauth-mobile/target
+/crates/syauth-mobile/bindings
+/syauth-android/.gradle
+/syauth-android/app/build
+/syauth-android/build
+/syauth-android/local.properties
+/.claude/worktrees
+*.iml
+.DS_Store
+/desktop/bin/dms-syauth
+/desktop/dms/dms-syauth
+__pycache__/
+*.py[cod]
+
+# Release signing material (defense in depth; keep the real keystore outside the repo).
+*.jks
+*.keystore
+*.p12
+*.pfx
+keystore.properties
+signing.properties
+/secrets/
+/signing/
+/private/
+
+# Local package build outputs (never commit; ~28 MB each)
+/packaging/arch/*.pkg.tar.zst
+/packaging/arch/src/
+/packaging/arch/pkg/

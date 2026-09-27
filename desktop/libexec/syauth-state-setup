@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+fail() {
+    echo "syauth-state-setup: $*" >&2
+    exit 1
+}
+
+[[ ${EUID:-$(id -u)} -eq 0 ]] ||
+    fail "richiede privilegi amministrativi"
+
+[[ $# -eq 1 ]] ||
+    fail "uso: syauth-state-setup <utente>"
+
+target_user="$1"
+
+[[ "$target_user" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] ||
+    fail "nome utente non valido"
+
+getent passwd "$target_user" >/dev/null ||
+    fail "utente inesistente"
+
+target_uid="$(id -u "$target_user")"
+target_group="$(id -gn "$target_user")"
+
+(( target_uid != 0 )) ||
+    fail "root non puo essere il proprietario desktop di Syauth"
+
+if [[ -e /var/lib/syauth/bonds.toml ]]; then
+    current_uid="$(stat -c %u /var/lib/syauth/bonds.toml)"
+
+    [[ "$current_uid" == "$target_uid" ]] ||
+        fail "esiste gia uno stato Syauth appartenente a un altro utente"
+fi
+
+install -d     -m 0700     -o "$target_user"     -g "$target_group"     /var/lib/syauth     /var/lib/syauth/keys     /var/log/syauth
+
+install -d     -m 0755     -o "$target_user"     -g "$target_group"     /run/syauth
+
+tmpfile="$(mktemp)"
+trap "rm -f "$tmpfile"" EXIT
+
+printf "%s
+"     "# Generated locally by Syauth first-run setup."     "d /run/syauth 0755 $target_user $target_group -"     > "$tmpfile"
+
+install     -m 0644     -o root     -g root     "$tmpfile"     /etc/tmpfiles.d/syauth-user.conf
+
+systemd-tmpfiles     --create     /etc/tmpfiles.d/syauth-user.conf
+
+chown "$target_user:$target_group"     /var/lib/syauth     /var/lib/syauth/keys     /var/log/syauth     /run/syauth
+
+chmod 0700     /var/lib/syauth     /var/lib/syauth/keys     /var/log/syauth
+
+chmod 0755 /run/syauth
+
+echo "READY"

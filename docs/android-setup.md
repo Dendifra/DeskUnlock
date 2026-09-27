@@ -1,0 +1,272 @@
+# DeskUnlock Android setup
+
+## Public beta installation
+
+The `v0.1.0-beta.1` Android companion is distributed as a signed APK from
+the future DeskUnlock release page. Install it with Android's normal package
+installer and verify the published SHA-256 checksum first. Android may warn
+because this is sideloaded rather than distributed through Google Play.
+
+The beta APK uses a dedicated DeskUnlock release certificate. The private
+release key is outside the repository and is never published. Existing users
+of a pre-beta/debug APK may need to uninstall that app before installing the
+release-signed APK; Android can then require pairing again. Do not disable Play
+Protect globally or use signature-bypass tools.
+
+The app uses Bluetooth LE and Companion Device APIs and does not request the
+`INTERNET` permission. Pairing and cryptographic state are local to the phone
+and computer. Android and OEM battery/Bluetooth policies remain outside
+DeskUnlock's control.
+
+## Pairing and daily approval
+
+1. Install and open DeskUnlock.
+2. Start `syauth pair --adapter hci0` on the computer.
+3. Tap **Pair** in the app and select the computer.
+4. Confirm the matching operating-system pairing numbers and the app-level
+   confirmation.
+5. Lock the computer and interact with the lock screen. The first genuine
+   mouse movement, keyboard input, or Enter produces one request; approve it
+   with the Android biometric/device-credential prompt.
+
+The lock surface appearing does not itself trigger authentication. The
+`syauth` names in the pairing command and internal files are compatibility
+identifiers inherited from upstream; the product name is DeskUnlock.
+
+## Privacy boundary
+
+DeskUnlock has no cloud account or developer-operated backend. Its approval
+path uses local BLE/GATT communication and Android biometric/Keystore APIs.
+Normal Android, Linux, Bluetooth, and OEM services may have their own behavior.
+
+Roadmap items that contribute to this document:
+
+- **S-015** — Gradle / Compose scaffold (the `make android-aar` /
+  `make android-test` workflow).
+- **S-017** — Approve screen + BiometricPrompt + Keystore signer.
+- **S-018** (future) — `CompanionDeviceService` + battery-optimization
+  setup steps.
+
+## Building and running
+
+The companion app lives under `syauth-android/`. Build the AAR first
+(`make android-aar`, requires the Android NDK), then run instrumented
+tests against an emulator with `make android-test`. Both targets skip
+cleanly on hosts that lack the toolchain, with an actionable message.
+
+## Keystore key parameters (S-017)
+
+The Approve screen gates each signing operation on a fresh user gesture
+via the Android Keystore. The key parameters were chosen for maximum
+portability across supported devices (minSdk 26 / API 26+).
+
+### Curve choice — secp256r1 (EC P-256), not Ed25519
+
+The S-017 DoD calls for `KeyProperties.KEY_ALGORITHM_EC` with curve
+`secp256r1` and a documented fallback. Ed25519 became a first-class
+Android Keystore algorithm only in API 33 and is not present on every
+Android 13 device, while EC P-256 (secp256r1) has been supported since
+API 23. The gate key is therefore generated unconditionally as
+`KEY_ALGORITHM_EC` with `ECGenParameterSpec("secp256r1")` and the
+JCA signature algorithm `SHA256withECDSA`. The wire-protocol signature
+(the 64-byte Ed25519 signature the desktop verifies) is produced by the
+Rust core through the UniFFI `signChallengeResponse(seed, frame)`
+surface; it is a separate concern from the Keystore-backed gate.
+
+The Keystore gate signature is logged for audit but **not** sent on the
+wire. Its purpose is to fail loudly if the Keystore disagrees with the
+`BiometricPrompt` callback — i.e., the OS reported "biometric success"
+but the Keystore refused to release the private key. That mismatch
+would be a security-relevant anomaly worth observing.
+
+### Authentication requirements
+
+The key is built with:
+
+```kotlin
+KeyGenParameterSpec.Builder(alias, PURPOSE_SIGN or PURPOSE_VERIFY)
+    .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
+    .setDigests(KeyProperties.DIGEST_SHA256)
+    .setUserAuthenticationRequired(true)
+    .setUnlockedDeviceRequired(true)      // API 28+
+    .setIsStrongBoxBacked(true)           // API 28+; try/catch
+```
+
+`setUserAuthenticationRequired(true)` is the hardware-enforced gate:
+without a fresh `BiometricPrompt` unlock that bound the `Signature` to
+this key via `CryptoObject(signature)`, the `sign()` call raises
+`UserNotAuthenticatedException`. `setUnlockedDeviceRequired(true)`
+(API 28+) prevents use of the key while the device is in the locked
+state; older hardware falls through silently.
+
+### StrongBox try / fallback
+
+StrongBox (a discrete tamper-resistant element) is requested via
+`setIsStrongBoxBacked(true)`. On older or non-Pixel hardware the
+`KeyGenParameterSpec.Builder.build()` call throws
+`StrongBoxUnavailableException`; we catch it and retry with
+`setIsStrongBoxBacked(false)`. The resulting `KeyInfo` records the
+boolean so the audit log (S-018) can capture whether StrongBox was in
+fact used.
+
+### BiometricPrompt allowed authenticators
+
+The prompt is built with
+`BIOMETRIC_STRONG | DEVICE_CREDENTIAL`:
+
+- `BIOMETRIC_STRONG` (Class 3 biometric) is required to bind a
+  `CryptoObject` to a Keystore signing key — Class 2 (weak)
+  biometrics cannot.
+- `DEVICE_CREDENTIAL` (PIN / pattern / password) gives users without
+  enrolled biometrics a fallback rather than failing outright.
+
+If neither modality is available (no biometric and no device
+credential), the presenter resolves to
+`BiometricResult.Unavailable` and the ViewModel emits
+`Denied(BiometricUnavailable)`; the desktop sees a `PeerDenied`
+frame.
+
+### Ed25519 seed handling (transitional)
+
+The wire-protocol Ed25519 seed currently lives behind a
+`SigningKeyProvider` interface that returns the 32-byte bytes to the
+ViewModel, which then hands them to UniFFI. This is the one
+production code path where Ed25519 key bytes briefly cross the
+Kotlin boundary — a known gap relative to the strict reading of the
+S-017 DoD line "the crypto code never sees the private key bytes."
+
+The Rust crypto core (the "core" in that DoD line) never sees the seed
+in plaintext storage; it receives it as a function argument from
+UniFFI. The seed is loaded from a Keystore-encrypted file at app start
+and lives in a `ByteArray` for the lifetime of the ViewModel; the
+follow-up (tracked alongside S-018's background bridge) tightens this
+to use a Keystore-wrapped seed via a `Cipher`-init flow once the
+Keystore's Ed25519 support stabilizes on the targeted device range.
+
+## Battery-optimization exclusion (S-018)
+
+`SyauthCompanionService` is bound by the OS only while the bonded
+peer is observed in BLE range. Without an explicit battery-optimization
+exclusion the OS will doze the app within minutes, and the binding will
+quietly stop being delivered. The setup is one tap from the user once,
+and the app pops the system dialog on first launch (and again after a
+fresh CDM association).
+
+### Why the deep-link
+
+`Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` was introduced
+in API 23 (doze, Marshmallow). API 30 (R) tightened the doze rules
+significantly and added the App Standby Buckets that progressively
+restrict our binding the longer the app sits idle. API 33 added
+`POST_NOTIFICATIONS` as a runtime grant — the user must accept the
+notification permission separately from battery optimisation. API 34
+introduced the `connectedDevice` foreground-service sub-type the
+manifest declares; without it our service cannot stay foregrounded
+while bound on Android 14+.
+
+The deep-link util lives at
+`syauth-android/app/src/main/kotlin/com/sy/syauth/android/bg/BatteryOptimizationDeepLink.kt`
+as `batteryOptimizationDeepLinkIntent(context)`. It returns the system
+intent that opens the per-app battery optimization dialog;
+`isIgnoringBatteryOptimizations(context)` returns whether the
+exclusion is already granted.
+
+### When the app should prompt
+
+1. **First launch** — the home screen calls
+   `isIgnoringBatteryOptimizations` and, if false, fires the deep-link
+   immediately.
+2. **After a fresh CDM association** — the pair-complete state
+   transitions to `Bonded`, then the home screen re-runs the check on
+   re-entry. This catches the case where the user accepted CDM but
+   skipped (or revoked) the battery prompt.
+
+### OEM-specific notes
+
+Xiaomi MIUI, OnePlus, Vivo, and Oppo skins are notorious for ignoring
+the CDM contract — they apply additional kill rules on top of the OS
+defaults. The mitigation is the same exclusion plus a per-OEM
+"autostart" toggle that lives outside the public Android API. We
+document the known workarounds in the README's troubleshooting section
+once the test rack covers each skin; for now the SPEC §7 open
+question 2 tracks this gap.
+
+## Companion-device association lifecycle (S-018)
+
+The S-018 flow registers the bonded computer with
+`CompanionDeviceManager.associate()` so the OS will wake the app via
+`CompanionDeviceService` whenever the peer comes into BLE range.
+
+### When the association is requested
+
+- **At pair-complete (S-016 happy path).** The
+  `PairingViewModel` calls
+  `companionAssociator.associate(peer)` immediately after
+  `bondPersister.persist(record)` succeeds and **before**
+  transitioning to `Bonded(name)`. The user sees two consecutive OS
+  prompts during pairing:
+  1. The BT pairing numeric-comparison dialog (LESC).
+  2. The CDM "syauth wants to remember this companion device" dialog.
+- **On user revocation.** If the user removes the pair via system
+  settings, the OS stops binding the service. Re-establishing the
+  binding requires re-pairing — there is no resurrect-without-pair
+  path in v0.1.
+
+### Service-binding lifecycle
+
+- The OS observes the bonded peer in BLE range via its native
+  scanner; it does not consult `BLUETOOTH_SCAN` ours.
+- On peer-in-range it binds `SyauthCompanionService` (the manifest
+  `CompanionDeviceService` subclass) and calls
+  `onDeviceAppeared(AssociationInfo)`.
+- Our service opens a `BluetoothGattServer` via
+  `BluerlessGattServerController` and registers two characteristics
+  (challenge / response) under `SYAUTH_GATT_SERVICE_UUID`.
+- On peer-out-of-range the OS calls
+  `onDeviceDisappeared(AssociationInfo)`; we close the GATT server.
+
+### Why the GATT server is short-lived
+
+Keeping a long-lived foreground service draining the radio is exactly
+what `CompanionDeviceService` exists to avoid. The OS owns the
+lifecycle; we own only the GATT setup/teardown within the binding's
+lifetime. The result: zero radio usage when the bonded peer is out of
+range, and zero process-keepalive battery cost.
+
+## First-run pairing (LESC + app-OOB)
+
+Pairing follows SPEC §3.2 D5: LE Secure Connections numeric comparison
+followed by an app-level 4-word OOB confirmation. Run the desktop CLI
+and the phone app at the same time:
+
+1. **Desktop:** `syauth pair --adapter hci0`. The CLI powers the
+   adapter on, registers a BlueZ `Agent` with `DisplayYesNo`
+   capability, and starts advertising a rotating pair-mode UUID.
+2. **Phone:** open the syauth app and tap **Pair**. The app scans for
+   the pair-mode UUID; on a match it lists the desktop's hostname for
+   the operator to pick.
+3. **OS-level numeric comparison.** BlueZ surfaces the 6-digit
+   passkey via the agent on the desktop side; Android's
+   `ACTION_PAIRING_REQUEST` broadcast carries the same number on the
+   phone side. The operator confirms the codes match (Y on both).
+4. **App-level OOB.** Over the now-LESC-bonded link, the desktop
+   reads the phone's Ed25519 pubkey and writes its own host pubkey
+   into the transient pair-service. Both ends derive the shared
+   `bond_key` via `syauth_core::bond_key_from_pubkeys` and render the
+   same 4-word OOB code. The operator confirms a second time.
+
+On success both sides write a `Bond` record (`/var/lib/syauth/bonds.toml`
+on the desktop; app-private `syauth-bond.toml` on the phone). The
+operator never edits a config file and never uses adb.
+
+The cryptographic invariant the two confirmations enforce: an attacker
+who completes the BT-spec MITM (impossible if Phase 3 numeric
+comparison is honest) would still need to fake a pubkey substitution
+that both ends accept on Phase 4 — and the 4-word OOB derivation
+makes that visible to the operator.
+
+## Future setup steps
+
+The following will be appended as future roadmap items land:
+
+- **S-019** — pairing recovery (re-bond after factory reset).

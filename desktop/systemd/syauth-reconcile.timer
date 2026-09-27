@@ -1,0 +1,18 @@
+[Unit]
+Description=Retry Syauth crash recovery in the background
+ConditionPathExists=!%h/.config/syauth/disabled
+# The path unit only fires on a change, so a journal left behind by a crash
+# (daemon killed mid-transaction) would never be retried — and a staged
+# transaction stays unresolved until the peer's durable status can be read.
+# This timer covers both: one attempt shortly after login/boot, then periodic
+# retries. Each run is a few milliseconds and exits 0 while the peer is
+# unreachable, keeping the staged transaction for the next attempt.
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+Unit=syauth-reconcile.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=DeskUnlock phone-unlock readiness marker
+ConditionPathExists=!%h/.config/syauth/disabled
+# The lock screen reads the marker this unit maintains: it must appear as soon
+# as the phone is actually reachable and disappear the moment it is not, so a
+# 10 s cadence keeps the indicator honest without measurable cost.
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/syauth/syauth-unlock-marker
+
+[Install]
+WantedBy=graphical-session.target

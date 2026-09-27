@@ -1,0 +1,14 @@
+post_install() {
+    if [[ -f /etc/pam.d/plasmalogin ]]; then
+        /usr/lib/syauth/syauth-pam-sync install ||
+            printf '%s\n' 'DeskUnlock: Plasma PAM integration was not changed; run syauth-pam-sync install as root.' >&2
+    fi
+}
+
+post_upgrade() {
+    post_install
+}
+
+post_remove() {
+    :
+}

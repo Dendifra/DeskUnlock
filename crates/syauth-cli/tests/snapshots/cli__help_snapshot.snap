@@ -1,0 +1,24 @@
+---
+source: crates/syauth-cli/tests/cli.rs
+expression: "help_stdout(&[\"--help\"])"
+---
+Phone-as-key unlock for Linux PAM
+
+Usage: syauth <COMMAND>
+
+Commands:
+  pair               Pair a phone with this computer
+  list               Print the bonds file as TSV: id\tname\tstatus\tcreated_at
+  reconcile          Reconcile a persisted pairing transaction over authenticated GATT
+  revoke             Mark a bond as revoked (idempotent). The bond record itself is preserved so the audit trail survives; the PAM module refuses unlock attempts from revoked peers
+  unlock-request     Ask the bonded phone to approve, then unlock this session out of band with `loginctl unlock-session`. Never touches PAM: the lock screen keeps its stock password path, so a DeskUnlock failure can only ever mean "nothing happens"
+  status             Print adapter state, advertising state, bond count, and the most recent unlock outcome. Read-only — never writes to the host
+  install-pam        Wire `pam_syauth.so` into a PAM service file, atomically and with a `.bak` snapshot of the original
+  uninstall-pam      Restore a PAM service file from its `.bak` and remove the bak
+  install-presenced  Install the `syauth-presenced` systemd user unit and (live mode) reload + enable + start it
+  doctor             Inspect the unlock chain: daemon liveness, bonds file, keys file modes, BlueZ adapter, systemd user unit state, audit-log tail, and the `XDG_RUNTIME_DIR` SSH-session caveat. Emits one greppable `key=value` line per probe plus a final `doctor=ok|warn|fail` summary. `--json` emits the same data as a typed JSON object for tooling
+  help               Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version

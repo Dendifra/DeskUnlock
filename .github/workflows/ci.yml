@@ -1,0 +1,133 @@
+# DeskUnlock — Continuous Integration.
+#
+# Runs the same gates a developer runs locally:
+#   - `make lint` (clippy --all-targets -D warnings, fmt --check,
+#                  cargo deny check, scope-discipline grep).
+#   - `make test` (workspace, all targets, all features).
+#   - `make build` (release; verifies `libpam_syauth.so` ships).
+#   - deep public-repository privacy/history/release audit.
+#
+# System libraries the bluer / libpam-sys / libbluetooth-sys build
+# scripts consume are installed from Arch repositories in every job.
+# Third-party Actions are pinned to immutable commit SHAs.
+
+name: ci
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  RUST_BACKTRACE: "1"
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  lint:
+    name: lint (clippy + fmt + deny + scope-discipline)
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install Arch CI dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            git rustup dbus pam bluez-libs python pyside6 pkgconf nodejs
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup component add clippy rustfmt --toolchain stable
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Cache cargo registry & build artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Install cargo-audit and cargo-deny
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-audit,cargo-deny
+
+      - name: make lint
+        run: make lint
+
+  test:
+    name: test (workspace)
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install Arch CI dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            git rustup dbus pam bluez-libs python pyside6 pkgconf nodejs
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Cache cargo registry & build artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: make test
+        run: make test
+
+  build:
+    name: build (release workspace + cdylib)
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install Arch CI dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            git rustup dbus pam bluez-libs python pyside6 pkgconf nodejs
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Cache cargo registry & build artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: make build
+        run: make build
+
+      - name: Verify libpam_syauth.so exists
+        run: test -f target/release/libpam_syauth.so
+
+      - name: Verify syauth CLI exists
+        run: test -x target/release/syauth
+
+      - name: Verify syauth-presenced daemon exists
+        run: test -x target/release/syauth-presenced
+
+  privacy:
+    name: privacy (tree + history + release)
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all public refs
+        run: git fetch --force --prune origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+
+      - name: Deep security/privacy audit
+        run: bash scripts/security-privacy-deep-audit.sh v0.1.1
+
+  # NOTE: the Android assembleDebug job depends on the Rust-built
+  # `crates/syauth-mobile/target/syauth_mobile.aar` (UniFFI Kotlin
+  # bindings + per-ABI `libsyauth_mobile.so`). Building that in CI
+  # requires the NDK, the Android rustc targets and UniFFI tooling.
+  # The desktop-side lint/test/build gates above cover the current
+  # clean-machine workspace health check for DeskUnlock.
