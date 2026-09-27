@@ -8,7 +8,7 @@
 #
 # System libraries the bluer / libpam-sys / libbluetooth-sys build
 # scripts consume are installed from Arch repositories in every job.
-# cargo caches are warmed by Swatinem/rust-cache.
+# Third-party Actions are pinned to immutable commit SHAs.
 
 name: ci
 
@@ -43,13 +43,13 @@ jobs:
           rustup component add clippy rustfmt --toolchain stable
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Cache cargo registry & build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Install cargo-audit and cargo-deny
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: cargo-audit,cargo-deny
 
@@ -69,10 +69,10 @@ jobs:
           rustup default stable
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Cache cargo registry & build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: make test
         run: make test
@@ -90,10 +90,10 @@ jobs:
           rustup default stable
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Cache cargo registry & build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: make build
         run: make build
