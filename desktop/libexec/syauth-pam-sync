@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+PAM_DIR="${SYAUTH_PAM_DIR:-/etc/pam.d}"
+SYSTEMD_DIR="${SYAUTH_SYSTEMD_DIR:-/etc/systemd/system}"
+SYAUTH_BIN="${SYAUTH_SYAUTH_BIN:-/usr/bin/syauth}"
+SERVICE="${SYAUTH_GREETER_SERVICE:-plasmalogin}"
+
+if [[ "$(id -u)" -ne 0 ]]; then
+    echo "syauth-pam-sync: run as root" >&2
+    exit 1
+fi
+
+service_file="$PAM_DIR/$SERVICE"
+backup="$service_file.bak"
+if [[ ! -f "$service_file" ]]; then
+    exit 0
+fi
+
+if [[ -f "$backup" ]] && ! grep -q 'pam_syauth\.so' "$service_file"; then
+    if cmp -s "$service_file" "$backup"; then
+        if [[ -e "$backup.before-syauth" ]]; then
+            echo "syauth-pam-sync: refusing to overwrite $backup.before-syauth" >&2
+            exit 1
+        fi
+        mv "$backup" "$backup.before-syauth"
+    else
+        echo "syauth-pam-sync: refusing to overwrite $backup" >&2
+        exit 1
+    fi
+fi
+
+"$SYAUTH_BIN" install-pam \
+    --service "$SERVICE" \
+    --pam-dir "$PAM_DIR" \
+    --with-presenced=false \
+    --yes
+
+dropin_dir="$SYSTEMD_DIR/plasmalogin.service.d"
+dropin="$dropin_dir/deskunlock.conf"
+mkdir -p "$dropin_dir"
+cat >"$dropin" <<'UNIT'
+[Unit]
+Wants=bluetooth.service
+After=bluetooth.service
+UNIT
+
+systemctl --system daemon-reload

@@ -1,0 +1,955 @@
+// Roadmap item S-010 — persistent GATT client for the phone-side
+// foreground service. After S-013 this is the sole Android-side GATT
+// client implementation; the legacy direct-GATT sibling has been
+// retired.
+//
+// Why this exists:
+//   * SPEC §3 Decisions row "Phone connection lifecycle" mandates
+//     one persistent `BluetoothGatt` per bonded peer, opened with
+//     `autoConnect=true` and `TRANSPORT_LE`. That instructs the
+//     Android BLE stack to maintain (and silently re-establish)
+//     the link across out-of-range / sleep transitions — without
+//     app code running, without app-throttling — so the unlock
+//     latency budget (SPEC §4.3, < 2.0 s) is reachable.
+//   * On `onServicesDiscovered` (which the stack invokes after every
+//     fresh connect, including post-reconnect) the client
+//     subscribes to the challenge characteristic via
+//     `setCharacteristicNotification(challenge, true)` plus a CCCD
+//     descriptor write of `CCCD_ENABLE_NOTIFY`.
+//   * Every challenge frame the desktop notifies arrives in
+//     `onCharacteristicChanged` and is forwarded verbatim to the
+//     constructor-supplied `onChallenge(peerId, frameBytes)`
+//     callback. Both the pre-API-33 and API-33+ override forms are
+//     honored.
+//   * `writeResponse(frameBytes)` writes the signed bytes back on
+//     the response characteristic so the Approve flow can complete
+//     the unlock from the same GATT handle.
+//
+// The `GattOpener` seam exists because Robolectric 4.11.1's
+// `ShadowBluetoothDevice` does not expose a `getAutoConnect()`
+// getter on the `connectGatt(...)` call — without the seam, the
+// DoD test `auto_connect_true_passed_to_connectGatt` could not
+// mechanically pin the autoConnect=true contract.
+//
+// Constants `CCCD_UUID` and `CCCD_ENABLE_NOTIFY` are declared at
+// file scope so the class owns its own GATT-layer constants without
+// reaching into a sibling file.
+package com.sy.syauth.android.bg
+
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
+import android.bluetooth.BluetoothProfile
+import android.content.Context
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.util.Log
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
+
+/**
+ * Roadmap item S-014 — process-local registry of per-peer
+ * [PersistentGattClient] instances `MainActivity.installPersistentClientFactory`
+ * populates at construction time. The
+ * `ChallengeApprovalActivity.cancelSink` looks the per-peer client up
+ * here and calls `writeResponse(deniedFrameBytes)` to send the denied
+ * frame back on the response characteristic of the same GATT link
+ * the challenge arrived on. Tests reset the registry between cases.
+ */
+public object PersistentGattClientRegistry {
+    private val clients: ConcurrentHashMap<String, PersistentGattClient> =
+        ConcurrentHashMap()
+
+    public fun put(peerId: String, client: PersistentGattClient) {
+        clients[peerId] = client
+    }
+
+    public fun lookup(peerId: String): PersistentGattClient? = clients[peerId]
+
+    public fun remove(peerId: String) {
+        clients.remove(peerId)
+    }
+
+    /** Reset state for tests. */
+    public fun reset() {
+        clients.clear()
+    }
+}
+
+/**
+ * Seam that wraps `BluetoothDevice.connectGatt(...)` so the
+ * `autoConnect` flag is mechanically observable in tests.
+ * Production binds [DefaultGattOpener] which delegates to the
+ * 4-arg `BluetoothDevice.connectGatt(context, autoConnect,
+ * callback, TRANSPORT_LE)` overload (the minSdk-26 floor).
+ */
+internal fun interface GattOpener {
+    fun open(
+        device: BluetoothDevice,
+        autoConnect: Boolean,
+        callback: BluetoothGattCallback,
+    ): BluetoothGatt?
+}
+
+/**
+ * Production [GattOpener]: routes the call through
+ * `BluetoothDevice.connectGatt(context, autoConnect, callback,
+ * TRANSPORT_LE)`. Pinned to `TRANSPORT_LE` so the stack never
+ * negotiates BR/EDR for our LE-only profile.
+ */
+private enum class GattOperation { RSSI_READ, WRITE }
+
+internal sealed interface GattWriteDecision {
+    data object Start : GattWriteDecision
+    data object Queued : GattWriteDecision
+    data object Skip : GattWriteDecision
+}
+
+internal class GattOperationGate {
+    private var ready = false
+    private var current: GattOperation? = null
+    private var pendingAuth: ByteArray? = null
+
+    @Synchronized
+    fun markNotReady() {
+        ready = false
+        current = null
+        pendingAuth = null
+    }
+
+    @Synchronized
+    fun markReady() {
+        ready = true
+    }
+
+    @Synchronized
+    fun tryBeginRssi(): Boolean = ready && current == null && run {
+        current = GattOperation.RSSI_READ
+        true
+    }
+
+    @Synchronized
+    fun finishRssi(): ByteArray? {
+        if (current != GattOperation.RSSI_READ) return null
+        val next = pendingAuth
+        pendingAuth = null
+        current = if (next == null) null else GattOperation.WRITE
+        return next
+    }
+
+    @Synchronized
+    fun requestWrite(frame: ByteArray, diagnostic: Boolean): GattWriteDecision {
+        if (!ready) return GattWriteDecision.Skip
+        if (current == null) {
+            current = GattOperation.WRITE
+            return GattWriteDecision.Start
+        }
+        if (diagnostic) return GattWriteDecision.Skip
+        if (pendingAuth != null) return GattWriteDecision.Skip
+        pendingAuth = frame.copyOf()
+        return GattWriteDecision.Queued
+    }
+
+    @Synchronized
+    fun finishWrite(): ByteArray? {
+        if (current != GattOperation.WRITE) return null
+        val next = pendingAuth
+        pendingAuth = null
+        current = if (next == null) null else GattOperation.WRITE
+        return next
+    }
+
+    @Synchronized
+    fun isReady(): Boolean = ready
+}
+
+internal class DefaultGattOpener(private val context: Context) : GattOpener {
+    override fun open(
+        device: BluetoothDevice,
+        autoConnect: Boolean,
+        callback: BluetoothGattCallback,
+    ): BluetoothGatt? = device.connectGatt(
+        context,
+        autoConnect,
+        callback,
+        BluetoothDevice.TRANSPORT_LE,
+    )
+}
+
+/**
+ * Persistent GATT client for one bonded peer.
+ *
+ * `start()` is idempotent: a second call while a handle is already
+ * open is a no-op. `stop()` is idempotent: a second call after
+ * close is a no-op. `writeResponse(bytes)` is safe to call when
+ * the client is stopped — it returns `false` without throwing.
+ *
+ * @param context           Used by `BluetoothDevice.connectGatt`.
+ * @param adapter           Resolves the bonded peer's MAC.
+ * @param peerId            Bond's stable identifier (the desktop
+ *                          MAC per `BondRecord.peerId`); forwarded
+ *                          verbatim to `onChallenge`.
+ * @param deviceMac         The bonded peer's BLE MAC address.
+ * @param onChallenge       Invoked with `(peerId, frameBytes)` for
+ *                          every challenge frame the desktop
+ *                          notifies on
+ *                          [SYAUTH_CHALLENGE_CHAR_UUID].
+ * @param gattOpener        Test seam; defaults to
+ *                          [DefaultGattOpener].
+ */
+public class PersistentGattClient internal constructor(
+    private val context: Context,
+    private val adapter: BluetoothAdapter,
+    private val peerId: String,
+    private val deviceMac: String,
+    private val onChallenge: (peerId: String, frameBytes: ByteArray) -> Unit,
+    private val gattOpener: GattOpener,
+) {
+
+    /**
+     * Public constructor used by production code. Binds the default
+     * `connectGatt` opener.
+     */
+    public constructor(
+        context: Context,
+        adapter: BluetoothAdapter,
+        peerId: String,
+        deviceMac: String,
+        onChallenge: (peerId: String, frameBytes: ByteArray) -> Unit,
+    ) : this(
+        context = context,
+        adapter = adapter,
+        peerId = peerId,
+        deviceMac = deviceMac,
+        onChallenge = onChallenge,
+        gattOpener = DefaultGattOpener(context),
+    )
+
+    private val gatt: AtomicReference<BluetoothGatt?> = AtomicReference(null)
+    private val discoveryInFlight = AtomicBoolean(false)
+
+    /**
+     * Monotonic timestamp of the last callback any GATT layer delivered.
+     * Drives the liveness watchdog: a link that dies silently (the desktop
+     * rebooted, the ACL vanished without a disconnect callback) leaves the
+     * client believing it is connected, and nothing else ever fires —
+     * observed 2026-09-26: the phone sat mute for ~5 minutes after a desktop
+     * reboot until the app was opened by hand.
+     */
+    private val lastCallbackMs = AtomicLong(0L)
+
+    /**
+     * Set to `true` while the client is intentionally torn down via
+     * [stop]. Consulted by the disconnect-watchdog so a watchdog
+     * tick scheduled before `stop()` cannot revive the connection
+     * after the service decided to shut it down.
+     */
+    private val stopped: AtomicBoolean = AtomicBoolean(false)
+    private val gattOperations = GattOperationGate()
+
+    /**
+     * Handler bound to the main looper, owned by the client. The
+     * disconnect-watchdog posts itself here on every
+     * `STATE_DISCONNECTED` and is removed on every `STATE_CONNECTED`.
+     * The main looper is fine for this — the runnable just calls
+     * `forceReconnect()` which dispatches to the BLE stack's own
+     * threads.
+     */
+    private val reconnectHandler: Handler = Handler(Looper.getMainLooper())
+    private val gattGeneration = AtomicLong(0L)
+    private val discoveryRecoveryActive = AtomicBoolean(false)
+    private val discoveryRecoveryReconnectUsed = AtomicBoolean(false)
+    private var discoveryRetry: Runnable? = null
+    private var discoveryRetryAttempt = 0
+    private var discoveryWatchdog: Runnable? = null
+    private var discoveryRecoveryRetry: Runnable? = null
+
+    private val presenceHandler: Handler = Handler(Looper.getMainLooper())
+    private val rssiHandler: Handler = Handler(Looper.getMainLooper())
+
+    private val rssiRunnable: Runnable = object : Runnable {
+        override fun run() {
+            if (stopped.get()) return
+            val handle = gatt.get() ?: return
+            if (gattOperations.tryBeginRssi()) {
+                val requested = requestRssiRead(handle)
+                if (!requested) gattOperations.finishRssi()
+                Log.d(PERSISTENT_GATT_LOG_TAG, "RSSI read queued=$requested")
+            } else {
+                Log.d(PERSISTENT_GATT_LOG_TAG, "RSSI sample skipped: GATT busy or not ready")
+            }
+            rssiHandler.postDelayed(this, RSSI_SAMPLE_INTERVAL_MS)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun requestRssiRead(handle: BluetoothGatt): Boolean =
+        runCatching { handle.readRemoteRssi() }.getOrDefault(false)
+
+    private val presenceRunnable: Runnable = object : Runnable {
+        override fun run() {
+            if (stopped.get()) return
+            val ok = writeResponse(PRESENCE_HEARTBEAT)
+            Log.d(PERSISTENT_GATT_LOG_TAG, "presence heartbeat queued=$ok")
+            presenceHandler.postDelayed(this, PRESENCE_HEARTBEAT_INTERVAL_MS)
+        }
+    }
+
+    /**
+     * Catch-all watchdog for a link that goes silent: every
+     * [LIVENESS_CHECK_INTERVAL_MS] it verifies that some GATT callback
+     * arrived recently. A stale link is torn down and re-opened, which is
+     * what recovers every silent-wedge variant (no disconnect callback,
+     * exhausted discovery recovery, dead ACL after a desktop reboot).
+     */
+    private val livenessRunnable: Runnable = object : Runnable {
+        override fun run() {
+            if (stopped.get()) return
+            val handle = gatt.get()
+            if (handle == null) {
+                // A started client with no handle is exactly the silent wedge
+                // (the link died and nothing re-armed): re-open it instead of
+                // waiting for an external event.
+                Log.w(
+                    PERSISTENT_GATT_LOG_TAG,
+                    "liveness: started client without a GATT handle — re-opening",
+                )
+                start()
+                return
+            }
+            val age = SystemClock.elapsedRealtime() - lastCallbackMs.get()
+            if (age > LIVENESS_STALE_AFTER_MS) {
+                Log.w(
+                    PERSISTENT_GATT_LOG_TAG,
+                    "liveness: no GATT callback for ${age}ms — forcing reconnect",
+                )
+                forceReconnect()
+                return
+            }
+            reconnectHandler.postDelayed(this, LIVENESS_CHECK_INTERVAL_MS)
+        }
+    }
+
+    /**
+     * Watchdog that re-issues a fresh `connectGatt` if we are still
+     * disconnected after [RECONNECT_INTERVAL_MS]. Android's
+     * `autoConnect=true` background scan has a very low duty cycle —
+     * after Doze, screen-off, or a long out-of-range absence it can
+     * take many minutes to re-acquire the peer on its own. A fresh
+     * `connectGatt` call resets Android's scan timer, so a periodic
+     * `forceReconnect()` from a watchdog converts that into a
+     * deterministic ~RECONNECT_INTERVAL_MS recovery window.
+     *
+     * The watchdog re-arms itself through `forceReconnect()` →
+     * `start()` (which schedules the next tick), so a single tick
+     * keeps the cadence going until the link is up. Successful
+     * reconnects clear it via `STATE_CONNECTED` in the callback, and
+     * `stop()` clears it directly. The `stopped` guard prevents a
+     * tick that fires concurrently with `stop()` from reopening the
+     * link.
+     */
+    private val reconnectRunnable: Runnable = object : Runnable {
+        override fun run() {
+            if (stopped.get() || discoveryRecoveryReconnectUsed.get()) return
+            Log.i(
+                PERSISTENT_GATT_LOG_TAG,
+                "watchdog: still disconnected after ${RECONNECT_INTERVAL_MS}ms — forcing reconnect"
+            )
+            forceReconnect()
+        }
+    }
+
+    /**
+     * Open the persistent GATT connection with `autoConnect=true`.
+     * The OS will hold the connection across range transitions
+     * without further app calls. Idempotent.
+     */
+    public fun start() {
+        startWithMode(AUTO_CONNECT_TRUE)
+    }
+
+    /**
+     * Open the persistent GATT connection.
+     *
+     * `autoConnect=true` (the normal path: app start, Bluetooth back on) asks
+     * the stack to keep the link alive across range transitions with a
+     * low-duty-cycle background scan. That scan needs ~8 s to find the peer on
+     * a cold start (measured 2026-09-26: the operator's login screen waited for
+     * it), so the recovery watchdogs use `autoConnect=false`: a direct attempt
+     * completes in 1-2 s when the peer is there and fails fast when it is not.
+     * Idempotent.
+     */
+    private fun startWithMode(autoConnect: Boolean) {
+        stopped.set(false)
+        if (gatt.get() != null) return
+        val device = runCatching { adapter.getRemoteDevice(deviceMac) }.getOrNull()
+        if (device == null) {
+            Log.w(PERSISTENT_GATT_LOG_TAG, "start: bonded device unavailable")
+            return
+        }
+        Log.i(PERSISTENT_GATT_LOG_TAG, "start: opening autoConnect=$autoConnect")
+        val handle = gattOpener.open(device, autoConnect, gattCallback)
+        if (handle == null) {
+            Log.w(PERSISTENT_GATT_LOG_TAG, "start: connectGatt returned null")
+            return
+        }
+        gatt.set(handle)
+        gattGeneration.incrementAndGet()
+        cancelDiscoveryRetry()
+        discoveryRetryAttempt = 0
+        discoveryInFlight.set(false)
+        // BUG-20260528-0130 → BUG-20260528-2334: arm the reconnect
+        // watchdog NOW, not only on STATE_DISCONNECTED. A
+        // connectGatt(autoConnect=true) that never completes emits NO
+        // onConnectionStateChange callback at all (e.g. the desktop was
+        // mid-`serve_gatt_application` re-registration, briefly out of
+        // range, or Android's low-duty-cycle background scan stalled),
+        // so the disconnected-path scheduling never runs and the client
+        // would wedge forever in a never-completing scan — the desktop
+        // then audits notifier_slot=None / transport-error on every
+        // unlock. The cold-start arm uses START_CONNECT_WATCHDOG_MS
+        // (not the 2 s post-disconnect cadence) so a slow cold scan is
+        // not torn down before it can complete (observed 2026-09-23:
+        // a 2 s arm here looped "forcing reconnect" forever). A fast
+        // successful connect cancels this pending tick via
+        // STATE_CONNECTED before it fires; a stalled connect is retried.
+        reconnectHandler.removeCallbacks(reconnectRunnable)
+        reconnectHandler.postDelayed(reconnectRunnable, START_CONNECT_WATCHDOG_MS)
+        // Arm the liveness watchdog from the moment a handle exists: any
+        // callback refreshes it, so only a genuinely silent link is torn down.
+        lastCallbackMs.set(SystemClock.elapsedRealtime())
+        reconnectHandler.removeCallbacks(livenessRunnable)
+        reconnectHandler.postDelayed(livenessRunnable, LIVENESS_CHECK_INTERVAL_MS)
+    }
+
+    /**
+     * Tear down the GATT connection. Idempotent — a second call
+     * after close is a no-op.
+     */
+    public fun stop() {
+        stopped.set(true)
+        reconnectHandler.removeCallbacks(reconnectRunnable)
+        reconnectHandler.removeCallbacks(livenessRunnable)
+        cancelDiscoveryRetry()
+        cancelDiscoveryWatchdog()
+        cancelDiscoveryRecoveryRetry()
+        discoveryRecoveryActive.set(false)
+        discoveryRecoveryReconnectUsed.set(false)
+        gattGeneration.incrementAndGet()
+        presenceHandler.removeCallbacks(presenceRunnable)
+        rssiHandler.removeCallbacks(rssiRunnable)
+        gattOperations.markNotReady()
+        val handle = gatt.getAndSet(null) ?: return
+        runCatching { handle.disconnect() }
+        runCatching { handle.close() }
+        Log.i(PERSISTENT_GATT_LOG_TAG, "stopped")
+    }
+
+    /**
+     * Force a fresh GATT handshake against the bonded peer.
+     *
+     * Used by [SyauthCompanionService] when CDM presence transitions
+     * `absent -> present` — the desktop daemon almost certainly
+     * restarted (`syauth-presenced` re-registers its GATT app on
+     * boot), and our cached service tree + CCCD subscription are now
+     * bound to the dead application registration. BlueZ does not
+     * broadcast a Service Changed indication on
+     * `serve_gatt_application` re-registration, so the Android stack
+     * never auto-invalidates the cache on its own; without an
+     * explicit teardown we silently miss every challenge that follows.
+     *
+     * Sequence: disconnect → close → reopen with the same
+     * `autoConnect=true` semantics as [start]. Idempotent; safe to
+     * call whether or not the client was previously started.
+     */
+    public fun forceReconnect() {
+        Log.i(PERSISTENT_GATT_LOG_TAG, "forceReconnect: tearing down stale GATT")
+        reconnectFresh(resetRecovery = true, autoConnect = AUTO_CONNECT_FALSE)
+    }
+
+    private fun reconnectFresh(resetRecovery: Boolean, autoConnect: Boolean = AUTO_CONNECT_FALSE) {
+        reconnectHandler.removeCallbacks(reconnectRunnable)
+        cancelDiscoveryRetry()
+        cancelDiscoveryWatchdog()
+        cancelDiscoveryRecoveryRetry()
+        discoveryRetryAttempt = 0
+        discoveryInFlight.set(false)
+        gattOperations.markNotReady()
+        presenceHandler.removeCallbacks(presenceRunnable)
+        rssiHandler.removeCallbacks(rssiRunnable)
+        if (resetRecovery) {
+            discoveryRecoveryActive.set(false)
+            discoveryRecoveryReconnectUsed.set(false)
+        }
+        val handle = gatt.getAndSet(null)
+        gattGeneration.incrementAndGet()
+        if (handle != null) {
+            runCatching { handle.disconnect() }
+            runCatching { handle.close() }
+        }
+        startWithMode(autoConnect)
+    }
+
+    /**
+     * Reflective wrapper around `BluetoothGatt.refresh()`. The method
+     * is `@hide` on AOSP but stable across every release since
+     * Android 4.x — it clears the per-device GATT service cache the
+     * OS keeps under `/data/misc/bluetooth/`. Without this, a fresh
+     * `connectGatt` will hand back the cached (stale) services and
+     * `discoverServices` is a no-op against the OS-level cache.
+     *
+     * Returns true on success, false on any reflection failure. We
+     * never throw — a failed refresh just means the next
+     * `discoverServices` may return cached data, which the
+     * absent→present-driven forceReconnect compensates for.
+     */
+    private fun refreshGattCache(handle: BluetoothGatt): Boolean {
+        return runCatching {
+            val method = handle.javaClass.getMethod("refresh")
+            (method.invoke(handle) as? Boolean) ?: false
+        }.getOrElse { err ->
+            Log.w(PERSISTENT_GATT_LOG_TAG, "gatt.refresh() reflection failed", err)
+            false
+        }
+    }
+
+    private fun cancelDiscoveryRetry() {
+        discoveryRetry?.let(reconnectHandler::removeCallbacks)
+        discoveryRetry = null
+    }
+
+    private fun cancelDiscoveryWatchdog() {
+        discoveryWatchdog?.let(reconnectHandler::removeCallbacks)
+        discoveryWatchdog = null
+    }
+
+    private fun cancelDiscoveryRecoveryRetry() {
+        discoveryRecoveryRetry?.let(reconnectHandler::removeCallbacks)
+        discoveryRecoveryRetry = null
+    }
+
+    /**
+     * Keep retrying a fresh GATT handshake after the one-shot discovery
+     * recovery was already used. Field reality (2026-09-24): the desktop can
+     * be down for minutes (master OFF, a daemon restart, a long boot); the
+     * client used its single recovery and then went silent forever, so the
+     * phone never reconnected when the desktop came back — no presence, no
+     * RSSI, proximity dead until the app was restarted by hand.
+     */
+    private fun scheduleDiscoveryRecoveryRetry() {
+        if (discoveryRecoveryRetry != null) return
+        val retry = Runnable {
+            discoveryRecoveryRetry = null
+            if (stopped.get()) return@Runnable
+            discoveryRecoveryReconnectUsed.set(false)
+            reconnectFresh(resetRecovery = false)
+        }
+        discoveryRecoveryRetry = retry
+        reconnectHandler.postDelayed(retry, DISCOVERY_RECOVERY_RETRY_MS)
+    }
+
+    /**
+     * Arm a watchdog for a discovery that never produces
+     * `onServicesDiscovered`. Field reality (2026-09-24): after a
+     * dissociate + re-associate the fresh client connected
+     * (`STATE_CONNECTED`) and called `discoverServices()`, but the
+     * callback never fired — the client sat wedged for minutes with no
+     * subscription, so the desktop saw no presence/RSSI and proximity
+     * stayed dead. The disconnect watchdog does not cover this: the link
+     * is up, so it was cancelled on `STATE_CONNECTED`. This one forces a
+     * fresh GATT handshake when discovery stalls.
+     */
+    private fun armDiscoveryWatchdog(handle: BluetoothGatt) {
+        cancelDiscoveryWatchdog()
+        val generation = gattGeneration.get()
+        val watchdog = Runnable {
+            discoveryWatchdog = null
+            if (stopped.get() || gatt.get() !== handle || gattGeneration.get() != generation) return@Runnable
+            if (!discoveryInFlight.get()) return@Runnable
+            Log.w(
+                PERSISTENT_GATT_LOG_TAG,
+                "discovery watchdog: no onServicesDiscovered after ${DISCOVERY_WATCHDOG_MS}ms — forcing reconnect",
+            )
+            forceReconnect()
+        }
+        discoveryWatchdog = watchdog
+        reconnectHandler.postDelayed(watchdog, DISCOVERY_WATCHDOG_MS)
+    }
+
+    private fun scheduleDiscoveryRetry(handle: BluetoothGatt) {
+        if (discoveryRetry != null) return
+        val delay = DISCOVERY_RETRY_DELAYS_MS.getOrNull(discoveryRetryAttempt)
+        if (delay == null) {
+            Log.w(PERSISTENT_GATT_LOG_TAG, "GATT discovery retry exhausted")
+            if (discoveryRecoveryReconnectUsed.compareAndSet(false, true)) {
+                Log.w(PERSISTENT_GATT_LOG_TAG, "escalating incomplete discovery to one fresh GATT")
+                reconnectFresh(resetRecovery = false)
+            } else {
+                Log.w(
+                    PERSISTENT_GATT_LOG_TAG,
+                    "fresh GATT discovery recovery exhausted; retrying in ${DISCOVERY_RECOVERY_RETRY_MS}ms",
+                )
+                scheduleDiscoveryRecoveryRetry()
+            }
+            return
+        }
+        discoveryRetryAttempt += 1
+        val generation = gattGeneration.get()
+        val retry = Runnable {
+            discoveryRetry = null
+            if (stopped.get() || gatt.get() !== handle || gattGeneration.get() != generation) return@Runnable
+            discoveryInFlight.set(true)
+            if (!handle.discoverServices()) {
+                discoveryInFlight.set(false)
+                scheduleDiscoveryRetry(handle)
+            } else {
+                armDiscoveryWatchdog(handle)
+            }
+        }
+        discoveryRetry = retry
+        Log.w(PERSISTENT_GATT_LOG_TAG, "required GATT attributes missing; retrying discovery")
+        reconnectHandler.postDelayed(retry, delay)
+    }
+
+    /**
+     * Write the signed response frame onto the response
+     * characteristic of the open GATT. Returns the stack's verdict
+     * for `gatt.writeCharacteristic`. Returns `false` (without
+     * throwing) when the client is not started or the response
+     * characteristic is not present.
+     */
+    public fun writeResponse(frameBytes: ByteArray): Boolean {
+        val handle = gatt.get() ?: return false
+        if (!gattOperations.isReady()) return false
+        val rssiPrefix = RSSI_TELEMETRY_PREFIX.toByteArray(Charsets.UTF_8)
+        val diagnostic = frameBytes.contentEquals(PRESENCE_HEARTBEAT) ||
+            (frameBytes.size >= rssiPrefix.size && frameBytes.copyOf(rssiPrefix.size).contentEquals(rssiPrefix))
+        return when (gattOperations.requestWrite(frameBytes, diagnostic)) {
+            GattWriteDecision.Skip -> false
+            GattWriteDecision.Queued -> true
+            GattWriteDecision.Start -> writeGattFrame(handle, frameBytes)
+        }
+    }
+
+    /**
+     * `ManagedClient` seam: hand a raw frame to the radio without the caller
+     * caring which characteristic carries it.
+     */
+    public fun send(frameBytes: ByteArray): Boolean = writeResponse(frameBytes)
+
+    private fun writeGattFrame(handle: BluetoothGatt, frameBytes: ByteArray): Boolean {
+        val c = findCharacteristic(handle, SYAUTH_RESPONSE_CHAR_UUID) ?: run {
+            val next = gattOperations.finishWrite()
+            if (next != null) writeGattFrame(handle, next)
+            return false
+        }
+        c.value = frameBytes
+        val accepted = runCatching { handle.writeCharacteristic(c) }.getOrDefault(false)
+        if (!accepted) {
+            val next = gattOperations.finishWrite()
+            if (next != null) writeGattFrame(handle, next)
+        }
+        return accepted
+    }
+
+    private val gattCallback: BluetoothGattCallback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+            if (gatt.get() !== g) return
+            lastCallbackMs.set(SystemClock.elapsedRealtime())
+            Log.i(PERSISTENT_GATT_LOG_TAG, "conn state status=$status new=$newState")
+            when (newState) {
+                BluetoothProfile.STATE_CONNECTED -> {
+                    // Cancel any pending reconnect watchdog — we are
+                    // healthy again. (No-op if none was scheduled.)
+                    reconnectHandler.removeCallbacks(reconnectRunnable)
+                    cancelDiscoveryRetry()
+                    discoveryRetryAttempt = 0
+                    rssiHandler.removeCallbacks(rssiRunnable)
+                    gattOperations.markNotReady()
+                    discoveryInFlight.set(true)
+                    // Always invalidate the on-disk GATT service cache before
+                    // re-discovering. The desktop daemon may have re-registered
+                    // its GATT app while we held the link alive (e.g. an apt
+                    // upgrade or a `systemctl restart syauth-presenced`); the
+                    // cached handles point at a dead registration, and BlueZ
+                    // does not send a Service Changed indication on
+                    // `serve_gatt_application` swap. `refresh()` clears the
+                    // cache so the upcoming `discoverServices()` actually
+                    // talks to the wire.
+                    val refreshed = refreshGattCache(g)
+                    Log.i(PERSISTENT_GATT_LOG_TAG, "conn state: gatt.refresh()=$refreshed; discovering")
+                    g.discoverServices()
+                    armDiscoveryWatchdog(g)
+                }
+                BluetoothProfile.STATE_DISCONNECTED -> {
+                    cancelDiscoveryRetry()
+                    discoveryRetryAttempt = 0
+                    presenceHandler.removeCallbacks(presenceRunnable)
+                    rssiHandler.removeCallbacks(rssiRunnable)
+                    gattOperations.markNotReady()
+                    // Arm the watchdog. autoConnect=true alone is too lazy
+                    // for field reality (Doze + long out-of-range absences
+                    // routinely take minutes to re-acquire). The watchdog
+                    // forces a fresh `connectGatt` every RECONNECT_INTERVAL_MS
+                    // which resets Android's scan timer and gives a
+                    // deterministic recovery window once the peer is back
+                    // in range. Cancelled on STATE_CONNECTED above.
+                    if (!stopped.get()) {
+                        gatt.compareAndSet(g, null)
+                        Log.i(
+                            PERSISTENT_GATT_LOG_TAG,
+                            "conn state: disconnected; scheduling watchdog in ${RECONNECT_INTERVAL_MS}ms"
+                        )
+                        reconnectHandler.removeCallbacks(reconnectRunnable)
+                        reconnectHandler.postDelayed(reconnectRunnable, RECONNECT_INTERVAL_MS)
+                    }
+                }
+            }
+        }
+
+        override fun onReadRemoteRssi(g: BluetoothGatt, rssi: Int, status: Int) {
+            if (gatt.get() !== g) return
+            lastCallbackMs.set(SystemClock.elapsedRealtime())
+            val pendingAuth = gattOperations.finishRssi()
+            if (pendingAuth != null) {
+                writeGattFrame(g, pendingAuth)
+                return
+            }
+            if (status != BluetoothGatt.GATT_SUCCESS || gatt.get() !== g || !gattOperations.isReady()) {
+                Log.d(PERSISTENT_GATT_LOG_TAG, "RSSI read failed status=$status")
+                return
+            }
+            val payload = "$RSSI_TELEMETRY_PREFIX$rssi".toByteArray(Charsets.UTF_8)
+            val sent = writeResponse(payload)
+            Log.d(PERSISTENT_GATT_LOG_TAG, "RSSI sample raw=$rssi sent=$sent")
+        }
+
+        override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            if (gatt.get() !== g) return
+            lastCallbackMs.set(SystemClock.elapsedRealtime())
+            cancelDiscoveryWatchdog()
+            discoveryInFlight.set(false)
+            gattOperations.markNotReady()
+            Log.i(PERSISTENT_GATT_LOG_TAG, "services discovered status=$status n=${g.services.size}")
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                discoveryRecoveryActive.set(true)
+                scheduleDiscoveryRetry(g)
+                return
+            }
+            val challenge = findCharacteristic(g, SYAUTH_CHALLENGE_CHAR_UUID)
+            val response = findCharacteristic(g, SYAUTH_RESPONSE_CHAR_UUID)
+            val cccd = challenge?.getDescriptor(CCCD_UUID)
+            if (challenge == null || response == null || cccd == null) {
+                discoveryRecoveryActive.set(true)
+                scheduleDiscoveryRetry(g)
+                return
+            }
+            val notificationsEnabled = g.setCharacteristicNotification(challenge, true)
+            cccd.value = CCCD_ENABLE_NOTIFY
+            if (!notificationsEnabled) {
+                discoveryRecoveryActive.set(true)
+                scheduleDiscoveryRetry(g)
+                return
+            }
+            val ok = runCatching { g.writeDescriptor(cccd) }.getOrDefault(false)
+            if (!ok) {
+                discoveryRecoveryActive.set(true)
+                scheduleDiscoveryRetry(g)
+            }
+        }
+
+        override fun onServiceChanged(g: BluetoothGatt) {
+            if (gatt.get() !== g) return
+            lastCallbackMs.set(SystemClock.elapsedRealtime())
+            val newRecoveryEpisode = discoveryRecoveryActive.compareAndSet(false, true)
+            gattOperations.markNotReady()
+            if (newRecoveryEpisode) {
+                cancelDiscoveryRetry()
+                discoveryRetryAttempt = 0
+                presenceHandler.removeCallbacks(presenceRunnable)
+                rssiHandler.removeCallbacks(rssiRunnable)
+            }
+            if (newRecoveryEpisode && discoveryInFlight.compareAndSet(false, true)) {
+                g.discoverServices()
+                armDiscoveryWatchdog(g)
+            }
+        }
+
+        @Deprecated("Pre-API-33 onCharacteristicChanged; we honor both forms.")
+        override fun onCharacteristicChanged(
+            g: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+        ) {
+            if (gatt.get() !== g || !gattOperations.isReady()) return
+            lastCallbackMs.set(SystemClock.elapsedRealtime())
+            if (characteristic.uuid != SYAUTH_CHALLENGE_CHAR_UUID) return
+            val bytes = characteristic.value ?: return
+            Log.i(PERSISTENT_GATT_LOG_TAG, "challenge frame received len=${bytes.size}")
+            presenceHandler.removeCallbacks(presenceRunnable)
+            presenceHandler.postDelayed(presenceRunnable, 30_000L)
+            onChallenge(peerId, bytes)
+        }
+
+        override fun onCharacteristicChanged(
+            g: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray,
+        ) {
+            if (gatt.get() !== g || !gattOperations.isReady()) return
+            lastCallbackMs.set(SystemClock.elapsedRealtime())
+            if (characteristic.uuid != SYAUTH_CHALLENGE_CHAR_UUID) return
+            Log.i(PERSISTENT_GATT_LOG_TAG, "challenge frame received (api33) len=${value.size}")
+            presenceHandler.removeCallbacks(presenceRunnable)
+            presenceHandler.postDelayed(presenceRunnable, 30_000L)
+            onChallenge(peerId, value)
+        }
+
+        override fun onCharacteristicWrite(
+            g: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            status: Int,
+        ) {
+            if (gatt.get() !== g) return
+            lastCallbackMs.set(SystemClock.elapsedRealtime())
+            val pendingAuth = gattOperations.finishWrite()
+            if (pendingAuth != null) writeGattFrame(g, pendingAuth)
+        }
+
+        override fun onDescriptorWrite(
+            g: BluetoothGatt,
+            descriptor: BluetoothGattDescriptor,
+            status: Int,
+        ) {
+            if (gatt.get() !== g) return
+            lastCallbackMs.set(SystemClock.elapsedRealtime())
+            Log.i(PERSISTENT_GATT_LOG_TAG, "descriptor write status=$status")
+            if (descriptor.uuid == CCCD_UUID && status == BluetoothGatt.GATT_SUCCESS) {
+                cancelDiscoveryRetry()
+                discoveryRetryAttempt = 0
+                discoveryInFlight.set(false)
+                discoveryRecoveryActive.set(false)
+                discoveryRecoveryReconnectUsed.set(false)
+                gattOperations.markReady()
+                rssiHandler.removeCallbacks(rssiRunnable)
+                rssiHandler.post(rssiRunnable)
+                presenceHandler.removeCallbacks(presenceRunnable)
+                presenceHandler.post(presenceRunnable)
+                Log.i(PERSISTENT_GATT_LOG_TAG, "presence heartbeat armed")
+            }
+        }
+    }
+
+    private fun findCharacteristic(
+        g: BluetoothGatt,
+        uuid: UUID,
+    ): BluetoothGattCharacteristic? {
+        for (service in g.services) {
+            val ch = service.getCharacteristic(uuid)
+            if (ch != null) return ch
+        }
+        return null
+    }
+
+    public companion object {
+        /** Logcat tag used by every span the client emits. */
+        internal const val PERSISTENT_GATT_LOG_TAG: String = "syauth.bg.persistent"
+
+        /** Client-Characteristic-Configuration descriptor UUID (BT SIG). */
+        private val CCCD_UUID: UUID =
+            UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+
+        /** Bytes to write to a CCCD descriptor to enable notifications. */
+        private val CCCD_ENABLE_NOTIFY: ByteArray = byteArrayOf(0x01, 0x00)
+
+        /**
+         * Watchdog cadence (milliseconds) for re-issuing a fresh
+         * `connectGatt` when the link is in `STATE_DISCONNECTED`.
+         * 15 s is short enough that the user's first sudo after
+         * returning into range usually finds the link already
+         * recovered, and long enough that we do not thrash the BLE
+         * stack while the peer is genuinely absent (each fresh
+         * `connectGatt` triggers a scan window which has a small but
+         * non-zero radio cost).
+         */
+        internal const val RECONNECT_INTERVAL_MS: Long = 2_000L
+
+        /**
+         * Watchdog cadence for a `connectGatt` that never produces any
+         * callback at all. Field reality (2026-09-23): a cold
+         * `autoConnect=true` scan against a restarted daemon routinely
+         * needs several seconds; arming the 2 s post-disconnect watchdog
+         * here killed every attempt before it could complete — the phone
+         * looped "forcing reconnect" every 2 s and the desktop never saw
+         * a subscription (no RSSI, no presence, dead unlock). 15 s gives
+         * the scan room while still recovering a genuinely wedged
+         * connect without user action.
+         */
+        internal const val START_CONNECT_WATCHDOG_MS: Long = 15_000L
+
+        /**
+         * Liveness watchdog cadence: how often a started client verifies that
+         * some GATT callback arrived recently.
+         */
+        internal const val LIVENESS_CHECK_INTERVAL_MS: Long = 3_000L
+
+        /**
+         * A started client that produced no callback for this long is
+         * considered silently dead and is torn down and re-opened. Covers
+         * the desktop-reboot case (2026-09-26): the ACL vanished without a
+         * disconnect callback and the phone sat mute for minutes. Kept short
+         * so the phone starts retrying while the desktop is still booting and
+         * connects as soon as its GATT app is registered — the desktop's
+         * daemon is up ~18 s after boot, and the operator wants the phone
+         * ready within seconds of the login screen (2026-09-26).
+         */
+        internal const val LIVENESS_STALE_AFTER_MS: Long = 9_000L
+        internal val DISCOVERY_RETRY_DELAYS_MS: LongArray = longArrayOf(500L, 1_000L, 2_000L)
+
+        /**
+         * Watchdog for a `discoverServices()` that never produces an
+         * `onServicesDiscovered` callback. Field reality (2026-09-24):
+         * after a dissociate + re-associate the fresh client connected and
+         * started discovery, then sat wedged for minutes — no callback, no
+         * subscription, no RSSI, proximity dead. The disconnect watchdog
+         * does not cover this (the link is up, so it was cancelled on
+         * `STATE_CONNECTED`). 10 s forces a fresh handshake when discovery
+         * stalls without thrashing a healthy link.
+         */
+        internal const val DISCOVERY_WATCHDOG_MS: Long = 10_000L
+
+        /**
+         * Backoff for retrying a fresh GATT handshake after the one-shot
+         * discovery recovery was already spent. The peer can be away for
+         * minutes; 15 s keeps retrying without turning into a tight loop.
+         */
+        internal const val DISCOVERY_RECOVERY_RETRY_MS: Long = 15_000L
+
+        private const val PRESENCE_HEARTBEAT_INTERVAL_MS: Long = 10_000L
+        internal const val RSSI_SAMPLE_INTERVAL_MS: Long = 2_000L
+        internal const val RSSI_TELEMETRY_PREFIX: String = "SYAUTH-RSSI-v1:"
+        private val PRESENCE_HEARTBEAT: ByteArray =
+            "SYAUTH-PRESENCE-v1".toByteArray(Charsets.UTF_8)
+
+        /**
+         * The `autoConnect` flag the production code always passes
+         * to `BluetoothDevice.connectGatt(...)`. Pinned as a named
+         * constant so the contract is one grep away and a future
+         * "optimisation" cannot silently flip it to `false`.
+         */
+        private const val AUTO_CONNECT_TRUE: Boolean = true
+
+        /**
+         * Direct-connect mode for the recovery watchdogs: fast when the peer
+         * is there, fails fast when it is not (see [startWithMode]).
+         */
+        private const val AUTO_CONNECT_FALSE: Boolean = false
+    }
+}

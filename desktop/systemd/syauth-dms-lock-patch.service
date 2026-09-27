@@ -1,0 +1,7 @@
+[Unit]
+Description=Adapt the DMS lock screen for DeskUnlock fingerprint unlock
+ConditionPathExists=!%h/.config/syauth/disabled
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/syauth/syauth-dms-lock-patch

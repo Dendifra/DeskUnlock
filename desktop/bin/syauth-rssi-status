@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+path="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/syauth/rssi.last"
+raw=""
+filtered=""
+sample_ms=""
+
+if [[ -r "$path" ]]; then
+    while IFS='=' read -r key value; do
+        case "$key" in
+            raw) raw="$value" ;;
+            filtered) filtered="$value" ;;
+            sample_epoch_ms) sample_ms="$value" ;;
+        esac
+    done < "$path"
+fi
+
+now_ms=$(date +%s%3N)
+if [[ "$sample_ms" =~ ^[0-9]+$ ]] && (( now_ms >= sample_ms )); then
+    age_ms=$((now_ms - sample_ms))
+    age="$(awk -v ms="$age_ms" 'BEGIN { printf "%.1f", ms / 1000 }')s"
+else
+    age="never"
+fi
+
+printf 'RSSI raw: %s dBm\n' "${raw:-n/a}"
+printf 'RSSI filtered: %s dBm\n' "${filtered:-n/a}"
+printf 'sample age: %s\n' "$age"
+printf 'state: telemetry-only\n'

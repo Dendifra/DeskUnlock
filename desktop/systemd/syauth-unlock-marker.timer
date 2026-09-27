@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh the DeskUnlock phone-unlock readiness marker
+ConditionPathExists=!%h/.config/syauth/disabled
+
+[Timer]
+OnBootSec=10s
+OnUnitActiveSec=10s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Italian copy. `values/` holds the English source and is the default, so any
+  locale without a catalog falls back to English rather than to a
+  half-translated screen.
+-->
+<resources>
+    <string name="app_name">DeskUnlock</string>
+
+    <string name="syauth_biometric_prompt_title">DeskUnlock</string>
+    <string name="syauth_biometric_prompt_subtitle_fmt">Sblocca la sessione su %1$s</string>
+    <string name="syauth_biometric_prompt_cancel">Annulla</string>
+
+    <string name="syauth_notification_unlock_title">DeskUnlock</string>
+    <string name="syauth_notification_unlock_text">Richiesta di sblocco</string>
+    <string name="syauth_notification_history_channel_name">DeskUnlock</string>
+    <string name="syauth_notification_history_channel_description">Cronologia delle richieste di sblocco del computer.</string>
+
+    <string name="pair_idle_title">Associa un computer</string>
+    <string name="pair_idle_description">Collega il telefono al computer in modo sicuro via Bluetooth.</string>
+    <string name="pair_idle_cta">Cerca computer</string>
+    <string name="pair_searching">Ricerca dei computer DeskUnlock nelle vicinanze…</string>
+    <string name="pair_lesc_title">Verifica Bluetooth</string>
+    <string name="pair_bluetooth_help">Controlla che il codice Bluetooth coincida su entrambi i dispositivi.</string>
+    <string name="pair_oob_help">Controlla che questo numero coincida con quello mostrato sul computer.</string>
+    <string name="pair_oob_question">I numeri coincidono?</string>
+    <string name="pair_oob_yes">Sì</string>
+    <string name="pair_oob_no">No</string>
+    <string name="pair_finalizing">Completamento dell\'associazione…</string>
+    <string name="pair_uncertain_title">Verifica dell\'associazione…</string>
+    <string name="pair_uncertain_retry">Riprova</string>
+    <string name="pair_bonded">Computer associato</string>
+    <string name="pair_done">Fine</string>
+    <string name="pair_cancel">Annulla</string>
+    <string name="pair_back">Indietro</string>
+    <string name="pair_failed_prefix">Associazione non riuscita: </string>
+    <string name="pair_refused_help">Il computer ha rifiutato l\'associazione. Sul computer apri DeskUnlock, premi "Associa telefono" e riprova.</string>
+
+    <string name="home_tagline">Il telefono è la tua chiave biometrica</string>
+    <string name="home_no_bond_title">Nessun computer associato</string>
+    <string name="home_no_bond_body">Associa un computer per usare questo telefono come chiave biometrica.</string>
+    <string name="home_pair_cta">Associa al computer</string>
+    <string name="home_paired_title">Computer associato</string>
+    <string name="home_service_active">Servizio DeskUnlock attivo</string>
+    <string name="home_service_inactive">Servizio DeskUnlock inattivo</string>
+    <string name="home_paired_at">Associato: %1$s</string>
+    <string name="home_last_auth">Ultima autenticazione</string>
+    <string name="home_re_pair">Ripeti associazione</string>
+    <string name="home_revoke">Revoca</string>
+    <string name="home_revoke_dialog_title">Revocare l\'associazione con %1$s?</string>
+    <string name="home_revoke_dialog_body">Questo rimuove l\'associazione DeskUnlock e la chiave Keystore. Il bond Bluetooth di Android non viene modificato.</string>
+    <string name="home_peer_id">peer_id: %1$s</string>
+    <string name="home_revoke_toast_no_bond">Nessun computer associato — avvia l\'associazione sul computer e tocca Associa nell\'app</string>
+    <string name="home_approval_unavailable">Approvazione DeskUnlock non disponibile.</string>
+    <string name="home_cancel">Annulla</string>
+
+    <string name="history_event_line">%1$s su %2$s</string>
+    <string name="history_peer_line">peer %1$s</string>
+    <string name="history_event_short">%1$s • %2$s</string>
+
+    <string name="approve_title">Sblocca il computer</string>
+    <string name="approve_subtitle">Richiesta di sblocco del computer</string>
+    <string name="approve_counting">Approva entro %1$s s</string>
+    <string name="approve_waiting">In attesa della biometria…</string>
+    <string name="approve_signing">Firma in corso…</string>
+    <string name="approve_button">Approva</string>
+    <string name="approve_a11y_biometric">Autenticazione biometrica</string>
+    <string name="approve_a11y_logo">Logo DeskUnlock</string>
+    <string name="approve_deny">Rifiuta</string>
+</resources>

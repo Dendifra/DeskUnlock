@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# DeskUnlock: the "phone unlock is usable right now" marker.
+#
+# The DMS lock screen shows the fingerprint indicator only while
+# $XDG_RUNTIME_DIR/syauth/unlock-ready exists, and the unlock gesture refuses to
+# start without it. The marker must therefore mean "the phone is reachable
+# NOW", not "the daemon is running": at boot the daemon is up within seconds
+# while the phone needs a little longer to reconnect, and an indicator that
+# does nothing when pressed reads as a broken feature (observed 2026-09-26:
+# "a generic user would think it does not work").
+#
+# Runs from a 10 s timer; each tick is a handful of file checks, so it is the
+# cheapest possible way to keep the lock screen honest without touching the
+# daemon.
+set -Eeuo pipefail
+
+# C locale: EPOCHREALTIME uses the locale decimal separator (a comma in it_IT)
+# and the millisecond conversion below assumes a dot.
+export LC_ALL=C
+
+UID_NUM="$(id -u)"
+RUNTIME="${XDG_RUNTIME_DIR:-/run/user/$UID_NUM}"
+STATE_DIR="${SYAUTH_RUNTIME_DIR:-$RUNTIME/syauth}"
+MARKER="${SYAUTH_UNLOCK_READY:-$STATE_DIR/unlock-ready}"
+PRESENCE_MARKER="$STATE_DIR/presence.last"
+RSSI_STATE="$STATE_DIR/rssi.last"
+BONDS_FILE="${SYAUTH_BONDS_FILE:-/var/lib/syauth/bonds.toml}"
+DISABLED_FILE="${SYAUTH_DISABLED_FILE:-$HOME/.config/syauth/disabled}"
+
+# The phone pushes a presence heartbeat every 10 s and an RSSI sample every
+# 2 s; either fresh file means it is talking right now.
+PRESENCE_FRESH_SECONDS="${SYAUTH_PRESENCE_FRESH_SECONDS:-30}"
+RSSI_FRESH_MS="${SYAUTH_RSSI_FRESH_MS:-10000}"
+
+now_ms() {
+    local t="${EPOCHREALTIME/[.,]/}"
+    printf '%s' "${t:0:13}"
+}
+
+file_age_seconds() {
+    local path="$1" mtime now
+    [[ -e "$path" ]] || { printf '%s' 999999; return; }
+    mtime="$(stat -c %Y "$path" 2>/dev/null || echo 0)"
+    now=$(( $(now_ms) / 1000 ))
+    (( now >= mtime )) && printf '%s' "$(( now - mtime ))" || printf '%s' 0
+}
+
+rssi_age_ms() {
+    local sample now
+    [[ -r "$RSSI_STATE" ]] || { printf '%s' 999999; return; }
+    sample="$(awk -F= '$1 == "sample_epoch_ms" { print $2; exit }' "$RSSI_STATE" 2>/dev/null || true)"
+    [[ "$sample" =~ ^[0-9]+$ ]] || { printf '%s' 999999; return; }
+    now="$(now_ms)"
+    (( now >= sample )) && printf '%s' "$(( now - sample ))" || printf '%s' 0
+}
+
+phone_reachable() {
+    (( $(file_age_seconds "$PRESENCE_MARKER") <= PRESENCE_FRESH_SECONDS )) && return 0
+    (( $(rssi_age_ms) <= RSSI_FRESH_MS )) && return 0
+    return 1
+}
+
+master_on() {
+    [[ ! -e "$DISABLED_FILE" ]]
+}
+
+bond_present() {
+    grep -q 'kind = "Bonded"' "$BONDS_FILE" 2>/dev/null
+}
+
+daemon_active() {
+    if [[ "${SYAUTH_MARKER_PRESENCED:-auto}" == "auto" ]]; then
+        systemctl --user -q is-active syauth-presenced 2>/dev/null
+    else
+        [[ "$SYAUTH_MARKER_PRESENCED" == "1" ]]
+    fi
+}
+
+if master_on && bond_present && daemon_active && phone_reachable; then
+    mkdir -p "$STATE_DIR" 2>/dev/null || true
+    : > "$MARKER" 2>/dev/null || true
+else
+    rm -f "$MARKER" 2>/dev/null || true
+fi

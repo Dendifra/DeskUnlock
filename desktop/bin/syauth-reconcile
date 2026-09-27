@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+set -eu
+
+# The Rust CLI owns the state machine, journal parsing, authenticated BlueZ
+# reconnect, status nonce validation, and atomic promotion/rollback.
+exec "${SYAUTH_BIN:-syauth}" reconcile \
+  --adapter "${SYAUTH_ADAPTER:-hci0}" \
+  --bond-dir "${SYAUTH_BOND_DIR:-/var/lib/syauth}"
