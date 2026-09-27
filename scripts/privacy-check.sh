@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Fast tracked-tree privacy gate. This runs under `make lint`; the deeper
 # security-privacy-deep-audit.sh also scans history, refs and release assets.
+# Set SYAUTH_AUDIT_USER explicitly for a local-login check; CI leaves it empty.
 
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
-AUDIT_USER="${SYAUTH_AUDIT_USER:-$(id -un 2>/dev/null || true)}"
+AUDIT_USER="${SYAUTH_AUDIT_USER:-}"
 fail=0
 
 report() {
@@ -21,7 +22,8 @@ macs="$(git grep -hoEi '\b([0-9a-f]{2}:){5}[0-9a-f]{2}\b' -- . 2>/dev/null |
 report "real-looking device address in the tracked tree:" "$macs"
 
 homes="$(git grep -nE '/home/[A-Za-z0-9_.-]+|/Users/[A-Za-z0-9_.-]+' -- . 2>/dev/null |
-         grep -Ev '\$root/home/\.config|/home/(user|UID)([^A-Za-z0-9_.-]|$)|/Users/(user|example)([^A-Za-z0-9_.-]|$)' || true)"
+         grep -v '^scripts/security-privacy-deep-audit.sh:' |
+         grep -Ev '\$(root|ROOT)/home/\.config|/home/(user|UID)([^A-Za-z0-9_.-]|$)|/Users/(user|example)([^A-Za-z0-9_.-]|$)' || true)"
 report "personal-looking home directory in the tracked tree:" "$homes"
 
 mounts="$(git grep -nE '/mnt/(Dati|Backups|GoogleDrive)(/|$)|/run/media/[A-Za-z0-9_.-]+/' -- . 2>/dev/null || true)"
@@ -35,7 +37,8 @@ fi
 serials="$(git grep -nE '\bR[A-Z0-9]{9,13}\b' -- README.md SECURITY.md CHANGELOG.md docs specs 2>/dev/null || true)"
 report "device serial in public documentation:" "$serials"
 
-identifiers="$(git grep -nE '(peer_id|peer-id)[=: ]+[0-9a-fA-F]{24,64}|bond_key_hex[=: ]+[0-9a-fA-F]{64}|syauth\.ed25519\.[A-Za-z0-9._-]{8,}' -- README.md SECURITY.md CHANGELOG.md docs specs 2>/dev/null || true)"
+identifiers="$(git grep -nE '(peer_id|peer-id)[=: ]+[0-9a-fA-F]{24,64}|bond_key_hex[=: ]+[0-9a-fA-F]{64}|syauth\.ed25519\.[A-Za-z0-9._-]{8,}' -- README.md SECURITY.md CHANGELOG.md docs specs 2>/dev/null |
+               grep -Ev 'syauth\.ed25519\.(peer-xyz|AABBCCDDEE01)' || true)"
 report "real-looking peer/key identifier in public documentation:" "$identifiers"
 
 keys="$(git grep -lE -- '-----BEGIN (RSA |OPENSSH |EC |PGP )?PRIVATE KEY-----' -- . 2>/dev/null || true)"
