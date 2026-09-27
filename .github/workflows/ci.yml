@@ -112,7 +112,6 @@ jobs:
     name: privacy (tree + history + release)
     runs-on: ubuntu-latest
     env:
-      SYAUTH_AUDIT_USER: denis
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout full history
