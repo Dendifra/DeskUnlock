@@ -2,9 +2,7 @@
 #
 # Roadmap: specs/syauth/ROADMAP.md — item S-001.
 # Spec: specs/syauth/SPEC.md §4.1 (workspace layout).
-# Mirrors the layout of ~/sources/prrr: a top-level package plus a `crates/`
-# directory of member crates. No business code lives here yet — S-002+ fills in
-# each crate.
+# Top-level package plus a `crates/` directory of member crates.
 
 [workspace]
 members = [
@@ -27,7 +25,7 @@ edition = "2024"
 rust-version = "1.85"
 license = "MIT"
 authors = ["syauth contributors"]
-repository = "https://github.com/sy/syauth"
+repository = "https://github.com/Dendifra/DeskUnlock"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
@@ -72,8 +70,8 @@ uuid = { version = "1" }
 
 [profile.dev]
 # `line-tables-only`: backtrace with file:line, no variable/type metadata.
-# Cuts target/debug roughly 60% (13G -> 4.9G) versus cargo's default `debug = 2`
-# while keeping panic/backtrace frames readable for e2e diagnosis.
+# Cuts target/debug roughly 60% versus cargo's default `debug = 2` while
+# keeping panic/backtrace frames readable for e2e diagnosis.
 debug = 1
 
 [profile.release]
