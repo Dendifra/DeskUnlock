@@ -20,11 +20,8 @@
 #     does not live in CI. The operator signs locally, where the APK was also
 #     tested.
 #
-# Required secrets: none. GITHUB_TOKEN is implicit.
-#
-# Action pins:
-#   - actions/checkout@v4               (stable major; widely used)
-#   - softprops/action-gh-release@v1    (stable major; widely audited)
+# Required secrets: none. GITHUB_TOKEN is implicit and read-only.
+# Third-party Actions are pinned to immutable commit SHAs.
 
 name: release
 
@@ -34,12 +31,12 @@ on:
       - 'v*.*.*'
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
-  PACKAGE_VERSION: "0.1.0"
+  PACKAGE_VERSION: "0.1.1"
 
 jobs:
   # The source tarball is the one artefact with no toolchain and no platform
@@ -50,7 +47,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -58,16 +55,12 @@ jobs:
         run: make dist
 
       - name: Upload source artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: source-tarball
           path: target/syauth-${{ env.PACKAGE_VERSION }}.tar.gz
           if-no-files-found: error
 
-  # Nothing publishes from here on purpose.
-  #
-  # `softprops/action-gh-release` sets the release body from its inputs, and
-  # this workflow has no body to give: it would blank the release notes that are
-  # written by hand and reviewed. It would also collide with the operator's
-  # SHA256SUMS, which covers the package and the APK. CI builds and verifies;
-  # what ships is attached by the person who built and exercised it.
+  # Nothing publishes from here on purpose. CI builds and verifies the source
+  # artefact; release notes and signed binary assets are handled locally and
+  # uploaded only after their checksums/signatures have been verified.
