@@ -12,7 +12,7 @@
 # phone. Built under `mock -r fedora-%{fedora}-x86_64 deploy/fedora/syauth.spec`
 # or via `make rpm` (which gates on `which mock`).
 
-%global package_version 0.1.1
+%global package_version 0.1.2
 %global rpm_release 1
 %global min_fedora 39
 

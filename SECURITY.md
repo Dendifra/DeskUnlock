@@ -1,7 +1,7 @@
 # Security policy
 
 DeskUnlock is authentication software and the current public release is
-`v0.1.1`. Do not treat it as independently certified or as a replacement for
+`v0.1.2`. Do not treat it as independently certified or as a replacement for
 evaluating the security of the Linux host and phone.
 
 ## Reporting a vulnerability

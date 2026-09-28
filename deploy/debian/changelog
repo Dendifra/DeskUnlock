@@ -1,3 +1,10 @@
+syauth (0.1.2-1) unstable; urgency=medium
+
+  * Harden public-tree privacy and release supply-chain checks.
+  * Update release metadata for the signed Android and Arch artifacts.
+
+ -- syauth contributors <noreply@anthropic.com>  Mon, 28 Sep 2026 00:00:00 +0000
+
 syauth (0.1.1-1) unstable; urgency=medium
 
   * Retry BlueZ startup and restore the DMS readiness marker after daemon restarts.
