@@ -123,7 +123,7 @@ jobs:
         run: git fetch --force --prune origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
 
       - name: Deep security/privacy audit
-        run: bash scripts/security-privacy-deep-audit.sh v0.1.1
+        run: bash scripts/security-privacy-deep-audit.sh v0.1.2
 
   # NOTE: the Android assembleDebug job depends on the Rust-built
   # `crates/syauth-mobile/target/syauth_mobile.aar` (UniFFI Kotlin
