@@ -28,7 +28,7 @@ paths = [Path(p) for p in sys.argv[1:]]
 
 serial = re.compile(r"\bR[0-9][A-Z0-9]{8,12}\b")
 peer_assignment = re.compile(r"(?i)\b(peer_id|peer-id)(\s*[=:]\s*)[0-9a-f]{24,64}\b")
-bond_key_assignment = re.compile(r"(?i)\bbond_key_hex(\s*[=:]\s*)[0-9a-f]{64}\b")
+bond_key_assignment = re.compile(r"(?i)\bbond_key_hex(\s*[=:]\s*)(['\"]?)[0-9a-f]{64}\2")
 keystore_alias = re.compile(r"\bsyauth\.ed25519\.[A-Za-z0-9._-]{8,}\b")
 home_path = re.compile(r"/(?:home|Users)/([A-Za-z0-9_.-]+)(?=/|\b)")
 mount_path = re.compile(r"/mnt/(?:Dati|Backups|GoogleDrive)(?:/[^\s`\"')\]]*)?")
@@ -47,7 +47,10 @@ for path in paths:
 
     new = serial.sub("<DEVICE_SERIAL>", text)
     new = peer_assignment.sub(lambda m: f"{m.group(1)}{m.group(2)}<PEER_ID>", new)
-    new = bond_key_assignment.sub(lambda m: f"bond_key_hex{m.group(1)}<BOND_KEY>", new)
+    new = bond_key_assignment.sub(
+        lambda m: f"bond_key_hex{m.group(1)}{m.group(2)}<BOND_KEY>{m.group(2)}",
+        new,
+    )
     new = keystore_alias.sub("syauth.ed25519.<KEYSTORE_ALIAS>", new)
 
     def home_repl(m: re.Match[str]) -> str:

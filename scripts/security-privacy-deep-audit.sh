@@ -17,6 +17,9 @@ cd "$ROOT" || exit 2
 
 TAG="${1:-$(git tag --sort=-version:refname | head -1)}"
 AUDIT_USER="${SYAUTH_AUDIT_USER:-}"
+EXPECTED_REPO="Dendifra/DeskUnlock"
+ORIGIN_URL="$(git config --get remote.origin.url 2>/dev/null || true)"
+BOND_KEY_HEX_RE="bond_key_hex[[:space:]]*[=:][[:space:]]*[\\\"']?[0-9a-fA-F]{64}[\\\"']?"
 CURRENT_BRANCH="$(git branch --show-current)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -39,6 +42,13 @@ section "Repository / refs"
 printf 'HEAD: %s\n' "$(git rev-parse --short=12 HEAD)"
 printf 'branch: %s\n' "${CURRENT_BRANCH:-<detached>}"
 printf 'release tag: %s\n' "${TAG:-<none>}"
+
+case "$ORIGIN_URL" in
+    git@github.com:Dendifra/DeskUnlock.git|ssh://git@github.com/Dendifra/DeskUnlock.git|https://github.com/Dendifra/DeskUnlock|https://github.com/Dendifra/DeskUnlock.git)
+        ok "origin points to $EXPECTED_REPO" ;;
+    *)
+        bad "origin does not point to $EXPECTED_REPO" ;;
+esac
 
 [[ -z "$(git status --porcelain)" ]] && ok "working tree clean" || warn "working tree is dirty"
 
@@ -93,7 +103,7 @@ git grep -nE '\bR[0-9][A-Z0-9]{8,12}\b' -- . 2>/dev/null >"$OUT" || true
 if [[ -s "$OUT" ]]; then print_hits "$OUT"; bad "device-serial-shaped identifiers found in tracked tree"; else ok "no device serials in tracked tree"; fi
 
 OUT="$TMP/private-identifiers.txt"
-git grep -nE '(peer_id|peer-id)[=: ]+[0-9a-fA-F]{24,64}|bond_key_hex[=: ]+[0-9a-fA-F]{64}|syauth\.ed25519\.[A-Za-z0-9._-]{8,}' -- README.md SECURITY.md CHANGELOG.md docs specs 2>/dev/null >"$OUT" || true
+git grep -nE "(peer_id|peer-id)[=: ]+[0-9a-fA-F]{24,64}|${BOND_KEY_HEX_RE}|syauth\.ed25519\.[A-Za-z0-9._-]{8,}" -- README.md SECURITY.md CHANGELOG.md docs specs 2>/dev/null >"$OUT" || true
 if [[ -s "$OUT" ]]; then print_hits "$OUT"; bad "real-looking peer/key identifiers found in public docs"; else ok "no real-looking peer/key identifiers in public docs"; fi
 
 OUT="$TMP/macs.txt"
@@ -124,7 +134,7 @@ history_fail() {
 history_fail "machine-specific mount/backup path" '/mnt/(Dati|Backups|GoogleDrive)(/|$)|/run/media/[A-Za-z0-9_.-]+/'
 history_fail "private-key material" '-----BEGIN (RSA |OPENSSH |EC |PGP )?PRIVATE KEY-----'
 history_fail "device serial" '\bR[0-9][A-Z0-9]{8,12}\b'
-history_fail "peer/key identifier" '(peer_id|peer-id)[=: ]+[0-9a-fA-F]{24,64}|bond_key_hex[=: ]+[0-9a-fA-F]{64}|syauth\.ed25519\.[A-Za-z0-9._-]{8,}'
+history_fail "peer/key identifier" "(peer_id|peer-id)[=: ]+[0-9a-fA-F]{24,64}|${BOND_KEY_HEX_RE}|syauth\.ed25519\.[A-Za-z0-9._-]{8,}"
 
 if [[ -n "$AUDIT_USER" && "$AUDIT_USER" != "root" && "$AUDIT_USER" != "user" ]]; then
     history_fail "configured local developer login" "/home/${AUDIT_USER}(/|$)|(^|[^[:alnum:]_])${AUDIT_USER}([^[:alnum:]_]|$)"
@@ -168,9 +178,9 @@ if [[ -z "$TAG" ]]; then
 elif ! command -v gh >/dev/null 2>&1; then
     warn "release audit skipped: gh unavailable"
 else
-    REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)"
+    REPO="$EXPECTED_REPO"
     mkdir -p "$TMP/release"
-    if [[ -n "$REPO" ]] && gh release download "$TAG" --repo "$REPO" --dir "$TMP/release" --clobber >/dev/null 2>&1; then
+    if gh release download "$TAG" --repo "$REPO" --dir "$TMP/release" --clobber >/dev/null 2>&1; then
         ok "downloaded published release $TAG"
         if [[ -f "$TMP/release/SHA256SUMS" ]] && (cd "$TMP/release" && sha256sum -c SHA256SUMS >/dev/null 2>&1); then
             ok "published SHA256SUMS verifies"
