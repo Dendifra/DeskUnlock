@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.2] - 2026-09-28
+
+- Harden the public repository privacy and history checks.
+- Add deeper release, reference, and GitHub Actions supply-chain auditing.
+- Sanitize public device and build-environment identifiers.
+- Pin release workflow actions and keep release publication operator-controlled.
+- Carry forward the functional fixes shipped in 0.1.1.
+
 ## [0.1.1] - 2026-09-26
 
 - Retry BlueZ GATT initialization after a transient boot race.

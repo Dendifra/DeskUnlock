@@ -15,8 +15,8 @@ Generated locally. This report intentionally avoids printing secret values.
 - [x] PASS: no private-key PEM marker detected
 - [x] PASS: no obvious literal secret assignment detected
 - [x] PASS: no common sensitive filenames found
-- [x] PASS: no unexpected files larger than 10 MiB
-- [ ] WARN: cargo-deny not installed; Rust dependency license audit still required
+- [ ] WARN: large files found; review before Git commit
+- [x] PASS: cargo-deny license check passed
 - [ ] WARN: Git worktree has uncommitted/untracked changes
 - [ ] WARN: syauth identifiers remain; classify each as upstream attribution, compatibility identifier, or rename target
 - [ ] WARN: desktop-specific integration references found; make support scope explicit
