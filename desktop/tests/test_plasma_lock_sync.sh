@@ -4,6 +4,7 @@ set -euo pipefail
 root="$(mktemp -d)"
 trap 'rm -rf "$root"' EXIT
 helper="$(dirname "$0")/../libexec/syauth-plasma-lock-sync"
+run_helper() { python3 "$helper" "$@"; }
 
 export SYAUTH_PLASMA_TEST=1
 export SYAUTH_PLASMA_PAM_ETC_DIR="$root/etc/pam.d"
@@ -38,7 +39,7 @@ Item {
 EOF
 cp "$SYAUTH_PLASMA_QML_PATH" "$root/qml-original"
 
-"$helper" install
+run_helper install
 grep -Fq '# DeskUnlock managed Plasma session-lock PAM override' "$SYAUTH_PLASMA_PAM_ETC_DIR/kde-fingerprint"
 grep -Fq 'pam_syauth.so timeout=8000' "$SYAUTH_PLASMA_PAM_ETC_DIR/kde-fingerprint"
 ! grep -Fq 'pam_fprintd.so' "$SYAUTH_PLASMA_PAM_ETC_DIR/kde-fingerprint"
@@ -47,7 +48,7 @@ grep -Fq 'icon.name: "fingerprint"' "$SYAUTH_PLASMA_QML_PATH"
 cmp "$root/qml-original" "$SYAUTH_PLASMA_STATE_DIR/MainBlock.qml.vendor"
 
 sha_before="$(sha256sum "$SYAUTH_PLASMA_QML_PATH" | cut -d' ' -f1)"
-"$helper" install
+run_helper install
 sha_after="$(sha256sum "$SYAUTH_PLASMA_QML_PATH" | cut -d' ' -f1)"
 [[ "$sha_before" == "$sha_after" ]]
 
@@ -63,18 +64,18 @@ Item {
 }
 EOF
 cp "$SYAUTH_PLASMA_QML_PATH" "$root/qml-updated"
-"$helper" install
+run_helper install
 cmp "$root/qml-updated" "$SYAUTH_PLASMA_STATE_DIR/MainBlock.qml.vendor"
 grep -Fq '// DeskUnlock managed Plasma session-lock biometric action' "$SYAUTH_PLASMA_QML_PATH"
 
-"$helper" remove
+run_helper remove
 [[ ! -e "$SYAUTH_PLASMA_PAM_ETC_DIR/kde-fingerprint" ]]
 cmp "$root/qml-updated" "$SYAUTH_PLASMA_QML_PATH"
 [[ ! -e "$SYAUTH_PLASMA_STATE_DIR/MainBlock.qml.vendor" ]]
 
 printf '%s\n' '# custom operator PAM override' > "$SYAUTH_PLASMA_PAM_ETC_DIR/kde-fingerprint"
 cp "$SYAUTH_PLASMA_PAM_ETC_DIR/kde-fingerprint" "$root/custom-pam"
-if "$helper" install >/dev/null 2>&1; then
+if run_helper install >/dev/null 2>&1; then
     echo 'FAIL: external PAM override was accepted' >&2
     exit 1
 fi
@@ -99,7 +100,7 @@ s = s.replace(
 )
 p.write_text(s)
 PY
-"$helper" install
+run_helper install
 grep -Fq '// DeskUnlock managed Plasma session-lock biometric action' "$SYAUTH_PLASMA_QML_PATH"
 cmp "$root/qml-original" "$SYAUTH_PLASMA_STATE_DIR/MainBlock.qml.vendor"
 
