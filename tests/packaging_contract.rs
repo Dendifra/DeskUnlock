@@ -36,7 +36,10 @@ fn arch_package_manages_plasma_greeter_and_session_lock() {
 
     assert!(build.contains("install=deskunlock.install"));
     assert!(build.contains("/usr/share/libalpm/hooks/90-deskunlock-plasma-lock.hook"));
-    assert!(!build.contains("/etc/pam.d/"), "the package must not ship PAM service files directly");
+    assert!(
+        !build.contains("/etc/pam.d/"),
+        "the package must not ship PAM service files directly"
+    );
 
     assert!(root.join("packaging/arch/deskunlock.install").exists());
     assert!(root.join("desktop/libexec/syauth-pam-sync").exists());
