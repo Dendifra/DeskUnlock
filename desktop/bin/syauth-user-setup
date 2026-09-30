@@ -43,8 +43,18 @@ ensure_linger() {
     loginctl enable-linger "$user" || warn "servizio al boot non abilitato per $user"
 }
 
+is_niri_session() {
+    local session
+    session="${XDG_CURRENT_DESKTOP:-}:${XDG_SESSION_DESKTOP:-}:${DESKTOP_SESSION:-}"
+
+    [[ "${session,,}" == *niri* ]] && return 0
+    systemctl --user --quiet is-active niri.service 2>/dev/null
+}
+
 start_dms() {
-    # DMS must remain available even when the Syauth master switch is OFF.
+    # DMS belongs to the Niri session and must never be started from Plasma.
+    is_niri_session || return 0
+
     systemctl --user start --no-block dms.service ||
         warn "dms.service non avviato"
 }

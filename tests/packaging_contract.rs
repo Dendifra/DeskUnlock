@@ -107,18 +107,25 @@ fn dms_lock_indicator_uses_persistent_syauth_state() {
 }
 
 #[test]
-fn return_auth_is_transport_gated_and_not_retried_automatically() {
+fn proximity_never_initiates_phone_authentication_in_production() {
     let proximity = repo_file("desktop/bin/syauth-proximity");
     let dms = repo_file("desktop/dms/build-dms-syauth.sh");
 
-    assert!(proximity.contains("READY_MARKER"));
-    assert!(proximity.contains("challenge_ready_valid"));
-    assert!(proximity.contains("AUTO_AUTH_SENT=1"));
-    assert!(proximity.contains("request_auto_auth"));
     assert!(proximity.contains("LOCK_REASON=PROXIMITY"));
+    assert!(
+        proximity.contains(r#"[[ "${SYAUTH_PROXIMITY_TEST:-0}" == 1 ]] || return 0"#),
+        "production proximity must never initiate phone authentication"
+    );
+    assert!(!proximity.contains("dms ipc call syauth phoneReturned"));
+    assert!(!dms.contains("phoneReturned"));
+    assert!(!dms.contains("phone-return"));
+
+    // Authentication remains explicitly local-interaction driven in DMS.
+    assert!(dms.contains("pointerReengagementSent"));
+    assert!(dms.contains("passwd.active"));
+    assert!(dms.contains("syauth.startSyauthAuth"));
     assert!(dms.contains("syauth.abort()"));
     assert!(dms.contains("root.syauthGeneration"));
-    assert!(!dms.contains("syauthStartTimer.restart()"));
 }
 
 #[test]
