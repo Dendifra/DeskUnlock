@@ -1,15 +1,15 @@
 # DeskUnlock Android setup
 
-## Public beta installation
+## DeskUnlock 0.2.0 installation
 
-The `v0.1.0-beta.1` Android companion is distributed as a signed APK from
-the future DeskUnlock release page. Install it with Android's normal package
+The Android companion is distributed as a signed APK from the DeskUnlock 0.2.0
+release page. Install it with Android's normal package
 installer and verify the published SHA-256 checksum first. Android may warn
 because this is sideloaded rather than distributed through Google Play.
 
-The beta APK uses a dedicated DeskUnlock release certificate. The private
+The release APK uses a dedicated DeskUnlock release certificate. The private
 release key is outside the repository and is never published. Existing users
-of a pre-beta/debug APK may need to uninstall that app before installing the
+of a debug APK may need to uninstall that app before installing the
 release-signed APK; Android can then require pairing again. Do not disable Play
 Protect globally or use signature-bypass tools.
 
@@ -210,7 +210,7 @@ The S-018 flow registers the bonded computer with
 - **On user revocation.** If the user removes the pair via system
   settings, the OS stops binding the service. Re-establishing the
   binding requires re-pairing — there is no resurrect-without-pair
-  path in v0.1.
+  path in v0.2.0.
 
 ### Service-binding lifecycle
 

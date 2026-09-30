@@ -1,0 +1,10 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = plasma-workspace
+
+[Action]
+Description = Reapplying DeskUnlock Plasma session-lock integration...
+When = PostTransaction
+Exec = /usr/lib/syauth/syauth-plasma-lock-sync install

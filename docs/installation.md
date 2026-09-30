@@ -1,24 +1,25 @@
 # Installation
 
-## Beta status
+## DeskUnlock 0.2.0
 
-DeskUnlock `v0.1.0-beta.1` is beta software. The validated installation scope
-is Arch Linux/CachyOS with the Niri + DankMaterialShell integration and an
-Android companion using BLE / Companion Device APIs.
+DeskUnlock 0.2.0 is validated on Arch Linux/CachyOS and Wayland with either
+KDE Plasma or Niri + DankMaterialShell, together with the Android companion
+using BLE / Companion Device APIs. Niri uses DMS; Plasma uses its native PAM
+and lock-screen integration without starting DMS.
 
 DeskUnlock is an independent downstream fork of `syauth`; internal `syauth`
 command and service names remain for compatibility.
 
-## Install the public beta package
+## Install the Arch/CachyOS package
 
-When the beta release is published:
+When the 0.2.0 release is published:
 
 1. Download the Arch package and its published SHA-256 checksum.
 2. Verify the checksum with `sha256sum`.
 3. Install it with the normal package manager:
 
    ```bash
-   sudo pacman -U deskunlock-0.1.0-18-x86_64.pkg.tar.zst
+   sudo pacman -U deskunlock-0.2.0-1-x86_64.pkg.tar.zst
    ```
 
 Do not use `--nodeps`, `--overwrite`, or force options. The package installs
@@ -27,7 +28,7 @@ notices. Pairing and cryptographic state remain outside the package payload.
 
 ## Install the Android companion
 
-Download the signed beta APK from the same release and open it with Android's
+Download the signed APK from the same release and open it with Android's
 normal package installer. Sideloading may produce a warning because the APK is
 not distributed through Google Play.
 
@@ -35,9 +36,9 @@ The public APK is signed with the dedicated DeskUnlock release certificate.
 The private release key is outside the repository and must never be published.
 Verify the SHA-256 checksum published with the APK before installing.
 
-A pre-beta/debug APK and the release APK have different signing identities.
-Existing debug testers may need to uninstall the old app before installing the
-beta release APK, then pair the computer and phone again. Do not bypass Android
+A debug APK and the release APK have different signing identities. Existing
+debug testers may need to uninstall the old app before installing the release
+APK, then pair the computer and phone again. Do not bypass Android
 signature checks or disable Play Protect globally.
 
 ## Pair and enable
@@ -100,7 +101,7 @@ Before treating another environment as supported, verify:
 9. package removal preserves state unless an explicit cleanup is chosen.
 
 Other distributions, desktop environments, and Android OEMs are not claimed
-as supported by this beta.
+as supported.
 
 ## Proximity and idle lock
 

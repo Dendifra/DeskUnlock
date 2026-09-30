@@ -53,8 +53,8 @@ android {
         applicationId = "com.sy.syauth.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.1.2"
+        versionCode = 3
+        versionName = "0.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

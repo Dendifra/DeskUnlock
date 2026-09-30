@@ -595,12 +595,13 @@ lock_session() {
 }
 
 request_auto_auth() {
+    # Authentication must be triggered by local lock-screen interaction.
+    # Proximity only manages presence and locking.
     if [[ "${SYAUTH_PROXIMITY_TEST:-0}" == 1 ]]; then
-        printf 'AUTH\n' >> "${SYAUTH_TEST_ACTION_LOG:?}"
+        printf "AUTH\n" >> "${SYAUTH_TEST_ACTION_LOG:?}"
         return "${SYAUTH_TEST_AUTH_RC:-0}"
     fi
-    command -v dms >/dev/null 2>&1 || return 1
-    dms ipc call syauth phoneReturned >/dev/null 2>&1
+    return 0
 }
 
 mark_manual_lock() {
@@ -646,6 +647,8 @@ request_proximity_lock() {
 }
 
 maybe_auto_auth() {
+    # Production proximity must never start phone authentication.
+    [[ "${SYAUTH_PROXIMITY_TEST:-0}" == 1 ]] || return 0
     [[ "$PROXIMITY_STATE" == NEAR ]] || return
     return_lifecycle_eligible || return
     (( AUTO_AUTH_SENT == 0 )) || return

@@ -52,7 +52,7 @@ Add:
 
 ## Phase 5 — release
 
-- tag `v0.1.0-beta.1`;
+- tag `v0.2.0`;
 - CI from source;
 - attach package artifact;
 - publish checksums;

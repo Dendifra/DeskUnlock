@@ -57,3 +57,5 @@ grep -q 'Wants=bluetooth.service' "$ROOT/etc/systemd/system/plasmalogin.service.
 grep -q 'After=bluetooth.service' "$ROOT/etc/systemd/system/plasmalogin.service.d/deskunlock.conf" || { echo 'FAIL After missing'; exit 1; }
 grep -q -- '--system daemon-reload' "$ROOT/calls" || { echo 'FAIL daemon-reload missing'; exit 1; }
 printf '1 passed, 0 failed\n'
+
+bash desktop/tests/test_plasma_lock_sync.sh

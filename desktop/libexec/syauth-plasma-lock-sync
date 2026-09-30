@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+MARKER = "# DeskUnlock managed Plasma session-lock PAM override"
+QML_MARKER = "// DeskUnlock managed Plasma session-lock biometric action"
+INTERACTION_MARKER = "// DeskUnlock managed interaction-gated authentication"
+PAM_LINE = "auth       required                    pam_syauth.so timeout=8000"
+
+PAM_ETC_DIR = Path(os.environ.get("SYAUTH_PLASMA_PAM_ETC_DIR", "/etc/pam.d"))
+PAM_VENDOR_DIR = Path(os.environ.get("SYAUTH_PLASMA_PAM_VENDOR_DIR", "/usr/lib/pam.d"))
+QML_PATH = Path(os.environ.get("SYAUTH_PLASMA_QML_PATH", "/usr/share/plasma/shells/org.kde.plasma.desktop/contents/lockscreen/MainBlock.qml"))
+INTERACTION_QML_PATH = Path(os.environ.get("SYAUTH_PLASMA_LOCKSCREEN_QML_PATH", "/usr/share/plasma/shells/org.kde.plasma.desktop/contents/lockscreen/LockScreenUi.qml"))
+STATE_DIR = Path(os.environ.get("SYAUTH_PLASMA_STATE_DIR", "/var/lib/syauth/plasma-lock"))
+QML_BACKUP = STATE_DIR / "MainBlock.qml.vendor"
+INTERACTION_QML_BACKUP = STATE_DIR / "LockScreenUi.qml.vendor"
+LEGACY_QML_BACKUP = Path(str(QML_PATH) + ".backup-deskunlock")
+LEGACY_INTERACTION_BACKUP = Path(str(INTERACTION_QML_PATH) + ".backup-before-interaction-auth")
+TEST_MODE = os.environ.get("SYAUTH_PLASMA_TEST", "0") == "1"
+
+
+class SyncError(RuntimeError):
+    pass
+
+
+def atomic_write(path: Path, data: bytes, mode: int | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if mode is None and path.exists():
+            mode = path.stat().st_mode & 0o777
+        os.chmod(tmp, 0o644 if mode is None else mode)
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def add_pam_marker(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    marker_line = MARKER + "\n"
+    if lines and lines[0].startswith("#%PAM-1.0"):
+        return "".join([lines[0], marker_line, *lines[1:]])
+    return marker_line + text
+
+
+def patch_pam(text: str) -> str:
+    pattern = re.compile(r"^\s*-?auth\s+(?:required|requisite|sufficient|optional)\s+pam_fprintd\.so\b.*$", re.M)
+    matches = list(pattern.finditer(text))
+    if len(matches) != 1:
+        raise SyncError(f"expected exactly one pam_fprintd.so auth line, found {len(matches)}")
+    return pattern.sub(PAM_LINE, text, count=1)
+
+
+def qml_block(indent: str) -> str:
+    inner = indent + "    "
+    return (f"{inner}{QML_MARKER}\n{inner}leftActions: Kirigami.Action {{\n"
+            f"{inner}    icon.name: \"fingerprint\"\n"
+            f"{inner}    visible: authenticator.authenticatorTypes & ScreenLocker.Authenticator.Fingerprint\n"
+            f"{inner}    text: i18ndc(\"plasma_shell_org.kde.plasma.desktop\", \"@info:tooltip\", \"Biometric authentication\")\n"
+            f"{inner}}}\n")
+
+
+def patch_qml(text: str) -> str:
+    if QML_MARKER in text:
+        if text.count(QML_MARKER) != 1:
+            raise SyncError("managed QML marker appears more than once")
+        return text
+    anchor = re.compile(r"^(?P<indent>[ \t]*)PlasmaExtras\.PasswordField \{[ \t]*$", re.M)
+    matches = list(anchor.finditer(text))
+    if len(matches) != 1:
+        raise SyncError(f"expected exactly one PlasmaExtras.PasswordField anchor, found {len(matches)}")
+    if "leftActions:" in text:
+        raise SyncError("PasswordField already has an unowned leftActions customization")
+    match = matches[0]
+    pos = match.end()
+    return text[:pos] + "\n" + qml_block(match.group("indent")) + text[pos + 1:]
+
+
+def remove_marker(text: str, marker: str) -> str:
+    pattern = re.compile(r"(?m)^[ \t]*" + re.escape(marker) + r"[ \t]*\n")
+    if len(pattern.findall(text)) != 1:
+        raise SyncError("managed marker is not present exactly once")
+    return pattern.sub("", text, count=1)
+
+
+def strip_managed_qml(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    indexes = [i for i, line in enumerate(lines) if QML_MARKER in line]
+    if len(indexes) != 1:
+        raise SyncError("cannot reconstruct QML: managed marker count is not one")
+    idx = indexes[0]
+    block = lines[idx:idx + 6]
+    joined = "".join(block)
+    required = [QML_MARKER, "leftActions: Kirigami.Action", 'icon.name: "fingerprint"', "ScreenLocker.Authenticator.Fingerprint", "Biometric authentication"]
+    if len(block) != 6 or any(token not in joined for token in required):
+        raise SyncError("cannot reconstruct QML: managed block shape changed")
+    return "".join(lines[:idx] + lines[idx + 6:])
+
+
+def find_block(text: str, pattern: str, label: str) -> tuple[int, int, str]:
+    matches = list(re.finditer(pattern, text, re.M))
+    if len(matches) != 1:
+        raise SyncError(f"expected exactly one {label} anchor, found {len(matches)}")
+    start = matches[0].start()
+    brace = text.find("{", matches[0].start(), matches[0].end() + 2)
+    if brace < 0:
+        raise SyncError(f"{label} has no opening brace")
+    depth = 0
+    for pos in range(brace, len(text)):
+        if text[pos] == "{":
+            depth += 1
+        elif text[pos] == "}":
+            depth -= 1
+            if depth == 0:
+                return start, pos + 1, text[start:pos + 1]
+    raise SyncError(f"{label} has an unterminated block")
+
+
+def find_named_timer(text: str) -> tuple[int, int, str]:
+    matches = []
+    for match in re.finditer(r"(?m)^[ \t]*Timer\s*\{", text):
+        brace = text.find("{", match.start(), match.end() + 1)
+        depth = 0
+        for pos in range(brace, len(text)):
+            if text[pos] == "{":
+                depth += 1
+            elif text[pos] == "}":
+                depth -= 1
+                if depth == 0:
+                    block = text[match.start():pos + 1]
+                    if "id: graceLockTimer" in block:
+                        matches.append((match.start(), pos + 1, block))
+                    break
+    if len(matches) != 1:
+        raise SyncError(f"expected exactly one graceLockTimer anchor, found {len(matches)}")
+    return matches[0]
+
+
+def patch_interaction_qml(text: str) -> str:
+    if INTERACTION_MARKER in text:
+        if text.count(INTERACTION_MARKER) != 1 or text.count("authenticator.startAuthenticating();") != 1:
+            raise SyncError("managed interaction QML has an invalid marker or authentication call count")
+        return text
+
+    prop = "readonly property bool softwareRendering: GraphicsInfo.api === GraphicsInfo.Software"
+    if text.count(prop) != 1:
+        raise SyncError("expected exactly one softwareRendering anchor")
+    indent = re.search(r"(?m)^[ \t]*(?=readonly property bool softwareRendering:)", text).group(0)
+    auth = (f"{indent}{INTERACTION_MARKER}\n{indent}property bool authRequested: false\n\n"
+            f"{indent}function requestAuthentication() {{\n{indent}    if (authRequested) {{\n"
+            f"{indent}        return;\n{indent}    }}\n{indent}    authRequested = true;\n"
+            f"{indent}    authenticator.startAuthenticating();\n{indent}}}\n\n")
+    text = text.replace(prop, prop + "\n\n" + auth, 1)
+
+    failed = list(re.finditer(r"(?m)^[ \t]*function onFailed\(kind\)\s*\{", text))
+    if len(failed) != 1:
+        raise SyncError(f"expected exactly one onFailed anchor, found {len(failed)}")
+    start, end, block = find_block(text, r"(?m)^[ \t]*function onFailed\(kind\)\s*\{", "onFailed")
+    body_indent = re.match(r"[ \t]*", block).group(0) + "    "
+    if "lockScreenUi.authRequested = false;" in block:
+        raise SyncError("onFailed already contains the managed reset")
+    block = block.replace("{", "{\n" + body_indent + "lockScreenUi.authRequested = false;", 1)
+    text = text[:start] + block + text[end:]
+
+    pressed = list(re.finditer(r"(?m)^(?P<i>[ \t]*)onPressed:\s*uiVisible\s*=\s*true;[ \t]*$", text))
+    if len(pressed) != 1:
+        raise SyncError(f"expected exactly one mouse click anchor, found {len(pressed)}")
+    i = pressed[0].group("i")
+    replacement = (f"{i}onPressed: {{\n{i}    uiVisible = true;\n"
+                   f"{i}    lockScreenUi.requestAuthentication();\n{i}}}")
+    text = text[:pressed[0].start()] + replacement + text[pressed[0].end():]
+
+    start, end, block = find_block(text, r"(?m)^[ \t]*onPositionChanged:\s*\{", "onPositionChanged")
+    if block.count("uiVisible = seenPositionChange;") != 1 or block.count("seenPositionChange = true;") != 1:
+        raise SyncError("unexpected onPositionChanged body")
+    i = re.match(r"[ \t]*", block).group(0)
+    replacement = (f"{i}onPositionChanged: {{\n{i}    const realMovement = seenPositionChange;\n"
+                   f"{i}    uiVisible = realMovement;\n{i}    seenPositionChange = true;\n"
+                   f"{i}    if (realMovement) {{\n{i}        lockScreenUi.requestAuthentication();\n"
+                   f"{i}    }}\n{i}}}")
+    text = text[:start] + replacement + text[end:]
+
+    start, end, block = find_block(text, r"(?m)^[ \t]*onUiVisibleChanged:\s*\{", "onUiVisibleChanged")
+    if block.count("authenticator.startAuthenticating();") != 1:
+        raise SyncError("expected exactly one onUiVisibleChanged authentication call")
+    block = re.sub(r"(?m)^[ \t]*authenticator\.startAuthenticating\(\);[ \t]*\n?", "", block, count=1)
+    text = text[:start] + block + text[end:]
+
+    start, end, block = find_block(text, r"(?m)^[ \t]*Keys\.onPressed:\s*event\s*=>\s*\{", "Keys.onPressed")
+    if block.count("uiVisible = true;") != 1 or block.count("event.accepted = false;") != 1:
+        raise SyncError("Keys.onPressed lacks password-path anchors")
+    if block.count("authenticator.startAuthenticating();") != 0:
+        raise SyncError("Keys.onPressed must not auto-authenticate in the vendor fixture")
+    i = re.match(r"[ \t]*", block).group(0)
+    replacement = (f"{i}Keys.onPressed: event => {{\n{i}    uiVisible = true;\n"
+                   f"{i}    if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {{\n"
+                   f"{i}        lockScreenUi.requestAuthentication();\n{i}    }}\n"
+                   f"{i}    event.accepted = false;\n{i}}}")
+    text = text[:start] + replacement + text[end:]
+
+    start, end, block = find_named_timer(text)
+    if block.count("root.clearPassword();") != 1 or block.count("authenticator.startAuthenticating();") != 1:
+        raise SyncError("unexpected graceLockTimer body")
+    block = re.sub(r"(?m)^[ \t]*authenticator\.startAuthenticating\(\);[ \t]*\n?", "", block, count=1)
+    text = text[:start] + block + text[end:]
+    if text.count("authenticator.startAuthenticating();") != 1:
+        raise SyncError("interaction QML must contain exactly one authentication call")
+    return text
+
+
+def plan_pam_install() -> tuple[Path, bytes] | None:
+    vendor = PAM_VENDOR_DIR / "kde-fingerprint"
+    local = PAM_ETC_DIR / "kde-fingerprint"
+    if not vendor.is_file():
+        return None
+    vendor_text = vendor.read_text(encoding="utf-8")
+    patched = patch_pam(vendor_text)
+    managed = add_pam_marker(patched)
+    if local.exists():
+        local_text = local.read_text(encoding="utf-8")
+        if MARKER in local_text:
+            return (local, managed.encode()) if local_text != managed else None
+        if local_text == patched:
+            return local, managed.encode()
+        raise SyncError(f"refusing to overwrite external PAM override: {local}")
+    return local, managed.encode()
+
+
+def plan_qml(path: Path, backup_path: Path, legacy_path: Path, patch, allow_stale_legacy: bool = False) -> tuple[Path, bytes | None, bytes | None] | None:
+    if not path.is_file():
+        return None
+    current = path.read_text(encoding="utf-8")
+    marker = INTERACTION_MARKER if patch is patch_interaction_qml else QML_MARKER
+    if marker in current:
+        patch(current)
+        if not backup_path.is_file():
+            if patch is patch_interaction_qml:
+                raise SyncError(f"managed QML is missing its vendor backup: {backup_path}")
+            return path, strip_managed_qml(current).encode(), None
+        return None
+    if legacy_path.is_file():
+        legacy = legacy_path.read_text(encoding="utf-8")
+        patched = patch(legacy)
+        comparable = remove_marker(patched, marker)
+        if comparable == current:
+            return path, legacy.encode(), patched.encode()
+        if not allow_stale_legacy:
+            raise SyncError(f"legacy QML patch does not exactly match current file: {path}")
+    patched = patch(current)
+    return path, current.encode(), patched.encode()
+
+
+def install() -> None:
+    pam_plan = plan_pam_install()
+    main_plan = plan_qml(
+        QML_PATH,
+        QML_BACKUP,
+        LEGACY_QML_BACKUP,
+        patch_qml,
+        True,
+    )
+    interaction_plan = plan_qml(INTERACTION_QML_PATH, INTERACTION_QML_BACKUP, LEGACY_INTERACTION_BACKUP, patch_interaction_qml, True)
+    for plan in (main_plan, interaction_plan):
+        if plan is None:
+            continue
+        path, backup, patched = plan
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        os.chmod(STATE_DIR, 0o700)
+        backup_path = QML_BACKUP if path == QML_PATH else INTERACTION_QML_BACKUP
+        if backup is not None:
+            atomic_write(backup_path, backup, 0o600)
+        if patched is not None:
+            atomic_write(path, patched, path.stat().st_mode & 0o777)
+            print(f"DeskUnlock: managed Plasma lock UI integration: {path}")
+    if pam_plan is not None:
+        path, data = pam_plan
+        atomic_write(path, data, 0o644)
+        print(f"DeskUnlock: managed Plasma lock PAM override: {path}")
+
+
+def remove() -> None:
+    local = PAM_ETC_DIR / "kde-fingerprint"
+    restores = []
+    for path, backup_path, marker in ((QML_PATH, QML_BACKUP, QML_MARKER), (INTERACTION_QML_PATH, INTERACTION_QML_BACKUP, INTERACTION_MARKER)):
+        if path.is_file() and marker in path.read_text(encoding="utf-8"):
+            if not backup_path.is_file():
+                if marker == QML_MARKER:
+                    restores.append((path, backup_path, strip_managed_qml(path.read_text(encoding="utf-8")).encode()))
+                else:
+                    raise SyncError(f"managed QML is missing its vendor backup: {backup_path}")
+            else:
+                restores.append((path, backup_path, backup_path.read_bytes()))
+    if local.is_file() and MARKER in local.read_text(encoding="utf-8"):
+        local.unlink()
+    for path, backup_path, data in restores:
+        atomic_write(path, data, path.stat().st_mode & 0o777)
+        if backup_path.exists():
+            backup_path.unlink()
+        print(f"DeskUnlock: restored Plasma lock UI: {path}")
+    try:
+        STATE_DIR.rmdir()
+    except OSError:
+        pass
+
+
+def status() -> None:
+    local = PAM_ETC_DIR / "kde-fingerprint"
+    if local.is_file():
+        pam = "managed" if MARKER in local.read_text(encoding="utf-8") else "external"
+    elif (PAM_VENDOR_DIR / "kde-fingerprint").is_file():
+        pam = "vendor"
+    else:
+        pam = "unavailable"
+    qml = "managed" if QML_PATH.is_file() and QML_MARKER in QML_PATH.read_text(encoding="utf-8") else ("vendor" if QML_PATH.is_file() else "unavailable")
+    interaction = "managed" if INTERACTION_QML_PATH.is_file() and INTERACTION_MARKER in INTERACTION_QML_PATH.read_text(encoding="utf-8") else ("vendor" if INTERACTION_QML_PATH.is_file() else "unavailable")
+    print(f"pam={pam}")
+    print(f"qml={qml}")
+    print(f"interaction_qml={interaction}")
+
+
+def main() -> int:
+    command = sys.argv[1] if len(sys.argv) > 1 else "status"
+    if command not in {"install", "remove", "status"}:
+        print("usage: syauth-plasma-lock-sync [install|remove|status]", file=sys.stderr)
+        return 2
+    if command in {"install", "remove"} and not TEST_MODE and os.geteuid() != 0:
+        print("syauth-plasma-lock-sync: run as root", file=sys.stderr)
+        return 1
+    try:
+        {"install": install, "remove": remove, "status": status}[command]()
+    except (OSError, SyncError, UnicodeError) as exc:
+        print(f"syauth-plasma-lock-sync: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

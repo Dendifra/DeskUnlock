@@ -1,6 +1,6 @@
-# syauth release process
+# DeskUnlock 0.2.0 release process
 
-Operational handbook for cutting a syauth release. Companion to
+Operational handbook for preparing a DeskUnlock release. Companion to
 [`specs/syauth/ROADMAP.md` S-021](../specs/syauth/ROADMAP.md) and
 [`specs/journeys/JOURNEY-S-021-v0_1_release.md`](../specs/journeys/JOURNEY-S-021-v0_1_release.md).
 
@@ -19,7 +19,7 @@ Debian 12 / Ubuntu 22.04+ `.deb`. Both are produced by the
 On a developer box (no `mock`, no `pbuilder`):
 
 ```
-make dist          # tarball under target/syauth-0.1.0.tar.gz
+make dist          # tarball under target/syauth-0.2.0.tar.gz
 make rpm           # skips with one line: 'mock not on PATH'
 make deb           # skips with one line: 'pbuilder not on PATH'
 make release-apk   # skips with one line: 'apksigner not on PATH'
@@ -34,7 +34,7 @@ tool, so the dev box stays green.
 1. Push a signed tag:
 
    ```
-   git tag -s v0.1.0 -m 'syauth v0.1.0'
+   git tag -s v0.2.0 -m 'DeskUnlock v0.2.0'
    git push --tags
    ```
 
@@ -42,9 +42,9 @@ tool, so the dev box stays green.
 
    | Job             | Runner          | Tool             | Output                                |
    |-----------------|-----------------|------------------|---------------------------------------|
-   | `build-rpm`     | `ubuntu-22.04`  | `mock`           | `syauth-0.1.0-1.fc39.x86_64.rpm`      |
-   | `build-deb`     | `ubuntu-22.04`  | `pbuilder`       | `syauth_0.1.0-1_amd64.deb`            |
-   | `build-apk`     | `ubuntu-22.04`  | `apksigner`      | `syauth-0.1.0.apk` (signed)           |
+   | `build-rpm`     | `ubuntu-22.04`  | `mock`           | `syauth-0.2.0-1.fc39.x86_64.rpm`      |
+   | `build-deb`     | `ubuntu-22.04`  | `pbuilder`       | `syauth_0.2.0-1_amd64.deb`            |
+   | `build-apk`     | `ubuntu-22.04`  | `apksigner`      | `syauth-0.2.0.apk` (signed)           |
    | `publish-release` | `ubuntu-22.04` | `softprops/action-gh-release@v1` | GH Release with the 3 attachments |
 
 3. Required GH secrets:
@@ -77,7 +77,7 @@ multiple channels before installing.
   `%{_libdir}/security/` which inherits the `lib_t` context by
   default. `restorecon` is run automatically by `rpm` so no manual
   step is needed.
-- **Ubuntu (AppArmor):** v0.1 does not ship an AppArmor profile.
+- **Ubuntu (AppArmor):** v0.2.0 does not ship an AppArmor profile.
   If an admin authors one, run
   `sudo aa-complain /etc/apparmor.d/usr.bin.syauth` for the first
   unlock attempt and inspect `/var/log/syslog` for any
@@ -85,7 +85,7 @@ multiple channels before installing.
 
 ## 2. F-Droid submission
 
-**Status:** v0.1 ships **without** F-Droid. The F-Droid listing is
+**Status:** v0.2.0 ships **without** F-Droid. The F-Droid listing is
 tracked as a **v0.2 enhancement** so the v0.1 gate is not blocked by
 an external review pipeline whose turnaround is measured in weeks.
 
@@ -97,7 +97,7 @@ the PR URL in this section.
 
 ### Tracking placeholder
 
-- Submission PR: **not yet opened** (planned for v0.2).
+- Submission PR: **not yet opened** (tracked for a future release).
 - F-Droid app id: `com.sy.syauth.android` (matches the package's
   `applicationId` declared in
   [`syauth-android/app/build.gradle.kts`](../syauth-android/app/build.gradle.kts)).
@@ -107,7 +107,7 @@ the PR URL in this section.
 ### Why this satisfies the S-021 DoD line
 
 The roadmap item asks for "F-Droid submission opened (link tracked
-in `docs/release-process.md`); not blocking for v0.1." This file
+in `docs/release-process.md`); not blocking for v0.2.0." This file
 **is** that tracking surface. The link slot is explicitly empty
 with a documented "v0.2" rationale, which is the policy a
 release engineer needs to commit to a tag.

@@ -1,6 +1,6 @@
 # Third-party license inventory
 
-Release-oriented inventory for DeskUnlock 0.1.2. This file records the
+Release-oriented inventory for DeskUnlock 0.2.0. This file records the
 licenses and distribution class of code that is compiled, linked, bundled, or
 required externally. It is not a replacement for the license terms of each
 upstream component.
@@ -18,7 +18,7 @@ Evidence used:
 
 | Component / version | Role | Distribution class | License | Attribution / obligation |
 |---|---|---|---|---|
-| DeskUnlock workspace crates 0.1.2 | Rust desktop, PAM, daemon, transport, and mobile code | compiled/linked | MIT | Preserve `LICENSE` and upstream notices. |
+| DeskUnlock workspace crates 0.2.0 | Rust desktop, PAM, daemon, transport, and mobile code | compiled/linked | MIT | Preserve `LICENSE` and upstream notices. |
 | `syauth` upstream | Source basis for the downstream project | compiled/linked | MIT | Preserve `Copyright (c) 2026 syauth contributors` and MIT terms. |
 | RustCrypto and security closure, including `ed25519-dalek` 2.2.0, `blake3` 1.8.5, `hkdf` 0.13.x, `sha2` 0.11.0, `subtle` 2.6.1, `zeroize` 1.8.2 | Cryptography and secret handling | compiled/linked | MIT, Apache-2.0, BSD-3-Clause, CC0-1.0, and permitted dual expressions | Preserve applicable upstream notices and license texts. Exact closure is in `Cargo.lock`; policy is checked by `cargo-deny`. |
 | Tokio, Serde, Clap, tracing, time, UUID, and their runtime closure | Async runtime, serialization, CLI, logging, and data handling | compiled/linked | Primarily MIT / Apache-2.0 and permitted dual expressions | Preserve applicable upstream notices and license texts. |

@@ -5,7 +5,6 @@
 <p align="center"><strong>Smartphone authentication and proximity unlock for Linux.</strong></p>
 
 <p align="center">
-  <img alt="Status" src="https://img.shields.io/badge/status-public%20beta-f59e0b?style=flat-square">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Linux-0ea5e9?style=flat-square">
   <img alt="Companion" src="https://img.shields.io/badge/companion-Android-22c55e?style=flat-square">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-64748b?style=flat-square">
@@ -21,9 +20,6 @@ DeskUnlock is an independent project derived from the MIT-licensed
 [`syauth`](https://github.com/dmytrogajewski/syauth) project. It is developed
 and distributed under its own name; it is not an official upstream `syauth`
 release. See [Origins and attribution](#origins-and-attribution).
-
-> **Public beta:** this repository documents the `v0.1.0-beta.1` candidate.
-> It is beta software, not a stable release or a security-certified product.
 
 ## What it does
 
@@ -139,29 +135,37 @@ unlock information.
 | `SyauthCompanionService` | Background service that receives unlock challenges and drives the approval activity. |
 | Approve screen | Explicit approve/deny action gated by `BiometricPrompt`. |
 
-## Supported beta scope
+## Supported platforms
 
-The validated beta scope is intentionally narrow:
+DeskUnlock 0.2.0 is validated on:
 
 - Arch Linux / CachyOS;
-- Wayland session with the validated Niri + DankMaterialShell (DMS)
-  integration;
-- Android companion using Bluetooth LE and Companion Device APIs.
+- Wayland sessions;
+- KDE Plasma with the native PAM + Plasma lock-screen integration;
+- Niri with DankMaterialShell (DMS);
+- the Android companion using Bluetooth LE and Companion Device APIs.
 
-Other distributions, desktop environments, Android devices, and OEM ROMs may
-work, but are not universal compatibility claims. Android BLE behavior,
-battery management, and background-service policy vary by device and ROM.
+The desktop session determines the lock integration. Niri uses the DMS
+integration; KDE Plasma uses its own PAM and lock-screen integration, and
+DeskUnlock does not start DMS inside Plasma. Proximity manages presence and
+locking, but proximity alone never authorizes an unlock. On a lock screen, the
+biometric request starts from genuine local interaction such as mouse movement
+or Enter, not merely because the phone returns nearby.
+
+Other distributions, compositors, Android devices, and OEM ROMs may work but
+are not universal compatibility claims. Android BLE behavior, battery
+management, and background-service policy vary by device and ROM.
 
 ## Quick start
 
-The current build is the **[v0.1.2 release](https://github.com/Dendifra/DeskUnlock/releases/tag/v0.1.2)**: a signed Android APK and an Arch/CachyOS package. Verify the published `SHA256SUMS` before installing.
+The current build is **DeskUnlock 0.2.0**: a signed Android APK and an Arch/CachyOS package. Verify the published `SHA256SUMS` before installing.
 
 ### 1. Install the Linux package
 
 Download the `deskunlock-*-x86_64.pkg.tar.zst` asset, then:
 
 ```bash
-sudo pacman -U deskunlock-0.1.2-1-x86_64.pkg.tar.zst
+sudo pacman -U deskunlock-0.2.0-1-x86_64.pkg.tar.zst
 ```
 
 When Plasma Login is installed, the package wires its PAM service and orders
@@ -177,7 +181,7 @@ For a source checkout, see [docs/installation.md](docs/installation.md) and
 
 Download the signed APK from the same release page and sideload it through
 Android's normal package installer. Android may display a warning because this
-beta is not distributed through Google Play. See
+APK is sideloaded rather than distributed through Google Play. See
 [docs/android-setup.md](docs/android-setup.md).
 
 The release APK uses the dedicated DeskUnlock release certificate
@@ -259,10 +263,10 @@ DeskUnlock has not received an independent professional security audit. Report
 security issues through [SECURITY.md](SECURITY.md), not in a public issue with
 keys, tokens, private state, or exploit details.
 
-## Known beta limitations
+## Known limitations
 
-- Arch Linux/CachyOS and the validated Niri + DMS path are the supported beta
-  scope;
+- Arch Linux/CachyOS, Wayland, KDE Plasma, and Niri + DMS are the validated
+  desktop paths;
 - Android OEM battery and BLE policies can affect background operation;
 - an ignored approval request can expire and require a later interaction;
 - retry timing and broader desktop/distro portability are not yet polished;

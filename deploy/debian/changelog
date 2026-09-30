@@ -1,5 +1,6 @@
-syauth (0.1.2-1) unstable; urgency=medium
+syauth (0.2.0-1) unstable; urgency=medium
 
+  * Prepare the 0.2.0 release with Plasma and Niri session-aware locking.
   * Harden public-tree privacy and release supply-chain checks.
   * Update release metadata for the signed Android and Arch artifacts.
 

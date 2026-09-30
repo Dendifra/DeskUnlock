@@ -1,12 +1,22 @@
 post_install() {
     if [[ -f /etc/pam.d/plasmalogin ]]; then
         /usr/lib/syauth/syauth-pam-sync install ||
-            printf '%s\n' 'DeskUnlock: Plasma PAM integration was not changed; run syauth-pam-sync install as root.' >&2
+            printf '%s\n' 'DeskUnlock: Plasma login PAM integration was not changed; run syauth-pam-sync install as root.' >&2
     fi
+
+    /usr/lib/syauth/syauth-plasma-lock-sync install ||
+        printf '%s\n' 'DeskUnlock: Plasma session-lock integration was not changed; run syauth-plasma-lock-sync install as root.' >&2
 }
 
 post_upgrade() {
     post_install
+}
+
+pre_remove() {
+    if [[ -x /usr/lib/syauth/syauth-plasma-lock-sync ]]; then
+        /usr/lib/syauth/syauth-plasma-lock-sync remove ||
+            printf '%s\n' 'DeskUnlock: Plasma session-lock rollback needs manual attention.' >&2
+    fi
 }
 
 post_remove() {

@@ -1,8 +1,8 @@
 pkgname=deskunlock
-pkgver=0.1.2
+pkgver=0.2.0
 pkgrel=1
 install=deskunlock.install
-provides=('syauth-suite=0.1.2')
+provides=('syauth-suite=0.2.0')
 conflicts=('syauth-suite')
 replaces=('syauth-suite')
 pkgdesc='Phone-assisted Linux authentication with PAM fallback'
@@ -44,6 +44,8 @@ package() {
         install -Dm755 "$file" "$pkgdir/usr/lib/syauth/$(basename "$file")"
     done
     install -Dm644 packaging/arch/deskunlock.install "$pkgdir/deskunlock.install"
+    install -Dm644 packaging/arch/90-deskunlock-plasma-lock.hook \
+        "$pkgdir/usr/share/libalpm/hooks/90-deskunlock-plasma-lock.hook"
     for file in desktop/systemd/*.service desktop/systemd/*.timer desktop/systemd/*.path; do
         install -Dm644 "$file" "$pkgdir/usr/lib/systemd/user/$(basename "$file")"
     done

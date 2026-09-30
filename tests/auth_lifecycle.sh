@@ -36,7 +36,9 @@ contains "Conferma l'impronta sul telefono" "$script" 'phone guidance is missing
 contains 'Usa la password per accedere' "$script" 'password fallback guidance is missing'
 contains 'syauthGeneration' "$script" 'generation is not bound to the PAM context'
 contains 'requestGeneration !== root.syauthGeneration' "$script" 'completion generation check is missing'
-contains 'phone-return' "$script" 'return path is not unified'
+if grep -Fq 'phone-return' "$script"; then
+fail 'proximity return must not initiate authentication'
+fi
 contains 'root.resetAuthFlows' "$script" 'auth cancellation cleanup is missing'
 contains '++root.syauthGeneration' "$script" 'lock epoch invalidation is missing'
 python3 - "$script" <<'PY'

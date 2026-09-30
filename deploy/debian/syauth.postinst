@@ -1,5 +1,5 @@
 #!/bin/sh
-# postinst for syauth v0.1.0 (roadmap item S-021).
+# postinst for DeskUnlock 0.2.0 (roadmap item S-021).
 #
 # Mirrors deploy/fedora/syauth.spec's %post scriptlet exactly: create
 # /var/lib/syauth/ with mode 0700 if absent, no-op if present. The

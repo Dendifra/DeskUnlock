@@ -114,14 +114,6 @@ syauth_block = """    function requestSyauthAuth(source: string, explicit: bool)
         }
     }
 
-    IpcHandler {
-        target: \"syauth\"
-
-        function phoneReturned(): void {
-            syauth.startSyauthAuth(\"phone-return\", false);
-        }
-    }
-
     Connections {
         target: passwd
 

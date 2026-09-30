@@ -15,13 +15,16 @@ fn health_treats_pam_module_as_readable_regular_file() {
     assert!(!health.contains("check_exec \"PAM module\""));
 }
 
-/// The package may configure only the Plasma login greeter. It must never
-/// modify the lock-screen PAM stack: the lock path remains out of band through
-/// `syauth unlock-request`, so the password prompt cannot be starved by a
-/// phone timeout.
+/// The Arch package manages two distinct Plasma authentication surfaces:
+/// the login greeter and the KDE session lock. Both integrations are applied
+/// through guarded helpers; the package payload itself must never ship a PAM
+/// service file directly under /etc. A pacman hook re-applies the session-lock
+/// QML/PAM adaptation after plasma-workspace upgrades.
 #[test]
-fn arch_package_configures_only_the_plasma_greeter() {
+fn arch_package_manages_plasma_greeter_and_session_lock() {
     let build = repo_file("packaging/arch/PKGBUILD");
+    let install = repo_file("packaging/arch/deskunlock.install");
+    let hook = repo_file("packaging/arch/90-deskunlock-plasma-lock.hook");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     // Still a normal package: launcher + icon ship as before.
@@ -32,11 +35,22 @@ fn arch_package_configures_only_the_plasma_greeter() {
     assert!(!build.contains("'ghostty'"));
 
     assert!(build.contains("install=deskunlock.install"));
-    assert!(!build.contains("libalpm/hooks"));
-    assert!(!build.contains("/etc/pam.d/"), "the package must not ship PAM service files");
+    assert!(build.contains("/usr/share/libalpm/hooks/90-deskunlock-plasma-lock.hook"));
+    assert!(
+        !build.contains("/etc/pam.d/"),
+        "the package must not ship PAM service files directly"
+    );
+
     assert!(root.join("packaging/arch/deskunlock.install").exists());
     assert!(root.join("desktop/libexec/syauth-pam-sync").exists());
+    assert!(root.join("desktop/libexec/syauth-plasma-lock-sync").exists());
+    assert!(root.join("packaging/arch/90-deskunlock-plasma-lock.hook").exists());
     assert!(!root.join("desktop/hooks/syauth-pam.hook").exists());
+
+    assert!(install.contains("syauth-pam-sync install"));
+    assert!(install.contains("syauth-plasma-lock-sync install"));
+    assert!(hook.contains("Target = plasma-workspace"));
+    assert!(hook.contains("Exec = /usr/lib/syauth/syauth-plasma-lock-sync install"));
 }
 
 /// The lock-screen adaptation may show DMS's fingerprint indicator, but it must
@@ -93,18 +107,25 @@ fn dms_lock_indicator_uses_persistent_syauth_state() {
 }
 
 #[test]
-fn return_auth_is_transport_gated_and_not_retried_automatically() {
+fn proximity_never_initiates_phone_authentication_in_production() {
     let proximity = repo_file("desktop/bin/syauth-proximity");
     let dms = repo_file("desktop/dms/build-dms-syauth.sh");
 
-    assert!(proximity.contains("READY_MARKER"));
-    assert!(proximity.contains("challenge_ready_valid"));
-    assert!(proximity.contains("AUTO_AUTH_SENT=1"));
-    assert!(proximity.contains("request_auto_auth"));
     assert!(proximity.contains("LOCK_REASON=PROXIMITY"));
+    assert!(
+        proximity.contains(r#"[[ "${SYAUTH_PROXIMITY_TEST:-0}" == 1 ]] || return 0"#),
+        "production proximity must never initiate phone authentication"
+    );
+    assert!(!proximity.contains("dms ipc call syauth phoneReturned"));
+    assert!(!dms.contains("phoneReturned"));
+    assert!(!dms.contains("phone-return"));
+
+    // Authentication remains explicitly local-interaction driven in DMS.
+    assert!(dms.contains("pointerReengagementSent"));
+    assert!(dms.contains("passwd.active"));
+    assert!(dms.contains("syauth.startSyauthAuth"));
     assert!(dms.contains("syauth.abort()"));
     assert!(dms.contains("root.syauthGeneration"));
-    assert!(!dms.contains("syauthStartTimer.restart()"));
 }
 
 #[test]

@@ -60,6 +60,7 @@ joined="\$*"
 case "\$joined" in
     *is-enabled*"$MASKED_UNIT"*) echo masked; exit 0 ;;
     *is-enabled*) [[ "\$joined" == *--quiet* ]] || echo enabled; exit 0 ;;
+    *is-active*niri.service*) [[ "\${FAKE_NIRI_ACTIVE:-0}" == "1" ]] && exit 0 || exit 3 ;;
     *is-active*) exit 0 ;;
 esac
 if [[ "\$joined" == *enable* && "\$joined" == *"$MASKED_UNIT"* ]]; then
@@ -148,6 +149,39 @@ if grep -q "enable $MASKED_UNIT" "$T/calls"; then
     bad "04b user-setup non abilita la unità mascherata" "calls=$(tr '\n' '|' <"$T/calls")"
 else
     ok "04b user-setup non abilita la unità mascherata"
+fi
+
+# ---------------------------------------------------------------------------
+# TC 05/06 — DMS belongs only to the Niri graphical session.
+# ---------------------------------------------------------------------------
+: >"$T/calls"
+(
+    export XDG_CURRENT_DESKTOP=KDE
+    export XDG_SESSION_DESKTOP=KDE
+    export DESKTOP_SESSION=plasma
+    export FAKE_NIRI_ACTIVE=0
+    run_script "$T" "$SETUP" --bootstrap >/dev/null 2>&1
+)
+
+if grep -q "start --no-block dms.service" "$T/calls"; then
+    bad "05 Plasma non deve avviare DMS" "calls=$(tr "\n" "|" <"$T/calls")"
+else
+    ok "05 Plasma non avvia DMS"
+fi
+
+: >"$T/calls"
+(
+    export XDG_CURRENT_DESKTOP=niri
+    export XDG_SESSION_DESKTOP=niri
+    export DESKTOP_SESSION=niri
+    export FAKE_NIRI_ACTIVE=1
+    run_script "$T" "$SETUP" --bootstrap >/dev/null 2>&1
+)
+
+if grep -q "start --no-block dms.service" "$T/calls"; then
+    ok "06 Niri può avviare DMS"
+else
+    bad "06 Niri può avviare DMS" "calls=$(tr "\n" "|" <"$T/calls")"
 fi
 
 # ---------------------------------------------------------------------------

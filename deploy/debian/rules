@@ -1,6 +1,6 @@
 #!/usr/bin/make -f
 #
-# Debian rules for syauth v0.1.0 (roadmap item S-021).
+# Debian rules for DeskUnlock 0.2.0 (roadmap item S-021).
 #
 # Driven by debhelper-compat 13. The build chain is hand-rolled (not
 # dh-cargo) because dh-cargo expects a single-crate package; syauth is
