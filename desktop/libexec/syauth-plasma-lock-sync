@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+MARKER = "# DeskUnlock managed Plasma session-lock PAM override"
+QML_MARKER = "// DeskUnlock managed Plasma session-lock biometric action"
+PAM_LINE = "auth       required                    pam_syauth.so timeout=8000"
+
+PAM_ETC_DIR = Path(os.environ.get("SYAUTH_PLASMA_PAM_ETC_DIR", "/etc/pam.d"))
+PAM_VENDOR_DIR = Path(os.environ.get("SYAUTH_PLASMA_PAM_VENDOR_DIR", "/usr/lib/pam.d"))
+QML_PATH = Path(os.environ.get(
+    "SYAUTH_PLASMA_QML_PATH",
+    "/usr/share/plasma/shells/org.kde.plasma.desktop/contents/lockscreen/MainBlock.qml",
+))
+STATE_DIR = Path(os.environ.get("SYAUTH_PLASMA_STATE_DIR", "/var/lib/syauth/plasma-lock"))
+QML_BACKUP = STATE_DIR / "MainBlock.qml.vendor"
+LEGACY_QML_BACKUP = Path(str(QML_PATH) + ".backup-deskunlock")
+TEST_MODE = os.environ.get("SYAUTH_PLASMA_TEST", "0") == "1"
+
+
+class SyncError(RuntimeError):
+    pass
+
+
+def atomic_write(path: Path, data: bytes, mode: int | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if mode is None and path.exists():
+            mode = path.stat().st_mode & 0o777
+        os.chmod(tmp, 0o644 if mode is None else mode)
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def add_pam_marker(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    marker_line = MARKER + "\n"
+    if lines and lines[0].startswith("#%PAM-1.0"):
+        return "".join([lines[0], marker_line, *lines[1:]])
+    return marker_line + text
+
+
+def patch_pam(text: str) -> str:
+    pattern = re.compile(r"^\s*auth\s+(?:required|requisite|sufficient|optional)\s+pam_fprintd\.so\b.*$", re.M)
+    matches = list(pattern.finditer(text))
+    if len(matches) != 1:
+        raise SyncError(f"expected exactly one pam_fprintd.so auth line, found {len(matches)}")
+    return pattern.sub(PAM_LINE, text, count=1)
+
+
+def qml_block(indent: str) -> str:
+    inner = indent + "    "
+    return (
+        f"{inner}{QML_MARKER}\n"
+        f"{inner}leftActions: Kirigami.Action {{\n"
+        f"{inner}    icon.name: \"fingerprint\"\n"
+        f"{inner}    visible: authenticator.authenticatorTypes & ScreenLocker.Authenticator.Fingerprint\n"
+        f"{inner}    text: i18ndc(\"plasma_shell_org.kde.plasma.desktop\", \"@info:tooltip\", \"Biometric authentication\")\n"
+        f"{inner}}}\n"
+    )
+
+
+def patch_qml(text: str) -> str:
+    if QML_MARKER in text:
+        if text.count(QML_MARKER) != 1:
+            raise SyncError("managed QML marker appears more than once")
+        return text
+
+    anchor = re.compile(r"^(?P<indent>[ \t]*)PlasmaExtras\.PasswordField \{[ \t]*$", re.M)
+    matches = list(anchor.finditer(text))
+    if len(matches) != 1:
+        raise SyncError(f"expected exactly one PlasmaExtras.PasswordField anchor, found {len(matches)}")
+
+    if "leftActions:" in text:
+        raise SyncError("PasswordField already has an unowned leftActions customization")
+
+    match = matches[0]
+    pos = match.end()
+    return text[:pos] + "\n" + qml_block(match.group("indent")) + text[pos + 1:]
+
+
+def strip_managed_qml(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    indexes = [i for i, line in enumerate(lines) if QML_MARKER in line]
+    if len(indexes) != 1:
+        raise SyncError("cannot reconstruct QML: managed marker count is not one")
+    idx = indexes[0]
+    block = lines[idx:idx + 6]
+    joined = "".join(block)
+    required = [
+        QML_MARKER,
+        "leftActions: Kirigami.Action",
+        'icon.name: "fingerprint"',
+        "ScreenLocker.Authenticator.Fingerprint",
+        "Biometric authentication",
+    ]
+    if len(block) != 6 or any(token not in joined for token in required):
+        raise SyncError("cannot reconstruct QML: managed block shape changed")
+    return "".join(lines[:idx] + lines[idx + 6:])
+
+
+def looks_like_legacy_manual_qml(text: str) -> bool:
+    return (
+        QML_MARKER not in text
+        and "leftActions: Kirigami.Action" in text
+        and 'icon.name: "fingerprint"' in text
+        and "authenticator.authenticatorTypes & ScreenLocker.Authenticator.Fingerprint" in text
+        and "Biometric authentication" in text
+    )
+
+
+def plan_pam_install() -> tuple[Path, bytes] | None:
+    vendor = PAM_VENDOR_DIR / "kde-fingerprint"
+    local = PAM_ETC_DIR / "kde-fingerprint"
+    if not vendor.is_file():
+        return None
+
+    vendor_text = vendor.read_text(encoding="utf-8")
+    patched = patch_pam(vendor_text)
+    managed = add_pam_marker(patched)
+
+    if local.exists():
+        local_text = local.read_text(encoding="utf-8")
+        if MARKER in local_text:
+            return (local, managed.encode()) if local_text != managed else None
+        if local_text == patched:
+            return (local, managed.encode())
+        raise SyncError(f"refusing to overwrite external PAM override: {local}")
+
+    return local, managed.encode()
+
+
+def plan_qml_install() -> tuple[bytes | None, bytes | None]:
+    if not QML_PATH.is_file():
+        return None, None
+
+    current = QML_PATH.read_text(encoding="utf-8")
+    if QML_MARKER in current:
+        if current.count(QML_MARKER) != 1:
+            raise SyncError("managed QML marker appears more than once")
+        reconstructed = strip_managed_qml(current)
+        backup = None if QML_BACKUP.exists() else reconstructed.encode()
+        return backup, None
+
+    if looks_like_legacy_manual_qml(current):
+        if not LEGACY_QML_BACKUP.is_file():
+            raise SyncError("legacy DeskUnlock QML patch found without its backup; refusing adoption")
+        base = LEGACY_QML_BACKUP.read_text(encoding="utf-8")
+        patched = patch_qml(base)
+        return base.encode(), patched.encode()
+
+    patched = patch_qml(current)
+    return current.encode(), patched.encode()
+
+
+def install() -> None:
+    pam_plan = plan_pam_install()
+    qml_backup, qml_write = plan_qml_install()
+
+    if pam_plan is not None:
+        path, data = pam_plan
+        atomic_write(path, data, 0o644)
+        print(f"DeskUnlock: managed Plasma lock PAM override: {path}")
+
+    if qml_backup is not None:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        os.chmod(STATE_DIR, 0o700)
+        atomic_write(QML_BACKUP, qml_backup, 0o600)
+    if qml_write is not None:
+        mode = QML_PATH.stat().st_mode & 0o777
+        atomic_write(QML_PATH, qml_write, mode)
+        print(f"DeskUnlock: managed Plasma lock UI integration: {QML_PATH}")
+
+
+def remove() -> None:
+    local = PAM_ETC_DIR / "kde-fingerprint"
+    if local.is_file():
+        text = local.read_text(encoding="utf-8")
+        if MARKER in text:
+            local.unlink()
+            print(f"DeskUnlock: removed managed Plasma lock PAM override: {local}")
+
+    if QML_PATH.is_file():
+        current = QML_PATH.read_text(encoding="utf-8")
+        if QML_MARKER in current:
+            if QML_BACKUP.is_file():
+                data = QML_BACKUP.read_bytes()
+            else:
+                data = strip_managed_qml(current).encode()
+            mode = QML_PATH.stat().st_mode & 0o777
+            atomic_write(QML_PATH, data, mode)
+            print(f"DeskUnlock: restored Plasma lock UI: {QML_PATH}")
+
+    if QML_BACKUP.exists():
+        QML_BACKUP.unlink()
+    try:
+        STATE_DIR.rmdir()
+    except OSError:
+        pass
+
+
+def status() -> None:
+    local = PAM_ETC_DIR / "kde-fingerprint"
+    if local.is_file():
+        pam = "managed" if MARKER in local.read_text(encoding="utf-8") else "external"
+    elif (PAM_VENDOR_DIR / "kde-fingerprint").is_file():
+        pam = "vendor"
+    else:
+        pam = "unavailable"
+
+    if QML_PATH.is_file():
+        qml = "managed" if QML_MARKER in QML_PATH.read_text(encoding="utf-8") else "vendor"
+    else:
+        qml = "unavailable"
+    print(f"pam={pam}")
+    print(f"qml={qml}")
+
+
+def main() -> int:
+    command = sys.argv[1] if len(sys.argv) > 1 else "status"
+    if command not in {"install", "remove", "status"}:
+        print("usage: syauth-plasma-lock-sync [install|remove|status]", file=sys.stderr)
+        return 2
+    if command in {"install", "remove"} and not TEST_MODE and os.geteuid() != 0:
+        print("syauth-plasma-lock-sync: run as root", file=sys.stderr)
+        return 1
+    try:
+        {"install": install, "remove": remove, "status": status}[command]()
+    except (OSError, SyncError, UnicodeError) as exc:
+        print(f"syauth-plasma-lock-sync: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
