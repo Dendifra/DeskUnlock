@@ -12,7 +12,7 @@
 
 set -uo pipefail
 
-TAG="${1:-v0.1.0-beta.2}"
+TAG="${1:-v0.2.0}"
 REPO="${SYAUTH_REPO:-Dendifra/DeskUnlock}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"

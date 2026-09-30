@@ -1,8 +1,8 @@
 pkgname=deskunlock
-pkgver=0.1.2
-pkgrel=2
+pkgver=0.2.0
+pkgrel=1
 install=deskunlock.install
-provides=('syauth-suite=0.1.2')
+provides=('syauth-suite=0.2.0')
 conflicts=('syauth-suite')
 replaces=('syauth-suite')
 pkgdesc='Phone-assisted Linux authentication with PAM fallback'

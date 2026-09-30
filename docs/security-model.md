@@ -1,12 +1,14 @@
 # DeskUnlock security model
 
-DeskUnlock `v0.1.0-beta.1` is beta software. This document summarizes the
+DeskUnlock `v0.2.0` is a validated release. This document summarizes the
 downstream project's intended security properties; it is not a substitute for
 an independent professional security audit.
 
 ## Goals
 
 DeskUnlock aims to provide a phone-assisted Linux authentication path where proximity alone is not sufficient.
+
+The validated scope is Arch Linux/CachyOS on Wayland with KDE Plasma or Niri + DankMaterialShell. Plasma uses native PAM and lock-screen integration; Niri uses DMS.
 
 The design inherited from upstream `syauth` uses cryptographic challenge-response,
 local BLE/GATT communication, and Android-side biometric/device-credential

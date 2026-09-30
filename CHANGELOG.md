@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0] - 2026-10-01
+
+- Add validated KDE Plasma lock-screen integration alongside Niri + DMS.
+- Make desktop lock/authentication session-aware without starting DMS inside Plasma.
+- Start biometric approval from genuine local lock-screen interaction rather than proximity alone.
+- Update Arch/CachyOS and Android companion release metadata.
+
 ## [0.1.2] - 2026-09-28
 
 - Harden the public repository privacy and history checks.

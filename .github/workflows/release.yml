@@ -36,7 +36,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
-  PACKAGE_VERSION: "0.1.2"
+  PACKAGE_VERSION: "0.2.0"
 
 jobs:
   # The source tarball is the one artefact with no toolchain and no platform

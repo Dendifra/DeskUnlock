@@ -90,14 +90,14 @@ syauth-control on
 
 ## Lock integration is unavailable
 
-The validated beta integration is Niri + DankMaterialShell on Arch/CachyOS.
-Check the DMS user service and session before changing anything. Other
-compositors and distributions are not claimed as supported by this beta.
+The validated integrations are KDE Plasma and Niri + DankMaterialShell on
+Arch/CachyOS Wayland sessions. Niri uses DMS; Plasma uses its native PAM and
+lock-screen integration and must not start DMS. Check the active session before
+changing anything.
 
 ## App was replaced or reinstalled
 
-A pre-beta/debug APK and the release-signed beta APK use different signing
-identities. A one-time uninstall/reinstall may be required. Android app-private
+A debug APK and the release-signed APK use different signing identities. A one-time uninstall/reinstall may be required. Android app-private
 state can be removed by uninstalling, so pair the computer and phone again
 after reinstalling. Do not use signature-bypass tools or disable Play Protect
 globally.

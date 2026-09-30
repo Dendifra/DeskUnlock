@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build, sign and publish a DeskUnlock pre-release, in one command.
+# Build, sign and publish a DeskUnlock release, in one command.
 #
 # Why this is a local script and not a CI job
 # ------------------------------------------
@@ -18,7 +18,7 @@
 # reviewed by hand, and `softprops/action-gh-release` in CI would blank them.
 #
 # Usage:
-#   bash scripts/release-local.sh v0.1.0-beta.3
+#   bash scripts/release-local.sh v0.2.0
 #
 # The keystore password is prompted by scripts/sign-release-apk.sh and never
 # touches this script, its arguments, or your shell history.

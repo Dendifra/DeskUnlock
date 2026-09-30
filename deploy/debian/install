@@ -1,4 +1,4 @@
-# dh_install file list for syauth v0.1.0.
+# dh_install file list for DeskUnlock 0.2.0.
 #
 # Most file paths are written directly by override_dh_auto_install in
 # debian/rules so they land with explicit modes (the .so and the

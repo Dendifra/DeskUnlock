@@ -1,6 +1,6 @@
 # DeskUnlock security model
 
-DeskUnlock `v0.1.0-beta.1` is beta authentication software. This operator guide
+DeskUnlock `v0.2.0` is authentication software. This operator guide
 summarizes intended properties; it is not an independent security audit.
 
 ## Should you use DeskUnlock?
@@ -10,7 +10,7 @@ nearby Android phone. The phone still requires biometric or device-credential
 approval. The configured password remains the fallback when the phone,
 Bluetooth, or DeskUnlock service is unavailable.
 
-The validated beta scope is Arch Linux/CachyOS with Niri + DankMaterialShell.
+The validated scope is Arch Linux/CachyOS on Wayland with KDE Plasma or Niri + DankMaterialShell. Plasma uses its native PAM and lock-screen integration; Niri uses DMS.
 Other platforms may work but are not universal compatibility claims.
 
 ## What it protects against
@@ -46,7 +46,7 @@ DeskUnlock has not received an independent professional security audit.
 - Keep the normal PAM password fallback in the stack.
 - Never publish pairing state, keys, signing material, or raw diagnostic logs.
 
-The public beta APK uses a dedicated DeskUnlock release certificate. Its
+The release APK uses a dedicated DeskUnlock release certificate. Its
 private key is outside this repository and must never be committed or
 published. Verify the published SHA-256 checksum before installation.
 
@@ -54,7 +54,7 @@ published. Verify the published SHA-256 checksum before installation.
 
 The protocol-level threat material lives in `specs/threat/`:
 [`THREAT-20260925.md`](../specs/threat/THREAT-20260925.md) is the `/threat` review
-for the v0.1.0-beta.2 cycle, and
+for the earlier beta cycle, and
 [`THREAT-2026-05-15.md`](../specs/threat/THREAT-2026-05-15.md) is the earlier one
 it re-runs. The current review lists the ten canonical abuse paths of a
 proximity-unlock system with a verdict and evidence for each, and six open
