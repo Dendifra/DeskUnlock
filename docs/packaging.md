@@ -1,12 +1,12 @@
 # Packaging principles
 
-## DeskUnlock 0.2.0 package
+## DeskUnlock 0.2.1 package
 
 The validated package target is Arch Linux/CachyOS:
 
 ```bash
-sha256sum deskunlock-0.2.0-1-x86_64.pkg.tar.zst
-sudo pacman -U deskunlock-0.2.0-1-x86_64.pkg.tar.zst
+sha256sum deskunlock-0.2.1-1-x86_64.pkg.tar.zst
+sudo pacman -U deskunlock-0.2.1-1-x86_64.pkg.tar.zst
 ```
 
 Use normal package-manager dependency resolution. Do not use `--nodeps`,
