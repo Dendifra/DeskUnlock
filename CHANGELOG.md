@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.1] - 2026-10-02
+
+- Fix the KDE Plasma settings status so a healthy managed lock screen reports biometric phone unlock as active.
+- Keep the existing DMS/Niri runtime health checks isolated to Niri sessions.
+- Pin CI to the release-tested Rust 1.98.1 toolchain to avoid unrelated new Clippy diagnostics from breaking patch releases.
+
 ## [0.2.0] - 2026-10-01
 
 - Add validated KDE Plasma lock-screen integration alongside Niri + DMS.
