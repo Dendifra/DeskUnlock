@@ -57,7 +57,9 @@ class FingerprintHealthTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             make_tree(root, patched=False)
-            ok, reason = settings.fingerprint_unlock_health("on", 1, runtime=root)
+            ok, reason = settings.fingerprint_unlock_health(
+                "on", 1, runtime=root, desktop="niri"
+            )
         self.assertFalse(ok)
         self.assertEqual(reason, "Lock screen non adattato")
 
@@ -71,6 +73,7 @@ class FingerprintHealthTests(unittest.TestCase):
                 runtime=root,
                 marker=root / "unlock-ready",
                 loaded_marker=root / "dms-lock-loaded",
+                desktop="niri",
             )
         self.assertFalse(ok)
         self.assertEqual(reason, "Sblocco telefono non armato")
@@ -85,7 +88,8 @@ class FingerprintHealthTests(unittest.TestCase):
 
             # Patched on disk, marker present, but DMS has not loaded it yet.
             ok, reason = settings.fingerprint_unlock_health(
-                "on", 1, runtime=root, marker=ready, loaded_marker=loaded
+                "on", 1, runtime=root, marker=ready, loaded_marker=loaded,
+                desktop="niri",
             )
             self.assertFalse(ok)
             self.assertEqual(reason, "Riavvia DMS")
@@ -94,14 +98,16 @@ class FingerprintHealthTests(unittest.TestCase):
             # phone is not connected -> not "Attivo".
             loaded.write_text(tree.name)
             ok, reason = settings.fingerprint_unlock_health(
-                "on", 1, runtime=root, marker=ready, loaded_marker=loaded, present=False
+                "on", 1, runtime=root, marker=ready, loaded_marker=loaded,
+                present=False, desktop="niri"
             )
             self.assertFalse(ok)
             self.assertEqual(reason, "Telefono non connesso")
 
             # Phone connected -> Attivo.
             ok, reason = settings.fingerprint_unlock_health(
-                "on", 1, runtime=root, marker=ready, loaded_marker=loaded, present=True
+                "on", 1, runtime=root, marker=ready, loaded_marker=loaded,
+                present=True, desktop="niri"
             )
             self.assertTrue(ok)
             self.assertEqual(reason, "Attivo")
