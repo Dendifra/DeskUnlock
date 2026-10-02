@@ -57,7 +57,9 @@ class FingerprintHealthTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             make_tree(root, patched=False)
-            ok, reason = settings.fingerprint_unlock_health("on", 1, runtime=root)
+            ok, reason = settings.fingerprint_unlock_health(
+                "on", 1, runtime=root, desktop="niri"
+            )
         self.assertFalse(ok)
         self.assertEqual(reason, "Lock screen non adattato")
 
@@ -71,6 +73,7 @@ class FingerprintHealthTests(unittest.TestCase):
                 runtime=root,
                 marker=root / "unlock-ready",
                 loaded_marker=root / "dms-lock-loaded",
+                desktop="niri",
             )
         self.assertFalse(ok)
         self.assertEqual(reason, "Sblocco telefono non armato")
@@ -85,7 +88,8 @@ class FingerprintHealthTests(unittest.TestCase):
 
             # Patched on disk, marker present, but DMS has not loaded it yet.
             ok, reason = settings.fingerprint_unlock_health(
-                "on", 1, runtime=root, marker=ready, loaded_marker=loaded
+                "on", 1, runtime=root, marker=ready, loaded_marker=loaded,
+                desktop="niri",
             )
             self.assertFalse(ok)
             self.assertEqual(reason, "Riavvia DMS")
@@ -94,17 +98,68 @@ class FingerprintHealthTests(unittest.TestCase):
             # phone is not connected -> not "Attivo".
             loaded.write_text(tree.name)
             ok, reason = settings.fingerprint_unlock_health(
-                "on", 1, runtime=root, marker=ready, loaded_marker=loaded, present=False
+                "on", 1, runtime=root, marker=ready, loaded_marker=loaded,
+                present=False, desktop="niri"
             )
             self.assertFalse(ok)
             self.assertEqual(reason, "Telefono non connesso")
 
             # Phone connected -> Attivo.
             ok, reason = settings.fingerprint_unlock_health(
-                "on", 1, runtime=root, marker=ready, loaded_marker=loaded, present=True
+                "on", 1, runtime=root, marker=ready, loaded_marker=loaded,
+                present=True, desktop="niri"
             )
             self.assertTrue(ok)
             self.assertEqual(reason, "Attivo")
+
+    def test_plasma_session_uses_managed_plasma_health(self):
+        status = "pam=managed\nqml=managed\ninteraction_qml=managed\n"
+        ok, reason = settings.fingerprint_unlock_health(
+            "on",
+            1,
+            desktop="plasma",
+            plasma_status=status,
+            present=True,
+        )
+        self.assertTrue(ok)
+        self.assertEqual(reason, "Attivo")
+
+    def test_plasma_session_names_incomplete_adaptation(self):
+        status = "pam=managed\nqml=vendor\ninteraction_qml=managed\n"
+        ok, reason = settings.fingerprint_unlock_health(
+            "on",
+            1,
+            desktop="plasma",
+            plasma_status=status,
+            present=True,
+        )
+        self.assertFalse(ok)
+        self.assertEqual(reason, "Lock screen Plasma non adattato")
+
+    def test_niri_session_keeps_dms_runtime_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            make_tree(root, patched=False)
+            ok, reason = settings.fingerprint_unlock_health(
+                "on",
+                1,
+                runtime=root,
+                desktop="niri",
+            )
+        self.assertFalse(ok)
+        self.assertEqual(reason, "Lock screen non adattato")
+
+    def test_current_desktop_session_detects_plasma(self):
+        self.assertEqual(
+            settings.current_desktop_session(
+                {
+                    "XDG_CURRENT_DESKTOP": "KDE",
+                    "XDG_SESSION_DESKTOP": "KDE",
+                    "DESKTOP_SESSION": "/usr/share/wayland-sessions/plasma.desktop",
+                }
+            ),
+            "plasma",
+        )
 
     def test_lock_screen_adapted_returns_the_patched_tree(self):
         with tempfile.TemporaryDirectory() as tmp:

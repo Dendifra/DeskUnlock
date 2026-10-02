@@ -23,6 +23,9 @@ on:
 permissions:
   contents: read
 
+# Keep CI on the release-tested Rust toolchain. Rust 1.99 introduced a
+# new Clippy double_must_use diagnostic through async-trait expansion that
+# fails unchanged code under -D warnings.
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
@@ -39,9 +42,9 @@ jobs:
         run: |
           pacman -Syu --noconfirm --needed \
             git rustup dbus pam bluez-libs python pyside6 pkgconf nodejs
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-          rustup component add clippy rustfmt --toolchain stable
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup default 1.98.1
+          rustup component add clippy rustfmt --toolchain 1.98.1
 
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -66,8 +69,8 @@ jobs:
         run: |
           pacman -Syu --noconfirm --needed \
             git rustup dbus pam bluez-libs python pyside6 pkgconf nodejs
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup default 1.98.1
 
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -87,8 +90,8 @@ jobs:
         run: |
           pacman -Syu --noconfirm --needed \
             git rustup dbus pam bluez-libs python pyside6 pkgconf nodejs
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup default 1.98.1
 
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
