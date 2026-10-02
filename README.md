@@ -137,7 +137,7 @@ unlock information.
 
 ## Supported platforms
 
-DeskUnlock 0.2.0 is validated on:
+DeskUnlock 0.2.1 is validated on:
 
 - Arch Linux / CachyOS;
 - Wayland sessions;
@@ -158,14 +158,14 @@ management, and background-service policy vary by device and ROM.
 
 ## Quick start
 
-The current build is **DeskUnlock 0.2.0**: a signed Android APK and an Arch/CachyOS package. Verify the published `SHA256SUMS` before installing.
+The current build is **DeskUnlock 0.2.1**: a signed Android APK and an Arch/CachyOS package. Verify the published `SHA256SUMS` before installing.
 
 ### 1. Install the Linux package
 
 Download the `deskunlock-*-x86_64.pkg.tar.zst` asset, then:
 
 ```bash
-sudo pacman -U deskunlock-0.2.0-1-x86_64.pkg.tar.zst
+sudo pacman -U deskunlock-0.2.1-1-x86_64.pkg.tar.zst
 ```
 
 When Plasma Login is installed, the package wires its PAM service and orders
