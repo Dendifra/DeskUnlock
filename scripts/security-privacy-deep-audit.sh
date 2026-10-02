@@ -180,7 +180,9 @@ elif ! command -v gh >/dev/null 2>&1; then
 else
     REPO="$EXPECTED_REPO"
     mkdir -p "$TMP/release"
-    if gh release download "$TAG" --repo "$REPO" --dir "$TMP/release" --clobber >/dev/null 2>&1; then
+    if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+        warn "published release $TAG does not exist yet; asset audit deferred until publication"
+    elif gh release download "$TAG" --repo "$REPO" --dir "$TMP/release" --clobber >/dev/null 2>&1; then
         ok "downloaded published release $TAG"
         if [[ -f "$TMP/release/SHA256SUMS" ]] && (cd "$TMP/release" && sha256sum -c SHA256SUMS >/dev/null 2>&1); then
             ok "published SHA256SUMS verifies"
