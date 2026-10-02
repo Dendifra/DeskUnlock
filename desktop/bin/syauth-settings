@@ -49,10 +49,17 @@ def helper_script(name):
     return sibling if sibling.is_file() else Path("/usr/bin") / name
 
 
+def libexec_helper_script(name):
+    """Resolve a DeskUnlock libexec helper in source or installed layouts."""
+    source = Path(__file__).resolve().parent.parent / "libexec" / name
+    return source if source.is_file() else Path("/usr/lib/syauth") / name
+
+
 CONTROL = helper_script("syauth-control")
 DEVICE_CONTROL = helper_script("syauth-device")
 PROXIMITY_CONTROL = helper_script("syauth-proximity")
 IDLE_CONTROL = helper_script("syauth-idle-lock")
+PLASMA_LOCK_SYNC = libexec_helper_script("syauth-plasma-lock-sync")
 DESKUNLOCK_LOGO = Path("/usr/share/icons/hicolor/256x256/apps/deskunlock.png")
 
 
@@ -297,6 +304,47 @@ class StatusDot(QLabel):
             )
 
 
+def current_desktop_session(env=None):
+    """Return the lock-screen integration selected by the current desktop."""
+    env = os.environ if env is None else env
+    value = ":".join(
+        (
+            env.get("XDG_CURRENT_DESKTOP", ""),
+            env.get("XDG_SESSION_DESKTOP", ""),
+            env.get("DESKTOP_SESSION", ""),
+        )
+    ).lower()
+    if "kde" in value or "plasma" in value:
+        return "plasma"
+    if "niri" in value:
+        return "niri"
+    return "unknown"
+
+
+def plasma_lock_health(status=None):
+    """Return whether the installed Plasma session-lock integration is managed."""
+    output = (
+        run_command([str(PLASMA_LOCK_SYNC), "status"])
+        if status is None
+        else status
+    )
+    if not output:
+        return False, _("Integrazione Plasma non disponibile")
+
+    values = {}
+    for line in output.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            values[key.strip()] = value.strip()
+
+    if all(
+        values.get(key) == "managed"
+        for key in ("pam", "qml", "interaction_qml")
+    ):
+        return True, _("Attivo")
+    return False, _("Lock screen Plasma non adattato")
+
+
 def lock_screen_adapted(runtime=None):
     """Return the patched DMS lock tree, or None when no tree carries the hook.
 
@@ -361,17 +409,38 @@ def phone_present():
     return age < PRESENCE_FRESH_SECONDS
 
 
-def fingerprint_unlock_health(master, bonded, runtime=None, marker=None, loaded_marker=None, present=None):
-    """Return `(ok, reason)` for the fingerprint/phone unlock row.
+def fingerprint_unlock_health(
+    master,
+    bonded,
+    runtime=None,
+    marker=None,
+    loaded_marker=None,
+    present=None,
+    desktop=None,
+    plasma_status=None,
+):
+    """Return `(ok, reason)` for the phone-biometric unlock row.
 
-    The GUI used to show "Attivo" whenever the tree was patched on disk, even
-    when DMS had loaded the unpatched copy, the runtime marker was missing, or
-    the daemon was down. Every failure now names itself so the row is honest.
+    Plasma and Niri/DMS use different lock-screen integrations. Plasma is
+    validated through the managed PAM/QML synchronizer; Niri keeps the DMS
+    runtime-tree checks. This prevents a healthy Plasma session from being
+    reported as "Lock screen non adattato" merely because DMS is correctly
+    absent there.
     """
     if master != "on":
         return False, _("DeskUnlock disattivato")
     if bonded <= 0:
         return False, _("Nessun telefono")
+
+    session = current_desktop_session() if desktop is None else desktop
+    if session == "plasma":
+        integrated, reason = plasma_lock_health(plasma_status)
+        if not integrated:
+            return False, reason
+        if not (phone_present() if present is None else present):
+            return False, _("Telefono non connesso")
+        return True, _("Attivo")
+
     tree = lock_screen_adapted(runtime)
     if tree is None:
         return False, _("Lock screen non adattato")
@@ -382,7 +451,8 @@ def fingerprint_unlock_health(master, bonded, runtime=None, marker=None, loaded_
         return False, _("Riavvia DMS")
     if not (phone_present() if present is None else present):
         return False, _("Telefono non connesso")
-    return True, "Attivo"
+    return True, _("Attivo")
+
 
 
 class StatusRow(QWidget):
