@@ -17,6 +17,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication
 
 
@@ -86,14 +87,20 @@ class PairingDialogTestCase(unittest.TestCase):
         return dialog
 
     @staticmethod
+    def _destroy_widget(widget):
+        widget.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+    @staticmethod
     def _reap(dialog):
         dialog._cancel_watchdog_timer()
         process = dialog.process
-        if process is None:
-            return
-        pid = process.processId()
-        settings.kill_process_group(pid)
-        process.waitForFinished(500)
+        if process is not None:
+            pid = process.processId()
+            settings.kill_process_group(pid)
+            process.waitForFinished(500)
+            dialog.cleanup_process()
+        PairingDialogTestCase._destroy_widget(dialog)
 
 
 class PairingDialogLifecycleTests(PairingDialogTestCase):
@@ -169,7 +176,7 @@ class PairingDialogLifecycleTests(PairingDialogTestCase):
     def test_cancel_watchdog_keeps_the_parent_window_open(self):
         parent = settings.QWidget()
         parent.show()
-        self.addCleanup(parent.deleteLater)
+        self.addCleanup(self._destroy_widget, parent)
         with patch.object(settings, "DEVICE_CONTROL", self.make_wrapper("sleep 300 & sleep 300")):
             dialog = settings.PairingDialog(parent, "pair")
         self.addCleanup(self._reap, dialog)
