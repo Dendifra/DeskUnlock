@@ -65,6 +65,7 @@ test:
 	python3 tests/settings_system_status.py
 	python3 tests/settings_fingerprint_health.py
 	bash desktop/tests/test_dms_lock_patch.sh
+	python3 -m unittest desktop.tests.test_dms_privacy_paths
 	bash desktop/tests/test_greeter_install.sh
 	bash desktop/tests/test_user_linger.sh
 	bash desktop/tests/test_unit_activation.sh
