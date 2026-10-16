@@ -1,12 +1,12 @@
 # Packaging principles
 
-## DeskUnlock 0.2.1 package
+## DeskUnlock 0.2.1-2 package
 
 The validated package target is Arch Linux/CachyOS:
 
 ```bash
-sha256sum deskunlock-0.2.1-1-x86_64.pkg.tar.zst
-sudo pacman -U deskunlock-0.2.1-1-x86_64.pkg.tar.zst
+sha256sum deskunlock-0.2.1-2-x86_64.pkg.tar.zst
+sudo pacman -U deskunlock-0.2.1-2-x86_64.pkg.tar.zst
 ```
 
 Use normal package-manager dependency resolution. Do not use `--nodeps`,
@@ -67,6 +67,12 @@ Before release, scan both payload and final package for:
 idempotent, preserves the `system-login` password fallback, and orders the
 Plasma greeter after `bluetooth.service`. No `post_remove` callback strips PAM
 configuration during package renames.
+
+The session-lock helper also manages Plasma's lock-screen QML integration,
+including Plasma 6.8. Its FingerTouch icon indicates that the DeskUnlock
+integration is configured, not that a phone is currently connected. Vendor QML
+snapshots are retained by content hash so upgrades and rollback do not replace
+an earlier Plasma generation.
 
 ## Arch packaging
 

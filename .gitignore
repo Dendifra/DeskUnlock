@@ -13,6 +13,16 @@
 __pycache__/
 *.py[cod]
 
+# Host-bound update procedure has local-state hash preconditions; do not publish it.
+/desktop/install-plasma-fingertouch.sh
+/desktop/tests/test_install_plasma_fingertouch.sh
+
+# Local credentials and pairing state must never enter the repository.
+.env
+.env.*
+!.env.example
+**/bonds.toml
+
 # Release signing material (defense in depth; keep the real keystore outside the repo).
 *.jks
 *.keystore
