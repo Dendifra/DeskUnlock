@@ -4,6 +4,7 @@ set -euo pipefail
 DMS_REPO="https://github.com/AvengeMedia/DankMaterialShell.git"
 DMS_COMMIT="aa4b99def48637d86a69620c0a8f3cc6aa0c4092"
 OUTPUT="${1:-$PWD/dms-syauth}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -11,6 +12,7 @@ trap 'rm -rf "$work"' EXIT
 git clone --quiet "$DMS_REPO" "$work/DankMaterialShell"
 git -C "$work/DankMaterialShell" checkout --quiet "$DMS_COMMIT"
 git -C "$work/DankMaterialShell" submodule update --init --recursive --quiet
+python3 "$SCRIPT_DIR/sanitize_dms_translation_readme.py" "$work/DankMaterialShell"
 
 pam="$work/DankMaterialShell/quickshell/Modules/Lock/Pam.qml"
 lock_screen="$work/DankMaterialShell/quickshell/Modules/Lock/LockScreenContent.qml"
