@@ -39,7 +39,7 @@ help:
 	@echo "  dist             - Produce target/syauth-<ver>.tar.gz via git archive"
 	@echo "  rpm              - Build the Fedora RPM under mock (skips cleanly without mock)"
 	@echo "  deb              - Build the Debian deb under pbuilder (skips cleanly without pbuilder)"
-	@echo "  release-apk      - Build + sign the Android release APK (skips without apksigner/keystore)"
+	@echo "  release-apk      - Build + sign the Android release APK (skips without signer/keystore)"
 	@echo "  release          - Meta-target: dist + rpm + deb + release-apk (one-button release)"
 	@echo "  smoke-install    - Run docker-based install smoke (skips cleanly without docker)"
 
@@ -59,6 +59,7 @@ test:
 	bash tests/master_status.sh
 	bash tests/idle_lock.sh
 	bash tests/auth_lifecycle.sh
+	bash scripts/tests/test_sign_release_apk.sh
 	python3 tests/settings_last_unlock.py
 	python3 tests/settings_proximity_toggle.py
 	python3 tests/settings_system_status.py
@@ -304,7 +305,7 @@ endif
 # Release packaging targets (S-021)
 # =============================================================================
 #
-# These targets produce the v0.2.1 shipping artifacts: a source tarball
+# These targets produce the v0.2.2 shipping artifacts: a source tarball
 # (`make dist`), a Fedora RPM under mock (`make rpm`), a Debian deb
 # under pbuilder (`make deb`), a signed Android APK (`make release-apk`),
 # and a meta-target (`make release`) that chains all four. Each
@@ -317,7 +318,7 @@ endif
 # deploy/version.env; the values are duplicated here only to keep the
 # Make invocation self-contained.
 
-PACKAGE_VERSION ?= 0.2.1
+PACKAGE_VERSION ?= 0.2.2
 RPM_RELEASE     ?= 1
 DEB_REVISION    ?= 1
 DIST_PREFIX     ?= syauth-$(PACKAGE_VERSION)
@@ -382,29 +383,22 @@ deb:
 	mv target/deb-build/syauth_$(PACKAGE_VERSION)-$(DEB_REVISION)_*.deb target/ 2>/dev/null || true; \
 	echo "==> deb: artifact at $(DEB_FILE)"
 
-## release-apk: Build and sign the Android release APK. Skips cleanly without apksigner or keystore env var.
+## release-apk: Build and sign through the pinned-certificate verifier; skips without signer or keystore.
 .PHONY: release-apk
 release-apk:
 	@set -eu; \
-	if ! command -v apksigner >/dev/null 2>&1; then \
-		echo "==> release-apk: 'apksigner' not on PATH — skipping (install Android SDK build-tools)"; \
-		exit 0; \
-	fi; \
 	if [ -z "$${SYAUTH_RELEASE_KEYSTORE:-}" ]; then \
 		echo "==> release-apk: SYAUTH_RELEASE_KEYSTORE env var not set — skipping"; \
-		echo "    Set SYAUTH_RELEASE_KEYSTORE=/path/to/release.jks and SYAUTH_RELEASE_KEYSTORE_PASSWORD."; \
+		exit 0; \
+	fi; \
+	if ! command -v apksigner >/dev/null 2>&1 && [ ! -x /opt/android-sdk/build-tools/34.0.0/apksigner ]; then \
+		echo "==> release-apk: apksigner not found — skipping"; \
 		exit 0; \
 	fi; \
 	echo "==> release-apk: building unsigned release APK via Gradle"; \
 	( cd syauth-android && ./gradlew :app:assembleRelease ); \
-	echo "==> release-apk: signing with $$SYAUTH_RELEASE_KEYSTORE"; \
-	apksigner sign \
-	    --ks "$$SYAUTH_RELEASE_KEYSTORE" \
-	    --ks-pass "env:SYAUTH_RELEASE_KEYSTORE_PASSWORD" \
-	    --out "$(APK_FILE)" \
-	    syauth-android/app/build/outputs/apk/release/app-release-unsigned.apk; \
-	echo "==> release-apk: verifying signature"; \
-	apksigner verify --print-certs "$(APK_FILE)"; \
+	echo "==> release-apk: signing and verifying release certificate"; \
+	bash scripts/sign-release-apk.sh "$(APK_FILE)"; \
 	echo "==> release-apk: artifact at $(APK_FILE)"
 
 ## release: Meta-target — dist + rpm + deb + release-apk. Each sub-target gates independently.
