@@ -137,17 +137,19 @@ unlock information.
 
 ## Supported platforms
 
-DeskUnlock 0.2.0 is validated on:
+DeskUnlock 0.2.1 is validated on:
 
 - Arch Linux / CachyOS;
 - Wayland sessions;
-- KDE Plasma with the native PAM + Plasma lock-screen integration;
+- KDE Plasma with the native PAM + Plasma lock-screen integration, including KDE Plasma 6.8.0;
 - Niri with DankMaterialShell (DMS);
 - the Android companion using Bluetooth LE and Companion Device APIs.
 
 The desktop session determines the lock integration. Niri uses the DMS
 integration; KDE Plasma uses its own PAM and lock-screen integration, and
-DeskUnlock does not start DMS inside Plasma. Proximity manages presence and
+DeskUnlock does not start DMS inside Plasma. The Plasma FingerTouch icon
+indicates that DeskUnlock is configured; it does not report live smartphone
+connectivity. Proximity manages presence and
 locking, but proximity alone never authorizes an unlock. On a lock screen, the
 biometric request starts from genuine local interaction such as mouse movement
 or Enter, not merely because the phone returns nearby.
@@ -158,14 +160,14 @@ management, and background-service policy vary by device and ROM.
 
 ## Quick start
 
-The current build is **DeskUnlock 0.2.0**: a signed Android APK and an Arch/CachyOS package. Verify the published `SHA256SUMS` before installing.
+The current build is **DeskUnlock 0.2.1**: a signed Android APK and an Arch/CachyOS package. Verify the published `SHA256SUMS` before installing.
 
 ### 1. Install the Linux package
 
 Download the `deskunlock-*-x86_64.pkg.tar.zst` asset, then:
 
 ```bash
-sudo pacman -U deskunlock-0.2.0-1-x86_64.pkg.tar.zst
+sudo pacman -U deskunlock-0.2.1-2-x86_64.pkg.tar.zst
 ```
 
 When Plasma Login is installed, the package wires its PAM service and orders

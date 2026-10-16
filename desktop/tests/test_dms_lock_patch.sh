@@ -128,7 +128,7 @@ else
     bad "02f cooldown + soglia movimento" "content=$(cat "$DIR/Modules/Lock/LockScreenContent.qml")"
 fi
 
-if grep -q "syauthUnlockProcess" "$DIR/Modules/Lock/LockScreenContent.qml" && grep -q "root.unlockRequested();" "$DIR/Modules/Lock/LockScreenContent.qml" && ! grep -q 'execDetached(["/usr/bin/syauth"' "$DIR/Modules/Lock/LockScreenContent.qml"; then
+if grep -q "syauthUnlockProcess" "$DIR/Modules/Lock/LockScreenContent.qml" && grep -q "root.unlockRequested();" "$DIR/Modules/Lock/LockScreenContent.qml" && ! grep -Fq 'execDetached(["/usr/bin/syauth"' "$DIR/Modules/Lock/LockScreenContent.qml"; then
     ok "02g il successo del telefono emette lo sblocco di DMS (Process, non execDetached)"
 else
     bad "02g il successo del telefono emette lo sblocco di DMS" "content=$(cat "$DIR/Modules/Lock/LockScreenContent.qml")"
