@@ -306,7 +306,7 @@ endif
 # Release packaging targets (S-021)
 # =============================================================================
 #
-# These targets produce the v0.2.2 shipping artifacts: a source tarball
+# These targets produce the v0.2.3 shipping artifacts: a source tarball
 # (`make dist`), a Fedora RPM under mock (`make rpm`), a Debian deb
 # under pbuilder (`make deb`), a signed Android APK (`make release-apk`),
 # and a meta-target (`make release`) that chains all four. Each
@@ -319,7 +319,7 @@ endif
 # deploy/version.env; the values are duplicated here only to keep the
 # Make invocation self-contained.
 
-PACKAGE_VERSION ?= 0.2.2
+PACKAGE_VERSION ?= 0.2.3
 RPM_RELEASE     ?= 1
 DEB_REVISION    ?= 1
 DIST_PREFIX     ?= syauth-$(PACKAGE_VERSION)

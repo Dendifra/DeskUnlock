@@ -1,8 +1,8 @@
 # DeskUnlock Android setup
 
-## DeskUnlock 0.2.2 installation
+## DeskUnlock 0.2.3 installation
 
-For the DeskUnlock 0.2.2 release, use the signed APK listed on its release
+For the DeskUnlock 0.2.3 release, use the signed APK listed on its release
 page. Install it with Android's normal package installer and verify the published
 SHA-256 checksum first. Android may warn
 because this is sideloaded rather than distributed through Google Play.
