@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2] - 2026-10-16
+
+- Support the Plasma 6.8 lock-screen heartbeat while retaining the legacy timer layout.
+- Restore the FingerTouch action for configured DeskUnlock integration; it does not indicate live phone connectivity.
+- Keep vendor QML snapshots by content hash, validate generations before writes, and restore the matching snapshot on rollback.
+- Fix the DMS regression test to match the forbidden command literally.
+
 ## [0.2.1] - 2026-10-02
 
 - Fix the KDE Plasma settings status so a healthy managed lock screen reports biometric phone unlock as active.

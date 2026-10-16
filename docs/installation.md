@@ -1,8 +1,8 @@
 # Installation
 
-## DeskUnlock 0.2.0
+## DeskUnlock 0.2.2
 
-DeskUnlock 0.2.0 is validated on Arch Linux/CachyOS and Wayland with either
+DeskUnlock 0.2.2 is validated on Arch Linux/CachyOS and Wayland with either
 KDE Plasma or Niri + DankMaterialShell, together with the Android companion
 using BLE / Companion Device APIs. Niri uses DMS; Plasma uses its native PAM
 and lock-screen integration without starting DMS.
@@ -12,14 +12,14 @@ command and service names remain for compatibility.
 
 ## Install the Arch/CachyOS package
 
-When the 0.2.0 release is published:
+For DeskUnlock 0.2.2:
 
 1. Download the Arch package and its published SHA-256 checksum.
 2. Verify the checksum with `sha256sum`.
 3. Install it with the normal package manager:
 
    ```bash
-   sudo pacman -U deskunlock-0.2.0-1-x86_64.pkg.tar.zst
+   sudo pacman -U deskunlock-0.2.2-1-x86_64.pkg.tar.zst
    ```
 
 Do not use `--nodeps`, `--overwrite`, or force options. The package installs

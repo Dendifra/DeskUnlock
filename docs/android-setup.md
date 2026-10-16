@@ -1,10 +1,10 @@
 # DeskUnlock Android setup
 
-## DeskUnlock 0.2.0 installation
+## DeskUnlock 0.2.2 installation
 
-The Android companion is distributed as a signed APK from the DeskUnlock 0.2.0
-release page. Install it with Android's normal package
-installer and verify the published SHA-256 checksum first. Android may warn
+For the DeskUnlock 0.2.2 release, use the signed APK listed on its release
+page. Install it with Android's normal package installer and verify the published
+SHA-256 checksum first. Android may warn
 because this is sideloaded rather than distributed through Google Play.
 
 The release APK uses a dedicated DeskUnlock release certificate. The private

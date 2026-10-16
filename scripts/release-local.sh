@@ -18,7 +18,7 @@
 # reviewed by hand, and `softprops/action-gh-release` in CI would blank them.
 #
 # Usage:
-#   bash scripts/release-local.sh v0.2.0
+#   bash scripts/release-local.sh v0.2.2
 #
 # The keystore password is prompted by scripts/sign-release-apk.sh and never
 # touches this script, its arguments, or your shell history.
@@ -103,25 +103,8 @@ rm -rf "$LEAK_DIR"
 step "libraries clean"
 
 step "signing the APK — the keystore password prompt follows"
-mkdir -p "$OUT"
-# The artefact name carries the tag, so it matches the release notes and cannot
-# be confused with an older upload of the same release. A stale asset with a
-# different name is invisible to a checksum file, which is how one survived a
-# full release cycle today.
-cp -f "$APK_RAW" "$OUT/deskunlock-$TAG-unsigned.apk"
-bash scripts/sign-release-apk.sh "$OUT/deskunlock-$TAG-unsigned.apk"
-# The signer rewrites the file in place, so the name has to change too or the
-# asset lies about what it is.
-mv -f "$OUT/deskunlock-$TAG-unsigned.apk" "$OUT/deskunlock-$TAG-signed.apk"
-# Verify with the same discovery order the signing script uses, so this check
-# cannot pass by finding a different tool than the one that signed.
-APKSIGNER="$(command -v apksigner || true)"
-if [[ -z "$APKSIGNER" && -x /opt/android-sdk/build-tools/34.0.0/apksigner ]]; then
-    APKSIGNER=/opt/android-sdk/build-tools/34.0.0/apksigner
-fi
-[[ -n "$APKSIGNER" ]] || die "apksigner not found: cannot verify what was signed"
-"$APKSIGNER" verify --print-certs "$OUT/deskunlock-$TAG-signed.apk" | grep -q "CN=DeskUnlock Release" \
-    || die "the signed APK does not carry the DeskUnlock release certificate"
+# The signer stages and verifies the APK before placing it in the artifact directory.
+bash scripts/sign-release-apk.sh "$OUT/deskunlock-$TAG-signed.apk"
 
 # --- 6. collect and checksum ------------------------------------------------
 step "collecting artefacts in $OUT"
