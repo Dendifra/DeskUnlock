@@ -36,11 +36,11 @@ package or the signed Android APK.
 
 The release script produces the source archive, one Arch/CachyOS package, the
 signed APK, and `SHA256SUMS`. Names derive from the tag and `packaging/arch/PKGBUILD`;
-for DeskUnlock 0.2.2 they are expected to be:
+for DeskUnlock 0.2.3 they are expected to be:
 
-- `syauth-0.2.2.tar.gz`
-- `deskunlock-0.2.2-1-x86_64.pkg.tar.zst`
-- `deskunlock-v0.2.2-signed.apk`
+- `syauth-0.2.3.tar.gz`
+- `deskunlock-0.2.3-1-x86_64.pkg.tar.zst`
+- `deskunlock-v0.2.3-signed.apk`
 - `SHA256SUMS`
 
 These names do not mean the artifacts exist: attach them only after the builds

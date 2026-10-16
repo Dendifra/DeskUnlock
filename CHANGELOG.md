@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.3] - 2026-10-16
+
+- Sanitize the anchored upstream DMS translation README home path before embedding; the build fails closed if the expected line is missing or duplicated.
+- Preserve both generic `dms-greeter` path examples unchanged.
+
 ## [0.2.2] - 2026-10-16
 
 - Support the Plasma 6.8 lock-screen heartbeat while retaining the legacy timer layout.

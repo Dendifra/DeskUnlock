@@ -18,7 +18,7 @@
 # reviewed by hand, and `softprops/action-gh-release` in CI would blank them.
 #
 # Usage:
-#   bash scripts/release-local.sh v0.2.2
+#   bash scripts/release-local.sh v0.2.3
 #
 # The keystore password is prompted by scripts/sign-release-apk.sh and never
 # touches this script, its arguments, or your shell history.
